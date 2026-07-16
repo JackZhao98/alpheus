@@ -8,7 +8,11 @@
 // and call Validate.
 package contracts
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strings"
+)
 
 type ExitPlan struct {
 	Stop         string `json:"stop"`         // price level or condition
@@ -18,11 +22,13 @@ type ExitPlan struct {
 }
 
 type ProposedOperation struct {
-	Action            string    `json:"action"` // open | close | cancel | tighten_stop
-	Kind              string    `json:"kind"`   // option | equity
-	Underlying        string    `json:"underlying"`
-	Symbol            string    `json:"symbol"`
-	Side              string    `json:"side"` // buy | sell
+	Action     string `json:"action"` // open | close | cancel | tighten_stop
+	Kind       string `json:"kind"`   // option | equity
+	Underlying string `json:"underlying"`
+	Symbol     string `json:"symbol"`
+	// Side is the order side for open. It is optional for close because the
+	// kernel derives the only safe order side from the signed live position.
+	Side              string    `json:"side"`
 	Qty               float64   `json:"qty"`
 	Limit             *float64  `json:"limit,omitempty"`
 	MaxRiskUSD        float64   `json:"max_risk_usd"`
@@ -41,17 +47,41 @@ func (p ProposedOperation) Validate() error {
 	default:
 		return fmt.Errorf("bad action %q", p.Action)
 	}
-	if (p.Action == "open" || p.Action == "close") && p.Side != "buy" && p.Side != "sell" {
+	if p.Action == "open" && p.Side != "buy" && p.Side != "sell" {
 		return fmt.Errorf("bad side %q", p.Side)
+	}
+	if p.Action == "close" && p.Side != "" && p.Side != "buy" && p.Side != "sell" {
+		return fmt.Errorf("bad side %q", p.Side)
+	}
+	if p.Action == "open" && p.Kind != "equity" && p.Kind != "option" {
+		return fmt.Errorf("bad kind %q", p.Kind)
+	}
+	if p.Action == "close" && p.Kind != "" && p.Kind != "equity" && p.Kind != "option" {
+		return fmt.Errorf("bad kind %q", p.Kind)
+	}
+	if p.Action == "open" && strings.TrimSpace(p.Underlying) == "" {
+		return fmt.Errorf("open without underlying")
+	}
+	if (p.Action == "open" || p.Action == "close") && strings.TrimSpace(p.Symbol) == "" && strings.TrimSpace(p.Underlying) == "" {
+		return fmt.Errorf("%s without symbol or underlying", p.Action)
+	}
+	if (p.Action == "open" || p.Action == "close") && (math.IsNaN(p.Qty) || math.IsInf(p.Qty, 0) || p.Qty <= 0) {
+		return fmt.Errorf("%s qty must be finite and greater than zero", p.Action)
+	}
+	if p.Limit != nil && (math.IsNaN(*p.Limit) || math.IsInf(*p.Limit, 0) || *p.Limit <= 0) {
+		return fmt.Errorf("limit must be finite and greater than zero")
 	}
 	if p.Action == "open" && p.Plan == nil {
 		return fmt.Errorf("open without exit plan")
 	}
-	if p.Action == "cancel" && p.BrokerOrderID == "" {
+	if p.Action == "cancel" && strings.TrimSpace(p.BrokerOrderID) == "" {
 		return fmt.Errorf("cancel without broker_order_id")
 	}
-	if p.Action == "tighten_stop" && (p.Plan == nil || p.Plan.Stop == "") {
+	if p.Action == "tighten_stop" && (p.Plan == nil || strings.TrimSpace(p.Plan.Stop) == "") {
 		return fmt.Errorf("tighten_stop without stop")
+	}
+	if p.Action == "tighten_stop" && strings.TrimSpace(p.Symbol) == "" && strings.TrimSpace(p.Underlying) == "" {
+		return fmt.Errorf("tighten_stop without symbol or underlying")
 	}
 	return nil
 }

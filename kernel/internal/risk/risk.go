@@ -34,6 +34,9 @@ type Operation struct {
 	Shadow            bool              `json:"shadow"`
 	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
 	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
+	// VerifiedReduction is set by the kernel only after it checks the live
+	// position. It is never accepted from JSON.
+	VerifiedReduction bool `json:"-"`
 }
 
 type DayState struct {
@@ -50,10 +53,16 @@ type Verdict struct {
 	Reasons []string        `json:"reasons"`
 }
 
-var reducing = map[string]bool{"close": true, "cancel": true, "tighten_stop": true}
+var reducing = map[string]bool{"cancel": true, "tighten_stop": true}
 
 // Classify decides the fate of a proposal. quote may be nil for non-open actions.
 func Classify(op Operation, lim config.Limits, day DayState, quote *broker.Quote) Verdict {
+	if op.Action == "close" {
+		if op.Shadow || op.VerifiedReduction {
+			return Verdict{Class: "A", Reasons: []string{"verified risk reduction"}}
+		}
+		return Verdict{Class: "REJECT", Reasons: []string{"close is not verified against a position"}}
+	}
 	if reducing[op.Action] {
 		return Verdict{Class: "A", Reasons: []string{"risk-reducing"}}
 	}
@@ -65,7 +74,9 @@ func Classify(op Operation, lim config.Limits, day DayState, quote *broker.Quote
 	if day.Halted {
 		return Verdict{Class: "REJECT", Reasons: []string{"breaker halted: " + day.HaltReason}}
 	}
-	if op.Short && !lim.InstrumentRules.AllowNakedShortOptions {
+	// In the current single-leg model, an option sell on an open action is a
+	// short option. Do not trust callers to declare Short correctly.
+	if (op.Short || (op.Kind == "option" && op.Side == "sell")) && !lim.InstrumentRules.AllowNakedShortOptions {
 		return Verdict{Class: "REJECT", Reasons: []string{"naked short options forbidden"}}
 	}
 
@@ -83,7 +94,7 @@ func Classify(op Operation, lim config.Limits, day DayState, quote *broker.Quote
 
 	planOK := true
 	for _, k := range lim.PlanRequirements {
-		if op.Plan[k] == "" {
+		if strings.TrimSpace(op.Plan[k]) == "" {
 			planOK = false
 		}
 	}

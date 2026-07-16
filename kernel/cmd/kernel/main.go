@@ -5,9 +5,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math"
+	"mime"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
@@ -16,9 +21,10 @@ import (
 )
 
 type server struct {
-	limits config.Limits
-	broker broker.Adapter
-	store  storeAPI
+	limits      config.Limits
+	broker      broker.Adapter
+	store       storeAPI
+	executionMu sync.Mutex
 }
 
 // storeAPI keeps the HTTP surface testable without adding a database-mocking
@@ -113,18 +119,53 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) propose(w http.ResponseWriter, r *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeJSON(w, 400, map[string]string{"error": "content-type must be application/json"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var op risk.Operation
-	if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
+	if err := dec.Decode(&op); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	if op.Action == "cancel" && op.BrokerOrderID == "" {
-		writeJSON(w, 400, map[string]string{"error": "cancel requires broker_order_id"})
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		writeJSON(w, 400, map[string]string{"error": "request body must contain one JSON object"})
 		return
 	}
-	if op.Action == "tighten_stop" && op.Plan["stop"] == "" {
-		writeJSON(w, 400, map[string]string{"error": "tighten_stop requires plan.stop"})
+	op, err = validateAndNormalizeOperation(op)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
+	}
+
+	// A live close must keep the position read and order placement in one
+	// critical section; otherwise two simultaneous closes can both observe the
+	// same position and the second can open risk. Other broker mutations acquire
+	// the same lock inside execute.
+	closeLockHeld := !op.Shadow && op.Action == "close"
+	if closeLockHeld {
+		s.executionMu.Lock()
+		defer s.executionMu.Unlock()
+	}
+	if op.Action == "close" {
+		if op.Shadow {
+			op.VerifiedReduction = true // no broker effect; no shadow position ledger yet
+		} else {
+			positions, err := s.broker.GetPositions()
+			if err != nil {
+				writeJSON(w, 502, map[string]string{"error": err.Error()})
+				return
+			}
+			op, err = normalizeClose(op, positions)
+			if err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+		}
 	}
 	day, err := s.dayState()
 	if err != nil {
@@ -164,7 +205,12 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
-	execution, err := s.execute(opID, op, quote)
+	var execution map[string]any
+	if closeLockHeld {
+		execution, err = s.executeLocked(opID, op, quote)
+	} else {
+		execution, err = s.execute(opID, op, quote)
+	}
 	if err != nil {
 		_ = s.store.SetOperationStatus(opID, "failed", nil)
 		writeJSON(w, 502, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
@@ -177,8 +223,21 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 }
 
 // execute is the single Class-A/Class-B execution path. Milestone 4 reuses it
-// after a human approves a Class-C operation.
+// after a human approves a Class-C operation. Live broker mutations are
+// serialized here; propose calls executeLocked only while it already holds the
+// lock across live-close position verification.
 func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
+	if !op.Shadow && op.Action == "close" && !op.VerifiedReduction {
+		return nil, fmt.Errorf("refusing unverified close execution")
+	}
+	if !op.Shadow && (op.Action == "open" || op.Action == "close" || op.Action == "cancel") {
+		s.executionMu.Lock()
+		defer s.executionMu.Unlock()
+	}
+	return s.executeLocked(opID, op, quote)
+}
+
+func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
 	status := "auto_approved"
 
 	if op.Action == "tighten_stop" {
@@ -219,14 +278,10 @@ func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (m
 		return map[string]any{"status": status}, nil
 	}
 
+	// For open, Side is the requested order side. For a live close it was
+	// derived from the signed broker position by normalizeClose; payload side
+	// is never trusted to decide whether the broker buys or sells.
 	side := op.Side
-	if op.Action == "close" {
-		if side == "buy" {
-			side = "sell"
-		} else {
-			side = "buy"
-		}
-	}
 
 	limit := 0.0
 	switch {
@@ -263,6 +318,106 @@ func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (m
 		}
 	}
 	return map[string]any{"status": status, "order": res}, nil
+}
+
+func validateAndNormalizeOperation(op risk.Operation) (risk.Operation, error) {
+	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+	symbol := op.Symbol
+	if symbol == "" {
+		symbol = op.Underlying
+	}
+
+	switch op.Action {
+	case "open":
+		if strings.TrimSpace(op.Underlying) == "" {
+			return op, fmt.Errorf("open requires underlying")
+		}
+		if strings.TrimSpace(symbol) == "" {
+			return op, fmt.Errorf("open requires symbol or underlying")
+		}
+		if op.Kind != "equity" && op.Kind != "option" {
+			return op, fmt.Errorf("bad kind %q", op.Kind)
+		}
+		if op.Side != "buy" && op.Side != "sell" {
+			return op, fmt.Errorf("bad side %q", op.Side)
+		}
+		if !finite(op.Qty) || op.Qty <= 0 {
+			return op, fmt.Errorf("qty must be finite and greater than zero")
+		}
+		if !finite(op.MaxRiskUSD) {
+			return op, fmt.Errorf("max_risk_usd must be finite")
+		}
+	case "close":
+		if strings.TrimSpace(symbol) == "" {
+			return op, fmt.Errorf("close requires symbol or underlying")
+		}
+		if op.Kind != "" && op.Kind != "equity" && op.Kind != "option" {
+			return op, fmt.Errorf("bad kind %q", op.Kind)
+		}
+		// Close side is optional for compatibility and never controls execution.
+		if op.Side != "" && op.Side != "buy" && op.Side != "sell" {
+			return op, fmt.Errorf("bad side %q", op.Side)
+		}
+		if !finite(op.Qty) || op.Qty <= 0 {
+			return op, fmt.Errorf("qty must be finite and greater than zero")
+		}
+	case "cancel":
+		op.BrokerOrderID = strings.TrimSpace(op.BrokerOrderID)
+		if op.BrokerOrderID == "" {
+			return op, fmt.Errorf("cancel requires broker_order_id")
+		}
+	case "tighten_stop":
+		if strings.TrimSpace(symbol) == "" {
+			return op, fmt.Errorf("tighten_stop requires symbol or underlying")
+		}
+		stop := strings.TrimSpace(op.Plan["stop"])
+		if stop == "" {
+			return op, fmt.Errorf("tighten_stop requires non-blank plan.stop")
+		}
+		op.Plan["stop"] = stop
+	default:
+		return op, fmt.Errorf("bad action %q", op.Action)
+	}
+
+	if op.Limit != nil && (!finite(*op.Limit) || *op.Limit <= 0) {
+		return op, fmt.Errorf("limit must be finite and greater than zero")
+	}
+	return op, nil
+}
+
+func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operation, error) {
+	symbol := op.Symbol
+	if symbol == "" {
+		symbol = op.Underlying
+	}
+	var position *broker.Position
+	for i := range positions {
+		if positions[i].Symbol == symbol && positions[i].Qty != 0 {
+			position = &positions[i]
+			break
+		}
+	}
+	if position == nil {
+		return op, fmt.Errorf("close requires an existing position for %s", symbol)
+	}
+	if op.Qty > math.Abs(position.Qty) {
+		return op, fmt.Errorf("close qty %.8g exceeds position qty %.8g", op.Qty, math.Abs(position.Qty))
+	}
+	if position.Kind != "equity" && position.Kind != "option" {
+		return op, fmt.Errorf("position %s has unsupported kind %q", symbol, position.Kind)
+	}
+	if op.Kind != "" && op.Kind != position.Kind {
+		return op, fmt.Errorf("close kind %q does not match position kind %q", op.Kind, position.Kind)
+	}
+
+	op.Kind = position.Kind
+	if position.Qty > 0 {
+		op.Side = "sell"
+	} else {
+		op.Side = "buy"
+	}
+	op.VerifiedReduction = true
+	return op, nil
 }
 
 func (s *server) getOperation(w http.ResponseWriter, r *http.Request) {
