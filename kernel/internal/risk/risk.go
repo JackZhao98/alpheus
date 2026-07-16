@@ -18,20 +18,22 @@ import (
 )
 
 type Operation struct {
-	Proposer   string            `json:"proposer"`
-	Action     string            `json:"action"` // open | close | cancel | tighten_stop
-	Kind       string            `json:"kind"`   // option | equity
-	Underlying string            `json:"underlying"`
-	Symbol     string            `json:"symbol"`
-	Side       string            `json:"side"`
-	Qty        float64           `json:"qty"`
-	Limit      *float64          `json:"limit"`
-	MaxRiskUSD float64           `json:"max_risk_usd"`
-	Short      bool              `json:"short"`
-	Plan       map[string]string `json:"plan"` // stop / invalidation / time_stop / target
-	Thesis     string            `json:"thesis"`
-	Setup      string            `json:"setup"`
-	Shadow     bool              `json:"shadow"`
+	Proposer          string            `json:"proposer"`
+	Action            string            `json:"action"` // open | close | cancel | tighten_stop
+	Kind              string            `json:"kind"`   // option | equity
+	Underlying        string            `json:"underlying"`
+	Symbol            string            `json:"symbol"`
+	Side              string            `json:"side"`
+	Qty               float64           `json:"qty"`
+	Limit             *float64          `json:"limit"`
+	MaxRiskUSD        float64           `json:"max_risk_usd"`
+	Short             bool              `json:"short"`
+	Plan              map[string]string `json:"plan"` // stop / invalidation / time_stop / target
+	Thesis            string            `json:"thesis"`
+	Setup             string            `json:"setup"`
+	Shadow            bool              `json:"shadow"`
+	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
+	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
 }
 
 type DayState struct {

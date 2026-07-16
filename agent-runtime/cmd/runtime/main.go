@@ -108,7 +108,9 @@ func submit(client *assemble.Client, op contracts.ProposedOperation, role roles.
 		return nil, err
 	}
 	status, _ := res["status"].(string)
-	if status == "auto_approved" || status == "executed" {
+	// tighten_stop is journaled atomically by the kernel so direct API callers
+	// and runtime callers get the same audit trail without duplicate rows.
+	if (status == "auto_approved" || status == "executed") && op.Action != "tighten_stop" {
 		plan := map[string]any{}
 		if op.Plan != nil {
 			pb, _ := json.Marshal(op.Plan)

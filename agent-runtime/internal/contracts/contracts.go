@@ -18,19 +18,21 @@ type ExitPlan struct {
 }
 
 type ProposedOperation struct {
-	Action     string    `json:"action"` // open | close | cancel | tighten_stop
-	Kind       string    `json:"kind"`   // option | equity
-	Underlying string    `json:"underlying"`
-	Symbol     string    `json:"symbol"`
-	Side       string    `json:"side"` // buy | sell
-	Qty        float64   `json:"qty"`
-	Limit      *float64  `json:"limit,omitempty"`
-	MaxRiskUSD float64   `json:"max_risk_usd"`
-	Short      bool      `json:"short"`
-	Plan       *ExitPlan `json:"plan,omitempty"`
-	Thesis     string    `json:"thesis"` // journaled as hypothesis
-	Setup      string    `json:"setup"`  // playbook id, for per-setup stats
-	Shadow     bool      `json:"shadow"`
+	Action            string    `json:"action"` // open | close | cancel | tighten_stop
+	Kind              string    `json:"kind"`   // option | equity
+	Underlying        string    `json:"underlying"`
+	Symbol            string    `json:"symbol"`
+	Side              string    `json:"side"` // buy | sell
+	Qty               float64   `json:"qty"`
+	Limit             *float64  `json:"limit,omitempty"`
+	MaxRiskUSD        float64   `json:"max_risk_usd"`
+	Short             bool      `json:"short"`
+	Plan              *ExitPlan `json:"plan,omitempty"`
+	Thesis            string    `json:"thesis"` // journaled as hypothesis
+	Setup             string    `json:"setup"`  // playbook id, for per-setup stats
+	Shadow            bool      `json:"shadow"`
+	BrokerOrderID     string    `json:"broker_order_id,omitempty"`
+	ClosesOperationID string    `json:"closes_operation_id,omitempty"`
 }
 
 func (p ProposedOperation) Validate() error {
@@ -39,11 +41,17 @@ func (p ProposedOperation) Validate() error {
 	default:
 		return fmt.Errorf("bad action %q", p.Action)
 	}
-	if p.Side != "buy" && p.Side != "sell" {
+	if (p.Action == "open" || p.Action == "close") && p.Side != "buy" && p.Side != "sell" {
 		return fmt.Errorf("bad side %q", p.Side)
 	}
 	if p.Action == "open" && p.Plan == nil {
 		return fmt.Errorf("open without exit plan")
+	}
+	if p.Action == "cancel" && p.BrokerOrderID == "" {
+		return fmt.Errorf("cancel without broker_order_id")
+	}
+	if p.Action == "tighten_stop" && (p.Plan == nil || p.Plan.Stop == "") {
+		return fmt.Errorf("tighten_stop without stop")
 	}
 	return nil
 }

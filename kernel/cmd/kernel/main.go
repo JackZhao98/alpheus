@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,7 +18,21 @@ import (
 type server struct {
 	limits config.Limits
 	broker broker.Adapter
-	store  *store.Store
+	store  storeAPI
+}
+
+// storeAPI keeps the HTTP surface testable without adding a database-mocking
+// dependency. The production implementation is *store.Store.
+type storeAPI interface {
+	CountTradesToday() (int, error)
+	Event(kind string, payload any)
+	InsertOperation(id, proposer, class, status string, payload, verdict any) error
+	SetOperationStatus(id, status string, verdict any) error
+	GetOperation(id string) (*store.OperationRow, error)
+	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
+	TopLessons(limit int) ([]store.Lesson, error)
+	GetBlackboard(day string) (json.RawMessage, error)
+	PutBlackboard(day string, doc json.RawMessage) error
 }
 
 func main() {
@@ -103,13 +118,21 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	if op.Action == "cancel" && op.BrokerOrderID == "" {
+		writeJSON(w, 400, map[string]string{"error": "cancel requires broker_order_id"})
+		return
+	}
+	if op.Action == "tighten_stop" && op.Plan["stop"] == "" {
+		writeJSON(w, 400, map[string]string{"error": "tighten_stop requires plan.stop"})
+		return
+	}
 	day, err := s.dayState()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
 	var quote *broker.Quote
-	if op.Action == "open" {
+	if op.Action == "open" || op.Action == "close" {
 		sym := op.Symbol
 		if sym == "" {
 			sym = op.Underlying
@@ -133,45 +156,113 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Class A and B execute now (shadow ops are journaled, never sent to broker)
+	// Class A and B execute now. execute enforces that shadow operations never
+	// reach the broker.
 	status := "auto_approved"
-	_ = s.store.InsertOperation(opID, op.Proposer, v.Class, status, op, v)
+	if err := s.store.InsertOperation(opID, op.Proposer, v.Class, status, op, v); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
-	if !op.Shadow && (op.Action == "open" || op.Action == "close") {
-		limit := 0.0
-		switch {
-		case op.Limit != nil:
-			limit = *op.Limit
-		case quote != nil:
-			limit = quote.Mid()
-		}
-		if limit > 0 {
-			side := op.Side
-			if op.Action == "close" {
-				if side == "buy" {
-					side = "sell"
-				} else {
-					side = "buy"
-				}
-			}
-			sym := op.Symbol
-			if sym == "" {
-				sym = op.Underlying
-			}
-			res, err := s.broker.PlaceLimitOrder(sym, side, op.Qty, limit, op.Kind)
-			if err != nil {
-				writeJSON(w, 502, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
-				return
-			}
-			s.store.Event("order_update", map[string]any{"operation_id": opID, "order": res})
-			if res.State == "filled" {
-				status = "executed"
-				_ = s.store.SetOperationStatus(opID, status, nil)
-			}
-			resp["status"], resp["order"] = status, res
-		}
+	execution, err := s.execute(opID, op, quote)
+	if err != nil {
+		_ = s.store.SetOperationStatus(opID, "failed", nil)
+		writeJSON(w, 502, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
+		return
+	}
+	for k, value := range execution {
+		resp[k] = value
 	}
 	writeJSON(w, 200, resp)
+}
+
+// execute is the single Class-A/Class-B execution path. Milestone 4 reuses it
+// after a human approves a Class-C operation.
+func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
+	status := "auto_approved"
+
+	if op.Action == "tighten_stop" {
+		sym := op.Symbol
+		if sym == "" {
+			sym = op.Underlying
+		}
+		hypothesis := map[string]any{"action": op.Action, "symbol": sym, "stop": op.Plan["stop"]}
+		if err := s.store.InsertJournal(opID, hypothesis, nil, map[string]any{}, op.Shadow); err != nil {
+			return nil, err
+		}
+		s.store.Event("stop_tightened", map[string]any{"operation_id": opID, "symbol": sym, "stop": op.Plan["stop"], "shadow": op.Shadow})
+		return map[string]any{"status": status, "stop": op.Plan["stop"]}, nil
+	}
+
+	// Shadow operations exercise classification and journaling only.
+	if op.Shadow {
+		return map[string]any{"status": status}, nil
+	}
+
+	if op.Action == "cancel" {
+		res, err := s.broker.CancelOrder(op.BrokerOrderID)
+		if err != nil {
+			return nil, err
+		}
+		s.store.Event("order_update", map[string]any{"operation_id": opID, "order": res})
+		status = "executed"
+		if res.State == "rejected" {
+			status = "failed"
+		}
+		if err := s.store.SetOperationStatus(opID, status, nil); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": status, "order": res}, nil
+	}
+
+	if op.Action != "open" && op.Action != "close" {
+		return map[string]any{"status": status}, nil
+	}
+
+	side := op.Side
+	if op.Action == "close" {
+		if side == "buy" {
+			side = "sell"
+		} else {
+			side = "buy"
+		}
+	}
+
+	limit := 0.0
+	switch {
+	case op.Limit != nil:
+		limit = *op.Limit
+	case quote != nil && op.Action == "close" && side == "sell":
+		limit = quote.Bid
+	case quote != nil && op.Action == "close" && side == "buy":
+		limit = quote.Ask
+	case quote != nil:
+		limit = quote.Mid()
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("no executable price for %s", op.Action)
+	}
+
+	sym := op.Symbol
+	if sym == "" {
+		sym = op.Underlying
+	}
+	res, err := s.broker.PlaceLimitOrder(sym, side, op.Qty, limit, op.Kind)
+	if err != nil {
+		return nil, err
+	}
+	s.store.Event("order_update", map[string]any{"operation_id": opID, "order": res})
+	if res.State == "filled" {
+		status = "executed"
+	} else if res.State == "rejected" {
+		status = "failed"
+	}
+	if status != "auto_approved" {
+		if err := s.store.SetOperationStatus(opID, status, nil); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"status": status, "order": res}, nil
 }
 
 func (s *server) getOperation(w http.ResponseWriter, r *http.Request) {

@@ -20,7 +20,10 @@ curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"open","kind":"op
 echo "== 3) close -> expect Class A immediate =="
 curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"close","kind":"option","symbol":"SPY","side":"buy","qty":1}'; echo; echo
 
-echo "== 4) naked short -> expect rejected =="
+echo "== 4) cancel unknown order -> expect order state rejected =="
+curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"cancel","broker_order_id":"missing-order"}'; echo; echo
+
+echo "== 5) naked short -> expect rejected =="
 curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","short":true,"qty":1,"max_risk_usd":35,"plan":'"$PLAN"'}'; echo; echo
 
 echo "db check: docker compose exec db psql -U alpheus -c \"select class,status from operations order by ts desc limit 5;\""
