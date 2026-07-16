@@ -17,6 +17,9 @@ CREATE TABLE operations (
   verdict JSONB                    -- checklist results / reviewer rationale
 );
 
+CREATE INDEX ops_day_ledger ON operations
+  (ts, (COALESCE((payload->>'shadow')::bool, false)));
+
 CREATE TABLE orders (
   id UUID PRIMARY KEY,
   operation_id UUID REFERENCES operations(id),

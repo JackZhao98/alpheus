@@ -15,6 +15,17 @@ import (
 
 type Store struct{ DB *sql.DB }
 
+// OperationGate is the minimum store surface used while the kernel holds a
+// per-ledger, per-market-day advisory transaction lock. Count, event, and
+// insert must use the same implementation passed to WithLedgerLock.
+type OperationGate interface {
+	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
+	InsertEvent(kind string, payload any) error
+	InsertOperation(id, proposer, class, status string, payload, verdict any) error
+}
+
+type ledgerTx struct{ tx *sql.Tx }
+
 // Open waits for postgres on cold start.
 func Open(url string) (*Store, error) {
 	var db *sql.DB
@@ -52,11 +63,36 @@ func jstr(v any) string {
 }
 
 func (s *Store) Event(kind string, payload any) {
-	_, _ = s.DB.Exec(`INSERT INTO events (kind, payload) VALUES ($1, $2)`, kind, jstr(payload))
+	_ = s.InsertEvent(kind, payload)
+}
+
+func (s *Store) InsertEvent(kind string, payload any) error {
+	return insertEvent(s.DB, kind, payload)
+}
+
+func (t *ledgerTx) InsertEvent(kind string, payload any) error {
+	return insertEvent(t.tx, kind, payload)
+}
+
+func insertEvent(db execer, kind string, payload any) error {
+	_, err := db.Exec(`INSERT INTO events (kind, payload) VALUES ($1, $2)`, kind, jstr(payload))
+	return err
 }
 
 func (s *Store) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
-	_, err := s.DB.Exec(
+	return insertOperation(s.DB, id, proposer, class, status, payload, verdict)
+}
+
+func (t *ledgerTx) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
+	return insertOperation(t.tx, id, proposer, class, status, payload, verdict)
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func insertOperation(db execer, id, proposer, class, status string, payload, verdict any) error {
+	_, err := db.Exec(
 		`INSERT INTO operations (id, proposer, class, status, payload, verdict) VALUES ($1,$2,$3,$4,$5,$6)`,
 		id, proposer, class, status, jstr(payload), jstr(verdict))
 	return err
@@ -96,11 +132,66 @@ func (s *Store) GetOperation(id string) (*OperationRow, error) {
 	return &r, nil
 }
 
-func (s *Store) CountTradesToday() (int, error) {
+func (s *Store) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
+	return countTradesForDay(s.DB, shadow, start, end)
+}
+
+func (t *ledgerTx) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
+	return countTradesForDay(t.tx, shadow, start, end)
+}
+
+type queryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func countTradesForDay(db queryRower, shadow bool, start, end time.Time) (int, error) {
 	var n int
-	err := s.DB.QueryRow(
-		`SELECT count(*) FROM operations WHERE class='B' AND ts::date = now()::date AND status IN ('auto_approved','executed')`).Scan(&n)
+	err := db.QueryRow(
+		`SELECT count(*) FROM operations
+		 WHERE class='B'
+		   AND ts >= $2
+		   AND ts < $3
+		   AND status IN ('auto_approved','executed')
+		   AND COALESCE((payload->>'shadow')::bool, false) = $1`, shadow, start, end).Scan(&n)
 	return n, err
+}
+
+// WithLedgerLock serializes risk classification for one ledger and market day
+// across kernel processes. The transaction-scoped lock is released on commit
+// or rollback, so a crashed request cannot strand the gate.
+func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, marketDay)); err != nil {
+		return err
+	}
+	if err := fn(&ledgerTx{tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func ledgerLockKey(shadow bool, marketDay time.Time) int64 {
+	year, month, day := marketDay.Date()
+	dateKey := int64(year*10_000 + int(month)*100 + day)
+	const namespace int64 = 0x414c5048 // "ALPH"
+	key := (namespace << 32) | (dateKey << 1)
+	if shadow {
+		key |= 1
+	}
+	return key
 }
 
 func (s *Store) InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error {

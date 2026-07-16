@@ -1,8 +1,9 @@
 // Package assemble: context assembly is CODE, not prompt. Whatever the prompt
-// says, every run receives the same structured picture: limits, live state,
-// blackboard, lessons. This is what makes sessions disposable — state lives
-// outside them. This is also where the marketdata facade gets injected once
-// the kernel grows /market/* endpoints (ROADMAP Phase 1).
+// says, every run receives the same structured picture: limits, account and
+// positions plus day.live/day.shadow ledgers, blackboard, and lessons. The
+// state response is passed through as raw JSON. This is what makes sessions
+// disposable — state lives outside them. This is also where the marketdata
+// facade gets injected once the kernel grows /market/* endpoints (PLAN M8).
 package assemble
 
 import (

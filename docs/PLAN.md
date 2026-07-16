@@ -98,19 +98,28 @@ SEPARATE ledger.
   day-states (live and shadow) and passes the one matching `op.Shadow` to
   `risk.Classify`.
 - Ledger membership: an operation belongs to the shadow ledger iff
-  `(payload->>'shadow')::bool`. Update `store.CountTradesToday(shadow bool)`.
+  `COALESCE((payload->>'shadow')::bool, false)`; a missing key must fail closed
+  into the live ledger. Count within the current `TZ_MARKET` calendar day.
+- Count, classify, and insert run in one database transaction protected by a
+  transaction-scoped PostgreSQL advisory lock keyed by `(ledger, market_day)`.
+  This is the shared risk-gate primitive for M3 open-risk checks and remains
+  correct with multiple kernel instances.
 - `GET /state` returns `{"account":…, "positions":…, "day":{"live":…, "shadow":…}}`.
   Update `scripts/smoke.sh` and `agent-runtime/internal/assemble` doc comment
   accordingly (assemble passes raw JSON through; no code change needed there
   beyond none).
-- db: no schema change required (shadow lives in payload). Add a partial
+- db: no schema change required (shadow lives in payload). Add an expression
   index in `db/init.sql`:
-  `CREATE INDEX ops_day_ledger ON operations (ts, ((payload->>'shadow')::bool));`
+  `CREATE INDEX ops_day_ledger ON operations (ts,
+  (COALESCE((payload->>'shadow')::bool, false)));`
 
 **Acceptance:**
 - Unit/integration test: submit 6 compliant shadow opens (all B), then one
   compliant LIVE open → still Class B; a 7th shadow open → Class C with
   `daily_trade_count` failed.
+- Barrier regression: with either ledger at 5/6, release 20 same-process
+  goroutines simultaneously; exactly one is B, 19 are C, and the ledger ends
+  at 6. Process-per-request tools are not a valid concurrency test here.
 - smoke.sh prints both ledgers from /state.
 
 ---

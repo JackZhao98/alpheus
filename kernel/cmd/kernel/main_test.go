@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
@@ -22,25 +23,70 @@ type journalEntry struct {
 }
 
 type memoryStore struct {
-	statuses map[string]string
-	journals []journalEntry
-	events   []string
+	mu          sync.Mutex
+	ledgerLocks [2]sync.Mutex
+	statuses    map[string]string
+	classes     map[string]string
+	shadows     map[string]bool
+	journals    []journalEntry
+	events      []string
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{statuses: map[string]string{}}
+	return &memoryStore{
+		statuses: map[string]string{},
+		classes:  map[string]string{},
+		shadows:  map[string]bool{},
+	}
 }
 
-func (m *memoryStore) CountTradesToday() (int, error) { return 0, nil }
+func (m *memoryStore) CountTradesForDay(shadow bool, _, _ time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, status := range m.statuses {
+		if m.classes[id] == "B" && m.shadows[id] == shadow && (status == "auto_approved" || status == "executed") {
+			n++
+		}
+	}
+	return n, nil
+}
 
-func (m *memoryStore) Event(kind string, _ any) { m.events = append(m.events, kind) }
+func (m *memoryStore) WithLedgerLock(shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
+	index := 0
+	if shadow {
+		index = 1
+	}
+	m.ledgerLocks[index].Lock()
+	defer m.ledgerLocks[index].Unlock()
+	return fn(m)
+}
 
-func (m *memoryStore) InsertOperation(id, _, _, status string, _, _ any) error {
+func (m *memoryStore) Event(kind string, _ any) {
+	_ = m.InsertEvent(kind, nil)
+}
+
+func (m *memoryStore) InsertEvent(kind string, _ any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, kind)
+	return nil
+}
+
+func (m *memoryStore) InsertOperation(id, _, class, status string, payload, _ any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.statuses[id] = status
+	m.classes[id] = class
+	if op, ok := payload.(risk.Operation); ok {
+		m.shadows[id] = op.Shadow
+	}
 	return nil
 }
 
 func (m *memoryStore) SetOperationStatus(id, status string, _ any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.statuses[id] = status
 	return nil
 }
@@ -50,6 +96,8 @@ func (m *memoryStore) GetOperation(string) (*store.OperationRow, error) {
 }
 
 func (m *memoryStore) InsertJournal(operationID string, hypothesis, _, _ any, shadow bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.journals = append(m.journals, journalEntry{operationID: operationID, hypothesis: hypothesis, shadow: shadow})
 	return nil
 }
@@ -73,6 +121,144 @@ func postOperation(t *testing.T, s *server, payload string) (*httptest.ResponseR
 		t.Fatalf("decode response: %v", err)
 	}
 	return w, body
+}
+
+func dualLedgerLimits() config.Limits {
+	limits := config.Limits{}
+	limits.HardLimits.MaxRiskPerTradePct = 35
+	limits.HardLimits.MaxTotalOpenRiskPct = 80
+	limits.HardLimits.MaxNewTradesPerDay = 6
+	limits.InstrumentRules.MinOpenInterest = 300
+	limits.InstrumentRules.MaxRelativeSpread = 0.15
+	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
+	return limits
+}
+
+func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
+	st := newMemoryStore()
+	s := &server{limits: dualLedgerLimits(), broker: broker.NewFake(300), store: st}
+	shadowPayload := `{"proposer":"test","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"shadow":true,"plan":{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}}`
+
+	for i := 0; i < 6; i++ {
+		w, body := postOperation(t, s, shadowPayload)
+		if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "auto_approved" {
+			t.Fatalf("shadow %d: status=%d body=%v, want B/auto_approved", i+1, w.Code, body)
+		}
+	}
+
+	livePayload := `{"proposer":"test","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}}`
+	w, body := postOperation(t, s, livePayload)
+	if w.Code != http.StatusOK || body["class"] != "B" {
+		t.Fatalf("live after six shadow: status=%d body=%v, want B", w.Code, body)
+	}
+
+	w, body = postOperation(t, s, shadowPayload)
+	if w.Code != http.StatusOK || body["class"] != "C" || body["status"] != "pending_review" {
+		t.Fatalf("seventh shadow: status=%d body=%v, want C/pending_review", w.Code, body)
+	}
+	checks, ok := body["checks"].(map[string]any)
+	if !ok || checks["daily_trade_count"] != false {
+		t.Fatalf("seventh shadow checks=%v, want daily_trade_count=false", body["checks"])
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/state", nil)
+	w = httptest.NewRecorder()
+	s.getState(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("state status=%d body=%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	day, ok := body["day"].(map[string]any)
+	if !ok {
+		t.Fatalf("day=%v, want object", body["day"])
+	}
+	live, liveOK := day["live"].(map[string]any)
+	shadow, shadowOK := day["shadow"].(map[string]any)
+	if !liveOK || !shadowOK || live["trades_today"] != float64(1) || shadow["trades_today"] != float64(6) {
+		t.Fatalf("day=%v, want live=1 shadow=6", day)
+	}
+}
+
+func TestConcurrentOpensCannotExceedEitherLedgerCap(t *testing.T) {
+	for _, shadow := range []bool{false, true} {
+		name := "live"
+		payload := `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":35,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
+		if shadow {
+			name = "shadow"
+			payload = `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":35,"shadow":true,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
+		}
+		t.Run(name, func(t *testing.T) {
+			st := newMemoryStore()
+			s := &server{limits: dualLedgerLimits(), broker: broker.NewFake(300), store: st}
+			for i := 0; i < 5; i++ {
+				w, body := postOperation(t, s, payload)
+				if w.Code != http.StatusOK || body["class"] != "B" {
+					t.Fatalf("seed %d: status=%d body=%v", i+1, w.Code, body)
+				}
+			}
+
+			type result struct {
+				code  int
+				class string
+			}
+			const requests = 20
+			start := make(chan struct{})
+			ready := sync.WaitGroup{}
+			ready.Add(requests)
+			results := make(chan result, requests)
+			for i := 0; i < requests; i++ {
+				go func() {
+					ready.Done()
+					<-start
+					w, body := postOperation(t, s, payload)
+					class, _ := body["class"].(string)
+					results <- result{code: w.Code, class: class}
+				}()
+			}
+			ready.Wait()
+			close(start)
+
+			classes := map[string]int{}
+			for i := 0; i < requests; i++ {
+				res := <-results
+				if res.code != http.StatusOK {
+					t.Fatalf("request status=%d class=%q", res.code, res.class)
+				}
+				classes[res.class]++
+			}
+			if classes["B"] != 1 || classes["C"] != requests-1 {
+				t.Fatalf("classes=%v, want B=1 C=%d", classes, requests-1)
+			}
+			count, err := st.CountTradesForDay(shadow, time.Time{}, time.Time{})
+			if err != nil || count != 6 {
+				t.Fatalf("count=%d err=%v, want 6", count, err)
+			}
+		})
+	}
+}
+
+func TestMarketDayWindowUsesNewYorkBoundaries(t *testing.T) {
+	winter, err := marketDayWindow(time.Date(2026, time.January, 16, 0, 30, 0, 0, time.UTC), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := winter.day.Format("2006-01-02"); got != "2026-01-15" {
+		t.Fatalf("winter market day=%s, want 2026-01-15", got)
+	}
+	if !winter.start.Equal(time.Date(2026, time.January, 15, 5, 0, 0, 0, time.UTC)) ||
+		!winter.end.Equal(time.Date(2026, time.January, 16, 5, 0, 0, 0, time.UTC)) {
+		t.Fatalf("winter window=%s..%s", winter.start, winter.end)
+	}
+
+	dstStart, err := marketDayWindow(time.Date(2026, time.March, 8, 16, 0, 0, 0, time.UTC), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dstStart.end.Sub(dstStart.start); got != 23*time.Hour {
+		t.Fatalf("DST-start market day length=%s, want 23h", got)
+	}
 }
 
 func TestProposeCloseUsesBid(t *testing.T) {

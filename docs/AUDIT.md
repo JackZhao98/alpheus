@@ -54,10 +54,17 @@ violated, and severity.
   operations row, and (for executed) an `order_update` event. No orphans in
   either direction.
 - **I4 Counters are race-safe.** With exactly one daily-trade slot
-  remaining, fire 10 concurrent compliant live proposals (e.g. `xargs -P10`
-  or `hey`): at most one may be auto-approved. Repeat for total_open_risk
-  near the cap. (Suspected TOCTOU: the count is read, then the insert
-  happens, with no transaction/lock.)
+  remaining, fire 20 concurrent compliant live proposals: at most one may be
+  auto-approved. **Do not use `xargs -P` or process-per-request curl**: process
+  startup jitter can serialize the requests enough to produce a false PASS.
+  Use the same-process start-barrier harness in `audit/repro/i4_barrier.go`:
+  after a fresh `docker compose up db kernel`, run `go run
+  ./audit/repro/i4_barrier.go`, then repeat on another fresh database with
+  `-shadow`. To probe multiple kernel instances, pass comma-separated endpoints
+  with `-urls http://localhost:8100,http://localhost:8101`. Repeat this barrier
+  pattern for total_open_risk near the cap. This harness is a reference
+  implementation, not the audit oracle: auditors should design and run an
+  independent concurrency probe as well.
 - **I5 No gate bypass via payload.** Probe with: uppercase/whitespace
   action values ("OPEN", " open"); qty 0, negative, huge (1e18);
   max_risk_usd negative/0/NaN-as-string; limit 0/negative; plan keys
@@ -96,14 +103,13 @@ violated, and severity.
 These are scheduled work in PLAN.md; verify they behave as currently
 documented, but do not report them as discoveries:
 
-M1 has landed: Class-A close/cancel/tighten-stop behavior is an audit target,
-not a suppressed finding.
+M1 and M2 have landed: Class-A behavior and dual-ledger counters are audit
+targets, not suppressed findings.
 
-1. Shadow ops consume the live daily-trade quota (PLAN M2).
-2. day_state open_risk/pnl are 0; breakers never trip (PLAN M3).
-3. `orders`/`fills` tables are never written (PLAN M5).
-4. No auth on any endpoint (PLAN M7 TODO).
-5. Approved Class-C ops are not executed (PLAN M4).
+1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3).
+2. `orders`/`fills` tables are never written (PLAN M5).
+3. No auth on any endpoint (PLAN M7 TODO).
+4. Approved Class-C ops are not executed (PLAN M4).
 
 If any suppressed item's ACTUAL behavior differs from its description here
 (e.g. a shadow op somehow places an order), that IS a finding.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
@@ -30,9 +31,9 @@ type server struct {
 // storeAPI keeps the HTTP surface testable without adding a database-mocking
 // dependency. The production implementation is *store.Store.
 type storeAPI interface {
-	CountTradesToday() (int, error)
+	store.OperationGate
+	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
 	Event(kind string, payload any)
-	InsertOperation(id, proposer, class, status string, payload, verdict any) error
 	SetOperationStatus(id, status string, verdict any) error
 	GetOperation(id string) (*store.OperationRow, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
@@ -83,18 +84,33 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func (s *server) dayState() (risk.DayState, error) {
-	n, err := s.store.CountTradesToday()
+type marketWindow struct {
+	day        time.Time
+	start, end time.Time
+}
+
+func currentMarketWindow() (marketWindow, error) {
+	return marketDayWindow(time.Now(), config.Env("TZ_MARKET", "America/New_York"))
+}
+
+func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
+	loc, err := time.LoadLocation(tzName)
 	if err != nil {
-		return risk.DayState{}, err
+		return marketWindow{}, fmt.Errorf("market timezone %q: %w", tzName, err)
 	}
-	acct, err := s.broker.GetAccount()
+	localNow := now.In(loc)
+	day := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, loc)
+	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
+}
+
+func (s *server) dayStateAtEquity(gate store.OperationGate, shadow bool, equity float64, window marketWindow) (risk.DayState, error) {
+	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
 	}
 	// TODO: OpenRisk from positions+journal; daily pnl vs MaxDailyLossPct;
 	// consecutive-loss breaker evaluation.
-	return risk.DayState{TradesToday: n, OpenRisk: 0, Equity: acct.Equity}, nil
+	return risk.DayState{TradesToday: n, OpenRisk: 0, Equity: equity}, nil
 }
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
@@ -110,12 +126,26 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return
 	}
-	day, err := s.dayState()
+	window, err := currentMarketWindow()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"account": acct, "positions": pos, "day": day})
+	liveDay, err := s.dayStateAtEquity(s.store, false, acct.Equity, window)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	shadowDay, err := s.dayStateAtEquity(s.store, true, acct.Equity, window)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"account":   acct,
+		"positions": pos,
+		"day":       map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+	})
 }
 
 func (s *server) propose(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +197,12 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	day, err := s.dayState()
+	acct, err := s.broker.GetAccount()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	window, err := currentMarketWindow()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -182,28 +217,42 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			quote = &q
 		}
 	}
-	v := risk.Classify(op, s.limits, day, quote)
 	opID := store.NewID()
-	s.store.Event("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v})
+	var v risk.Verdict
+	status := "auto_approved"
+	if err := s.store.WithLedgerLock(op.Shadow, window.day, func(gate store.OperationGate) error {
+		day, err := s.dayStateAtEquity(gate, op.Shadow, acct.Equity, window)
+		if err != nil {
+			return err
+		}
+		v = risk.Classify(op, s.limits, day, quote)
+		if err := gate.InsertEvent("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v}); err != nil {
+			return err
+		}
+		class := v.Class
+		switch v.Class {
+		case "REJECT":
+			class, status = "C", "rejected"
+		case "C":
+			status = "pending_review"
+		}
+		return gate.InsertOperation(opID, op.Proposer, class, status, op, v)
+	}); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
 
 	switch v.Class {
 	case "REJECT":
-		_ = s.store.InsertOperation(opID, op.Proposer, "C", "rejected", op, v)
 		writeJSON(w, 200, map[string]any{"operation_id": opID, "status": "rejected", "class": v.Class, "reasons": v.Reasons})
 		return
 	case "C":
-		_ = s.store.InsertOperation(opID, op.Proposer, "C", "pending_review", op, v)
 		writeJSON(w, 200, map[string]any{"operation_id": opID, "status": "pending_review", "class": v.Class, "checks": v.Checks, "reasons": v.Reasons})
 		return
 	}
 
 	// Class A and B execute now. execute enforces that shadow operations never
 	// reach the broker.
-	status := "auto_approved"
-	if err := s.store.InsertOperation(opID, op.Proposer, v.Class, status, op, v); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
 	var execution map[string]any
 	if closeLockHeld {

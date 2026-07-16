@@ -8,7 +8,7 @@ PLAN='{"stop":"-30%","invalidation":"thesis dead","time_stop":"15:45 ET","target
 echo "== limits =="
 curl -s $K/limits | head -c 400; echo; echo
 
-echo "== state =="
+echo "== state (expect day.live + day.shadow) =="
 curl -s $K/state; echo; echo
 
 echo "== 1) compliant shadow open -> expect auto_approved (Class B) =="
