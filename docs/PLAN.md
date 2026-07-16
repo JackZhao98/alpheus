@@ -57,6 +57,11 @@ path is the core design promise; finish it.
   - For `close` with no explicit limit, default to the **marketable** price
     (closing a long → sell at `bid`; closing a short → buy at `ask`), not mid.
     Rationale: exits prioritize certainty over price.
+  - A live `close` becomes Class A only after the kernel reads the matching
+    broker position, verifies `qty > 0` and `qty <= abs(position.qty)`, and
+    derives the order side and kind from that position. Payload `side` is an
+    optional legacy hint and never controls close execution. Serialize live
+    broker mutations so concurrent closes cannot both consume one position.
   - `tighten_stop`: for now record the new stop into the operation payload and
     journal (no broker action until stop orders exist); still Class A.
   - `cancel`: require `broker_order_id` in the payload; call
@@ -74,6 +79,8 @@ path is the core design promise; finish it.
   against the fake broker.
 - Unit test: propose close via httptest against a server wired to FakeBroker;
   assert order placed at bid for a long close.
+- Regression tests: no-position, zero/negative qty, over-close, garbage side,
+  and concurrent double-close never reach the broker or open reverse exposure.
 - New smoke step: cancel of an unknown order returns state `rejected`.
 
 ---

@@ -12,15 +12,24 @@ echo "== state =="
 curl -s $K/state; echo; echo
 
 echo "== 1) compliant shadow open -> expect auto_approved (Class B) =="
-curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"shadow":true,"thesis":"smoke","setup":"smoke","plan":'"$PLAN"'}'; echo; echo
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"shadow":true,"thesis":"smoke","setup":"smoke","plan":'"$PLAN"'}'; echo; echo
 
 echo "== 2) over-budget open -> expect pending_review (Class C) =="
-curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":200,"shadow":true,"plan":'"$PLAN"'}'; echo; echo
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":200,"shadow":true,"plan":'"$PLAN"'}'; echo; echo
 
-echo "== 3) close -> expect Class A immediate =="
-curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"close","kind":"option","symbol":"SPY","side":"buy","qty":1}'; echo; echo
+echo "== 3a) seed a live long -> expect Class B filled =="
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"equity","underlying":"SMOKE","symbol":"SMOKE","side":"buy","qty":1,"limit":100.1,"max_risk_usd":35,"plan":'"$PLAN"'}'; echo; echo
 
-echo "== 4) naked short -> expect rejected =="
-curl -s -X POST $K/operations -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","short":true,"qty":1,"max_risk_usd":35,"plan":'"$PLAN"'}'; echo; echo
+echo "== 3b) close the existing long -> expect Class A filled at bid =="
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"close","symbol":"SMOKE","qty":1}'; echo; echo
+
+echo "== 3c) close again while flat -> expect 400 and no broker effect =="
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"close","symbol":"SMOKE","qty":1}'; echo; echo
+
+echo "== 4) cancel unknown order -> expect order state rejected =="
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"cancel","broker_order_id":"missing-order"}'; echo; echo
+
+echo "== 5) naked short -> expect rejected =="
+curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","qty":1,"max_risk_usd":35,"plan":'"$PLAN"'}'; echo; echo
 
 echo "db check: docker compose exec db psql -U alpheus -c \"select class,status from operations order by ts desc limit 5;\""
