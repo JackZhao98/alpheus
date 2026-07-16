@@ -40,6 +40,12 @@ Operation approval classes (`kernel/internal/risk`):
 6. Do not modify `limits.yaml` values or `roles/*.yaml` prompt slots
    (prompt content is a human task).
 7. All timestamps stored in UTC; market-time logic uses TZ_MARKET.
+8. Every JSON write endpoint uses the shared kernel decoder: require
+   `application/json`, cap the body at 1 MiB, reject unknown fields for typed
+   schemas, and accept exactly one JSON value.
+9. Risk gates fail closed on malformed dependency data. In particular, a quote
+   is usable only when `ask > bid > 0` and both prices are finite; locked,
+   crossed, non-positive, NaN, and infinite quotes fail the liquidity check.
 
 ---
 

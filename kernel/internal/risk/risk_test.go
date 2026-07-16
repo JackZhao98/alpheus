@@ -1,6 +1,7 @@
 package risk
 
 import (
+	"math"
 	"testing"
 
 	"alpheus/kernel/internal/broker"
@@ -58,5 +59,27 @@ func TestWhitespacePlanDoesNotPassChecklist(t *testing.T) {
 	v := Classify(Operation{Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 35, Plan: plan}, lims(), day, q)
 	if v.Class != "C" || v.Checks["plan_complete"] {
 		t.Fatalf("whitespace plan => class=%s checks=%v, want C with plan_complete=false", v.Class, v.Checks)
+	}
+}
+
+func TestUnsaneQuotesFailLiquidityChecklist(t *testing.T) {
+	day := DayState{Equity: 300}
+	plan := map[string]string{"stop": "90", "invalidation": "x", "time_stop": "15:45", "target": "120"}
+	op := Operation{Action: "open", Kind: "equity", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 35, Plan: plan}
+	tests := map[string]broker.Quote{
+		"crossed":      {Symbol: "SPY", Bid: 100, Ask: 50},
+		"locked":       {Symbol: "SPY", Bid: 100, Ask: 100},
+		"zero bid":     {Symbol: "SPY", Bid: 0, Ask: 100},
+		"negative bid": {Symbol: "SPY", Bid: -100, Ask: 50},
+		"nan":          {Symbol: "SPY", Bid: math.NaN(), Ask: 100},
+		"infinite":     {Symbol: "SPY", Bid: 100, Ask: math.Inf(1)},
+	}
+	for name, quote := range tests {
+		t.Run(name, func(t *testing.T) {
+			v := Classify(op, lims(), day, &quote)
+			if v.Class != "C" || v.Checks["liquidity_spread"] {
+				t.Fatalf("quote=%+v class=%s checks=%v, want C with liquidity_spread=false", quote, v.Class, v.Checks)
+			}
+		})
 	}
 }

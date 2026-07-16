@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -84,6 +85,69 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+const maxJSONBodyBytes int64 = 1 << 20
+const maxLessonsLimit = 100
+
+// decodeJSONBody is the single boundary for every JSON write endpoint. It
+// enforces media type, a bounded body, a strict schema, and exactly one JSON
+// value before endpoint-specific validation or side effects can run.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content-type must be application/json"})
+		return false
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		}
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain exactly one JSON value"})
+		}
+		return false
+	}
+	return true
+}
+
+func writeInternalError(w http.ResponseWriter, context string, err error) {
+	log.Printf("%s: %v", context, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+}
+
+func validDate(day string) bool {
+	parsed, err := time.Parse(time.DateOnly, day)
+	return err == nil && parsed.Format(time.DateOnly) == day
+}
+
+func validUUID(id string) bool {
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+		return false
+	}
+	for i := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		c := id[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 type marketWindow struct {
 	day        time.Time
 	start, end time.Time
@@ -149,24 +213,11 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) propose(w http.ResponseWriter, r *http.Request) {
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		writeJSON(w, 400, map[string]string{"error": "content-type must be application/json"})
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
 	var op risk.Operation
-	if err := dec.Decode(&op); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	if !decodeJSONBody(w, r, &op) {
 		return
 	}
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		writeJSON(w, 400, map[string]string{"error": "request body must contain one JSON object"})
-		return
-	}
-	op, err = validateAndNormalizeOperation(op)
+	op, err := validateAndNormalizeOperation(op)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -238,7 +289,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		}
 		return gate.InsertOperation(opID, op.Proposer, class, status, op, v)
 	}); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeInternalError(w, "propose transaction", err)
 		return
 	}
 
@@ -470,7 +521,12 @@ func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operat
 }
 
 func (s *server) getOperation(w http.ResponseWriter, r *http.Request) {
-	row, err := s.store.GetOperation(r.PathValue("id"))
+	id := r.PathValue("id")
+	if !validUUID(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be a UUID"})
+		return
+	}
+	row, err := s.store.GetOperation(id)
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
@@ -484,22 +540,31 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		Rationale string `json:"rationale"`
 		Reviewer  string `json:"reviewer"` // role id or "human"
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	if !decodeJSONBody(w, r, &in) {
 		return
 	}
 	id := r.PathValue("id")
+	if !validUUID(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be a UUID"})
+		return
+	}
+	if in.Verdict != "approved" && in.Verdict != "rejected" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "verdict must be approved or rejected"})
+		return
+	}
 	row, err := s.store.GetOperation(id)
 	if err != nil || row.Status != "pending_review" {
 		writeJSON(w, 409, map[string]string{"error": "not pending review"})
 		return
 	}
-	status := "rejected"
-	if in.Verdict == "approved" {
-		status = "approved"
+	status := in.Verdict
+	if status == "approved" {
 		// TODO: execute approved C-class ops through the same path as Class B.
 	}
-	_ = s.store.SetOperationStatus(id, status, map[string]string{"reviewer": in.Reviewer, "rationale": in.Rationale})
+	if err := s.store.SetOperationStatus(id, status, map[string]string{"reviewer": in.Reviewer, "rationale": in.Rationale}); err != nil {
+		writeInternalError(w, "review operation", err)
+		return
+	}
 	writeJSON(w, 200, map[string]string{"operation_id": id, "status": status})
 }
 
@@ -511,8 +576,12 @@ func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {
 		PromptVersions map[string]any `json:"prompt_versions"`
 		Shadow         bool           `json:"shadow"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	if !decodeJSONBody(w, r, &in) {
+		return
+	}
+	in.OperationID = strings.TrimSpace(in.OperationID)
+	if !validUUID(in.OperationID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "operation_id must be a UUID"})
 		return
 	}
 	var outcome any
@@ -520,7 +589,11 @@ func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {
 		outcome = in.Outcome
 	}
 	if err := s.store.InsertJournal(in.OperationID, in.Hypothesis, outcome, in.PromptVersions, in.Shadow); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		if errors.Is(err, store.ErrInvalidOperationReference) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "operation_id does not reference an existing operation"})
+		} else {
+			writeInternalError(w, "insert journal", err)
+		}
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -529,13 +602,16 @@ func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {
 func (s *server) getLessons(w http.ResponseWriter, r *http.Request) {
 	limit := 5
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := jsonNumber(v); err == nil && n > 0 {
-			limit = n
+		n, err := jsonNumber(v)
+		if err != nil || n < 1 || n > maxLessonsLimit {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be an integer between 1 and 100"})
+			return
 		}
+		limit = n
 	}
 	ls, err := s.store.TopLessons(limit)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeInternalError(w, "get lessons", err)
 		return
 	}
 	writeJSON(w, 200, ls)
@@ -548,22 +624,31 @@ func jsonNumber(s string) (int, error) {
 }
 
 func (s *server) getBlackboard(w http.ResponseWriter, r *http.Request) {
-	doc, err := s.store.GetBlackboard(r.PathValue("day"))
+	day := r.PathValue("day")
+	if !validDate(day) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "day must be YYYY-MM-DD"})
+		return
+	}
+	doc, err := s.store.GetBlackboard(day)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeInternalError(w, "get blackboard", err)
 		return
 	}
 	writeJSON(w, 200, doc)
 }
 
 func (s *server) putBlackboard(w http.ResponseWriter, r *http.Request) {
-	var doc json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	day := r.PathValue("day")
+	if !validDate(day) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "day must be YYYY-MM-DD"})
 		return
 	}
-	if err := s.store.PutBlackboard(r.PathValue("day"), doc); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+	var doc json.RawMessage
+	if !decodeJSONBody(w, r, &doc) {
+		return
+	}
+	if err := s.store.PutBlackboard(day, doc); err != nil {
+		writeInternalError(w, "put blackboard", err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -578,8 +663,7 @@ func (s *server) simQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q broker.Quote
-	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+	if !decodeJSONBody(w, r, &q) {
 		return
 	}
 	f.SetQuote(q)

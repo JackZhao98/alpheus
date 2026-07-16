@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,13 +31,16 @@ type memoryStore struct {
 	shadows     map[string]bool
 	journals    []journalEntry
 	events      []string
+	blackboards map[string]json.RawMessage
+	journalErr  error
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		statuses: map[string]string{},
-		classes:  map[string]string{},
-		shadows:  map[string]bool{},
+		statuses:    map[string]string{},
+		classes:     map[string]string{},
+		shadows:     map[string]bool{},
+		blackboards: map[string]json.RawMessage{},
 	}
 }
 
@@ -91,24 +95,43 @@ func (m *memoryStore) SetOperationStatus(id, status string, _ any) error {
 	return nil
 }
 
-func (m *memoryStore) GetOperation(string) (*store.OperationRow, error) {
-	return nil, errors.New("not found")
+func (m *memoryStore) GetOperation(id string) (*store.OperationRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status, ok := m.statuses[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return &store.OperationRow{ID: id, Class: m.classes[id], Status: status}, nil
 }
 
 func (m *memoryStore) InsertJournal(operationID string, hypothesis, _, _ any, shadow bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.journalErr != nil {
+		return m.journalErr
+	}
 	m.journals = append(m.journals, journalEntry{operationID: operationID, hypothesis: hypothesis, shadow: shadow})
 	return nil
 }
 
 func (m *memoryStore) TopLessons(int) ([]store.Lesson, error) { return []store.Lesson{}, nil }
 
-func (m *memoryStore) GetBlackboard(string) (json.RawMessage, error) {
+func (m *memoryStore) GetBlackboard(day string) (json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if doc, ok := m.blackboards[day]; ok {
+		return doc, nil
+	}
 	return json.RawMessage(`{}`), nil
 }
 
-func (m *memoryStore) PutBlackboard(string, json.RawMessage) error { return nil }
+func (m *memoryStore) PutBlackboard(day string, doc json.RawMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blackboards[day] = append(json.RawMessage(nil), doc...)
+	return nil
+}
 
 func postOperation(t *testing.T, s *server, payload string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
@@ -495,5 +518,147 @@ func TestProposeRequiresJSONAndRejectsUnknownFields(t *testing.T) {
 	w, body := postOperation(t, s, `{"action":"cancel","broker_order_id":"x","surprise":true}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field: status=%d body=%v", w.Code, body)
+	}
+}
+
+func TestCrossedQuoteFailsClosedAtLiquidityGate(t *testing.T) {
+	b := broker.NewFake(300)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+
+	req := httptest.NewRequest(http.MethodPost, "/sim/quote", bytes.NewBufferString(
+		`{"symbol":"XSD","bid":100,"ask":50,"open_interest":1000}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.simQuote(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set crossed quote: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	w, body := postOperation(t, s, `{"proposer":"test","action":"open","kind":"equity","underlying":"XSD","symbol":"XSD","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`)
+	if w.Code != http.StatusOK || body["class"] != "C" || body["status"] != "pending_review" {
+		t.Fatalf("crossed quote: status=%d body=%v, want C/pending_review", w.Code, body)
+	}
+	checks, ok := body["checks"].(map[string]any)
+	if !ok || checks["liquidity_spread"] != false {
+		t.Fatalf("crossed quote checks=%v, want liquidity_spread=false", body["checks"])
+	}
+	positions, err := b.GetPositions()
+	if err != nil || len(positions) != 0 {
+		t.Fatalf("crossed quote reached broker: positions=%v err=%v", positions, err)
+	}
+}
+
+func TestReviewRejectsGarbageVerdictWithoutMutation(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	st := newMemoryStore()
+	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	req := httptest.NewRequest(http.MethodPost, "/operations/"+id+"/review", bytes.NewBufferString(`{"verdict":"BANANA"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	s.review(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+	row, err := st.GetOperation(id)
+	if err != nil || row.Status != "pending_review" {
+		t.Fatalf("operation mutated: row=%+v err=%v", row, err)
+	}
+}
+
+func TestJSONWriteBoundaryAppliesToSmallEndpoints(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	tests := []struct {
+		name    string
+		target  string
+		body    string
+		pathKey string
+		pathVal string
+		handler http.HandlerFunc
+	}{
+		{name: "review", target: "/operations/" + id + "/review", body: `{"verdict":"rejected"}`, pathKey: "id", pathVal: id, handler: s.review},
+		{name: "journal", target: "/journal", body: `{"operation_id":"` + id + `"}`, handler: s.postJournal},
+		{name: "blackboard", target: "/blackboard/2026-07-17", body: `{}`, pathKey: "day", pathVal: "2026-07-17", handler: s.putBlackboard},
+		{name: "sim_quote", target: "/sim/quote", body: `{"symbol":"SPY","bid":100,"ask":100.1}`, handler: s.simQuote},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.target, bytes.NewBufferString(tc.body))
+			if tc.pathKey != "" {
+				req.SetPathValue(tc.pathKey, tc.pathVal)
+			}
+			w := httptest.NewRecorder()
+			tc.handler(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("missing content-type: status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestBlackboardRejectsInvalidDayAndOversizedDocument(t *testing.T) {
+	st := newMemoryStore()
+	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+
+	req := httptest.NewRequest(http.MethodPut, "/blackboard/not-a-date", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("day", "not-a-date")
+	w := httptest.NewRecorder()
+	s.putBlackboard(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid day: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	large := `{"doc":"` + strings.Repeat("x", int(maxJSONBodyBytes)) + `"}`
+	req = httptest.NewRequest(http.MethodPut, "/blackboard/2026-07-17", bytes.NewBufferString(large))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("day", "2026-07-17")
+	w = httptest.NewRecorder()
+	s.putBlackboard(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized doc: status=%d body=%s, want 413", w.Code, w.Body.String())
+	}
+	if len(st.blackboards) != 0 {
+		t.Fatalf("oversized document was persisted: %v", st.blackboards)
+	}
+}
+
+func TestJournalInvalidReferenceIs400WithoutDatabaseDetails(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	st := newMemoryStore()
+	st.journalErr = store.ErrInvalidOperationReference
+	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	req := httptest.NewRequest(http.MethodPost, "/journal", bytes.NewBufferString(`{"operation_id":"`+id+`","hypothesis":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.postJournal(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+	if strings.Contains(strings.ToLower(w.Body.String()), "pq:") || strings.Contains(w.Body.String(), "constraint") {
+		t.Fatalf("database detail leaked: %s", w.Body.String())
+	}
+}
+
+func TestLessonsLimitIsStrictlyBounded(t *testing.T) {
+	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	for _, value := range []string{"-1", "1000000000", "banana"} {
+		req := httptest.NewRequest(http.MethodGet, "/lessons?limit="+value, nil)
+		w := httptest.NewRecorder()
+		s.getLessons(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("limit=%q status=%d body=%s, want 400", value, w.Code, w.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/lessons?limit=100", nil)
+	w := httptest.NewRecorder()
+	s.getLessons(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("limit=100 status=%d body=%s, want 200", w.Code, w.Body.String())
 	}
 }

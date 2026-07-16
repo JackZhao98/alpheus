@@ -7,13 +7,16 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type Store struct{ DB *sql.DB }
+
+var ErrInvalidOperationReference = errors.New("invalid operation reference")
 
 // OperationGate is the minimum store surface used while the kernel holds a
 // per-ledger, per-market-day advisory transaction lock. Count, event, and
@@ -202,6 +205,14 @@ func (s *Store) InsertJournal(operationID string, hypothesis, outcome, promptVer
 	_, err := s.DB.Exec(
 		`INSERT INTO journal (operation_id, hypothesis, outcome, prompt_versions, shadow) VALUES ($1,$2,$3,$4,$5)`,
 		operationID, jstr(hypothesis), out, jstr(promptVersions), shadow)
+	return normalizeJournalError(err)
+}
+
+func normalizeJournalError(err error) error {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23503" {
+		return ErrInvalidOperationReference
+	}
 	return err
 }
 

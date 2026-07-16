@@ -101,7 +101,7 @@ func Classify(op Operation, lim config.Limits, day DayState, quote *broker.Quote
 	checks["plan_complete"] = planOK
 
 	if quote != nil {
-		checks["liquidity_spread"] = quote.RelativeSpread() <= lim.InstrumentRules.MaxRelativeSpread
+		checks["liquidity_spread"] = quote.Sane() && quote.RelativeSpread() <= lim.InstrumentRules.MaxRelativeSpread
 		checks["liquidity_oi"] = op.Kind != "option" || quote.OpenInterest >= lim.InstrumentRules.MinOpenInterest
 	} else {
 		checks["liquidity_spread"], checks["liquidity_oi"] = false, false

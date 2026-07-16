@@ -18,11 +18,20 @@ type Quote struct {
 
 func (q Quote) Mid() float64 { return math.Round((q.Bid+q.Ask)/2*100) / 100 }
 
+// Sane is the minimum invariant a quote must satisfy before it can support a
+// risk or execution decision. Locked, crossed, non-positive, NaN, and infinite
+// markets are not executable evidence and must fail closed upstream.
+func (q Quote) Sane() bool {
+	return !math.IsNaN(q.Bid) && !math.IsInf(q.Bid, 0) &&
+		!math.IsNaN(q.Ask) && !math.IsInf(q.Ask, 0) &&
+		q.Bid > 0 && q.Ask > q.Bid
+}
+
 func (q Quote) RelativeSpread() float64 {
-	m := q.Mid()
-	if m == 0 {
-		return 1
+	if !q.Sane() {
+		return math.Inf(1)
 	}
+	m := (q.Bid + q.Ask) / 2
 	return (q.Ask - q.Bid) / m
 }
 
