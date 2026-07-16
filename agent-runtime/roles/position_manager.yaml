@@ -1,0 +1,10 @@
+role: position_manager
+version: 0
+model_tier: monitor
+output_schema: ExitAction
+injected_context: [limits, state, blackboard]
+prompt_slots:
+  identity: ""            # TODO
+  charter: ""             # TODO: owns live positions AND pre-authorized exits (Class A: stop/time-stop/plan exits)
+  exit_policy: ""         # TODO: execute the recorded plan; escalate only genuine ambiguity
+  quality: ""             # TODO: blotter style — current, factual, actionable

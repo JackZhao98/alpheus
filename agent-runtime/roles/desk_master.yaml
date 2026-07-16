@@ -1,0 +1,10 @@
+role: desk_master
+version: 0                # bump on every prompt edit; journaled with each trade
+model_tier: decider       # -> DECIDER_MODEL
+output_schema: DeskDecision
+injected_context: [limits, state, blackboard, lessons]
+prompt_slots:
+  identity: ""            # TODO: who it is, voice
+  charter: ""             # TODO: owns synthesis, daily plan, proposals; the ONLY proposer of new risk
+  decision_policy: ""     # TODO: when to PROPOSE vs WAIT vs PASS; PASS is a completed decision
+  quality: ""             # TODO: separate fact from inference; cite evidence timestamps

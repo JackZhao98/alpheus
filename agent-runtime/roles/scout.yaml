@@ -1,0 +1,10 @@
+role: scout
+version: 0
+model_tier: monitor       # -> MONITOR_MODEL (cheap; runs often)
+output_schema: OpportunityBrief
+injected_context: [limits, state, blackboard]
+prompt_slots:
+  identity: ""            # TODO
+  charter: ""             # TODO: discovery beyond known symbols + news transmission paths (merged news role)
+  ranking_policy: ""      # TODO: evidence before affordability; novelty earns evaluation not recommendation
+  quality: ""             # TODO

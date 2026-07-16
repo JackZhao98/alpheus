@@ -1,0 +1,10 @@
+role: coach
+version: 0
+model_tier: decider       # retros deserve the good model
+output_schema: JournalReview
+injected_context: [limits, state, blackboard, lessons]
+prompt_slots:
+  identity: ""            # TODO
+  charter: ""             # TODO: nightly outcome attribution + weekly per-setup stats
+  attribution_policy: ""  # TODO: error taxonomy — selection / timing / execution / variance
+  lesson_policy: ""       # TODO: 1-3 lessons max, each with confidence + applicable_when + expiry

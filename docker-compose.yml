@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: alpheus
+      POSTGRES_PASSWORD: alpheus
+      POSTGRES_DB: alpheus
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alpheus"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  kernel:
+    build: ./kernel
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      BROKER: ${BROKER:-fake}            # fake | robinhood
+      TZ_MARKET: America/New_York
+    ports: ["8100:8100"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  agent-runtime:
+    build: ./agent-runtime
+    environment:
+      KERNEL_URL: http://kernel:8100
+      COGNITION: ${COGNITION:-stub}      # stub | llm
+      DECIDER_MODEL: ${DECIDER_MODEL:-}  # filled when COGNITION=llm
+      MONITOR_MODEL: ${MONITOR_MODEL:-}
+    depends_on: [kernel]
+
+volumes:
+  pgdata:
