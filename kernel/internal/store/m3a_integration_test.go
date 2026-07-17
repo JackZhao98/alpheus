@@ -84,6 +84,59 @@ func TestM3AInvalidExecutionEntitlementCannotBeClaimedPostgres(t *testing.T) {
 	}
 }
 
+func TestShadowFullCloseDeletesPositionPostgres(t *testing.T) {
+	databaseURL := os.Getenv("ALPHEUS_TEST_M3A_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("ALPHEUS_TEST_M3A_DATABASE_URL is not set")
+	}
+	migrationsDir := os.Getenv("ALPHEUS_TEST_MIGRATIONS_DIR")
+	if migrationsDir == "" {
+		migrationsDir = "../../../db/migrations"
+	}
+	s, err := Open(Config{
+		URL: databaseURL, MigrationsDir: migrationsDir,
+		Timeout: 3 * time.Second, MarketTZ: "America/New_York",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	resetM3AIntegrationData(t, s)
+	if err := s.ActivateM3A(M3AActivationSnapshot{
+		Equity: units.MustMicros("300"), BuyingPower: units.MustMicros("300"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO shadow_positions
+		(symbol,kind,multiplier,qty,updated_at) VALUES ('FULL-CLOSE','equity',1,$1,now())`,
+		int64(units.MustQty("1"))); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := &Order{Symbol: "FULL-CLOSE", Kind: "equity", Multiplier: 1, Ledger: "shadow"}
+	fill := FillInput{Qty: units.MustQty("1"), Price: units.MustMicros("10")}
+	if err := applyShadowCloseFill(ctx, tx, order, fill); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	var positions int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM shadow_positions WHERE symbol='FULL-CLOSE'`).Scan(&positions); err != nil {
+		t.Fatal(err)
+	}
+	if positions != 0 {
+		t.Fatalf("fully closed shadow position count=%d", positions)
+	}
+}
+
 func TestM3AExposureTransferAndFIFOAllocationPostgres(t *testing.T) {
 	databaseURL := os.Getenv("ALPHEUS_TEST_M3A_DATABASE_URL")
 	if databaseURL == "" {

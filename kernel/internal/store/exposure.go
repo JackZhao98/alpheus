@@ -397,18 +397,33 @@ func applyShadowOpenFill(ctx context.Context, tx *sql.Tx, order *Order, fill Fil
 }
 
 func applyShadowCloseFill(ctx context.Context, tx *sql.Tx, order *Order, fill FillInput) error {
-	result, err := tx.ExecContext(ctx, `UPDATE shadow_positions SET qty=qty-$2,updated_at=now()
-		WHERE symbol=$1 AND kind=$3 AND multiplier=$4 AND qty >= $2`, order.Symbol,
+	// A fully closed paper position must be deleted directly: shadow_positions
+	// deliberately forbids zero quantities, so UPDATE-to-zero followed by DELETE
+	// can never satisfy the table constraint.
+	result, err := tx.ExecContext(ctx, `DELETE FROM shadow_positions
+		WHERE symbol=$1 AND kind=$3 AND multiplier=$4 AND qty=$2`, order.Symbol,
 		int64(fill.Qty), order.Kind, order.Multiplier)
 	if err != nil {
 		return err
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected != 1 {
-		return fmt.Errorf("%w: shadow close exceeds paper position", ErrFillIntegrity)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM shadow_positions WHERE symbol=$1 AND qty=0`, order.Symbol); err != nil {
+	if err != nil {
 		return err
+	}
+	if affected == 0 {
+		result, err = tx.ExecContext(ctx, `UPDATE shadow_positions SET qty=qty-$2,updated_at=now()
+			WHERE symbol=$1 AND kind=$3 AND multiplier=$4 AND qty>$2`, order.Symbol,
+			int64(fill.Qty), order.Kind, order.Multiplier)
+		if err != nil {
+			return err
+		}
+		affected, err = result.RowsAffected()
+		if err != nil {
+			return err
+		}
+	}
+	if affected != 1 {
+		return fmt.Errorf("%w: shadow close exceeds paper position", ErrFillIntegrity)
 	}
 	proceeds, err := units.MulQtyPrice(fill.Qty, fill.Price, order.Multiplier, false)
 	if err != nil {
