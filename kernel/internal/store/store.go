@@ -29,12 +29,14 @@ type Config struct {
 }
 
 type Store struct {
-	DB      *sql.DB
-	timeout time.Duration
+	DB       *sql.DB
+	timeout  time.Duration
+	marketTZ string
 }
 
 var (
 	ErrInvalidOperationReference = errors.New("invalid operation reference")
+	ErrBreakerNotActive          = errors.New("breaker is not active for that reason")
 	ErrUnavailable               = errors.New("database unavailable")
 )
 
@@ -68,11 +70,14 @@ type OperationGate interface {
 	ShadowPositions() ([]ShadowPosition, error)
 	OpenExposureQuantity(ledger, symbol, kind string) (units.Qty, error)
 	FirstOpenExposureOperation(ledger, symbol, kind string) (string, error)
+	EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error)
+	ResumeBreaker(ledger, reason string, marketDay time.Time, subject string) (BreakerState, error)
 }
 
 type ledgerTx struct {
-	tx  *sql.Tx
-	ctx context.Context
+	tx       *sql.Tx
+	ctx      context.Context
+	marketTZ string
 }
 
 func (t *ledgerTx) DatabaseNow() (time.Time, error) {
@@ -88,6 +93,9 @@ func (t *ledgerTx) DatabaseNow() (time.Time, error) {
 func Open(cfg Config) (*Store, error) {
 	if cfg.URL == "" || cfg.MigrationsDir == "" || cfg.Timeout <= 0 || cfg.MarketTZ == "" {
 		return nil, fmt.Errorf("store config is incomplete")
+	}
+	if _, err := time.LoadLocation(cfg.MarketTZ); err != nil {
+		return nil, fmt.Errorf("invalid market timezone")
 	}
 	migrations, err := LoadMigrations(cfg.MigrationsDir)
 	if err != nil {
@@ -121,7 +129,7 @@ func Open(cfg Config) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
-	return &Store{DB: db, timeout: cfg.Timeout}, nil
+	return &Store{DB: db, timeout: cfg.Timeout, marketTZ: cfg.MarketTZ}, nil
 }
 
 // deadlineDialer adds a hard socket deadline to lib/pq's context deadline.
@@ -446,7 +454,7 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 			return normalizeDBError(err)
 		}
 	}
-	if err := fn(&ledgerTx{tx: tx, ctx: ctx}); err != nil {
+	if err := fn(&ledgerTx{tx: tx, ctx: ctx, marketTZ: s.marketTZ}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

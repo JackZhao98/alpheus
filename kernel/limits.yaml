@@ -40,5 +40,6 @@ execution_policy:
   fee_per_share: 0
 
 risk_declaration_tolerance: 0.01
+pnl_reconciliation_tolerance_usd: 0.01 # local/provider difference before fail-closed halt
 quote_max_age_sec: 15              # human-approved for the read-only Robinhood MCP session
 proposal_ttl_sec: 1800             # human-approved stale proposal lifetime (30 minutes)

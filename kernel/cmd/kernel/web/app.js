@@ -23,6 +23,8 @@ async function api(path, options = {}) {
 function renderLedger(prefix, ledger, asOf) {
   setText(`${prefix}-count`, ledger?.trades_today ?? 0);
   setText(`${prefix}-risk`, `Open risk ${money(ledger?.open_risk ?? 0)}`);
+  setText(`${prefix}-pnl`, `Realized PnL ${money(ledger?.realized_pnl ?? 0)} · daily floor -${money(ledger?.daily_loss_limit ?? 0)}`);
+  setText(`${prefix}-streak`, `Consecutive loss days ${ledger?.consecutive_loss_days ?? 0}`);
   setText(`${prefix}-halt`, ledger?.halted ? `HALTED · ${ledger.halt_reason || "operator"}` : "READY · no active breaker");
   byId(`${prefix}-halt`).style.color = ledger?.halted ? "var(--red)" : "var(--green)";
   setText(`${prefix}-asof`, `kernel_db · ${when(asOf)} · current`);

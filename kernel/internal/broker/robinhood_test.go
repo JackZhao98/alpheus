@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"alpheus/kernel/internal/units"
 )
 
 type fixtureCaller map[string]json.RawMessage
@@ -96,5 +99,43 @@ func TestRobinhoodPositionsRequireStableIDsAndKnownMultiplier(t *testing.T) {
 				t.Fatal("invalid production position was accepted")
 			}
 		})
+	}
+}
+
+type pnlFixtureCaller struct {
+	fixtureCaller
+	args map[string]any
+}
+
+func (f *pnlFixtureCaller) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	if tool == "get_realized_pnl" {
+		f.args = args
+	}
+	return f.fixtureCaller.Call(ctx, tool, args)
+}
+
+func TestRobinhoodRealizedPnLUsesExactBoundAccountAndDay(t *testing.T) {
+	caller := &pnlFixtureCaller{fixtureCaller: fixtureCaller{
+		"get_accounts":     accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_realized_pnl": json.RawMessage(`{"data":{"account_number":"rhs-wanted","window":"2026-07-17..2026-07-17","display_currency":"USD","data_points":[],"total_returns":"-12.340001","total_rate_of_return":"0"},"guide":"fixture"}`),
+	}}
+	provider, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := provider.RealizedPnL(context.Background(), time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Total != units.MustMicros("-12.340001") || snapshot.Source != robinhoodSource {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	if caller.args["account_number"] != "rhs-wanted" || caller.args["start_date"] != "2026-07-17" ||
+		caller.args["end_date"] != "2026-07-17" || caller.args["timezone"] != "America/New_York" {
+		t.Fatalf("args=%v", caller.args)
+	}
+	assets, ok := caller.args["asset_classes"].([]string)
+	if !ok || len(assets) != 3 {
+		t.Fatalf("asset_classes=%v", caller.args["asset_classes"])
 	}
 }

@@ -74,12 +74,18 @@ if [ "$SMOKE_DB_CHECK" = "1" ]; then
   live_orders_after=$(sql_scalar "select count(*) from orders where ledger='live'")
   live_fills_after=$(sql_scalar "select count(*) from fills where ledger='live'")
   orphan_attempts=$(sql_scalar "select count(*) from execution_attempt a left join orders o on o.execution_attempt_id=a.id where o.id is null and a.intent in ('place','paper_place')")
+  live_pnl=$(sql_scalar "select local_realized_pnl_micros from daily_pnl where ledger='live' order by market_day desc limit 1")
+  shadow_pnl=$(sql_scalar "select local_realized_pnl_micros from daily_pnl where ledger='shadow' order by market_day desc limit 1")
+  halted_breakers=$(sql_scalar "select count(*) from breaker_state where halted")
   test "$((shadow_orders_after-shadow_orders_before))" -eq 1
   test "$((shadow_fills_after-shadow_fills_before))" -eq 1
   test "$((live_orders_after-live_orders_before))" -eq 2
   test "$((live_fills_after-live_fills_before))" -eq 2
   test "$orphan_attempts" -eq 0
-  echo "db invariants: +1 shadow order/fill, +2 live orders/fills, 0 orphan place attempts"
+  test "$live_pnl" -eq -10000
+  test "$shadow_pnl" -eq 0
+  test "$halted_breakers" -eq 0
+  echo "db invariants: +1 shadow order/fill, +2 live orders/fills, 0 orphan attempts, live pnl -0.01, shadow pnl 0, breakers clear"
 else
   echo "db invariants skipped (SMOKE_DB_CHECK=0)"
 fi

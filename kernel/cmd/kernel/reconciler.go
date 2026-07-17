@@ -22,9 +22,10 @@ type excludingDayStateReader interface {
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
+	EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskStats, error)
 }
 
-func (s *server) dayStateAtAccountExcluding(gate excludingDayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason, operationID string) (risk.DayState, error) {
+func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingDayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason, operationID string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDayExcluding(shadow, window.start, window.end, operationID)
 	if err != nil {
 		return risk.DayState{}, err
@@ -41,10 +42,30 @@ func (s *server) dayStateAtAccountExcluding(gate excludingDayStateReader, shadow
 	if err := gate.InsertDayOpen(window.day, ledger, account.Equity); err != nil {
 		return risk.DayState{}, err
 	}
+	providerPnL, err := s.providerRealizedPnL(ctx, shadow, window.day)
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	stats, err := gate.EvaluateDayRisk(store.DayRiskInput{
+		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
+		ProviderRealizedPnL:     providerPnL,
+		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
+		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
+		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
+	})
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	if !halted && stats.Halted {
+		halted, haltReason = true, stats.Reason
+	}
 	return risk.DayState{
 		TradesToday: n, OpenRisk: resources.OpenRisk, Equity: account.Equity,
 		EquityKnown: account.EquityKnown, BuyingPower: buyingPower,
-		Halted: halted, HaltReason: haltReason,
+		RealizedPnL: stats.EffectiveRealizedPnL, LocalRealizedPnL: stats.LocalRealizedPnL,
+		ProviderRealizedPnL: stats.ProviderRealizedPnL, DailyLossLimit: stats.DailyLossLimit,
+		ConsecutiveLossDays: stats.ConsecutiveLossDays,
+		Halted:              halted, HaltReason: haltReason,
 	}, nil
 }
 
@@ -289,7 +310,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			if err != nil {
 				return err
 			}
-			day, err := s.dayStateAtAccountExcluding(gate, op.Shadow, account, window, halted, haltReason, attempt.OperationID)
+			day, err := s.dayStateAtAccountExcluding(ctx, gate, op.Shadow, account, window, halted, haltReason, attempt.OperationID)
 			if err != nil {
 				return err
 			}

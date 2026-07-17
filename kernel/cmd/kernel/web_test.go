@@ -26,7 +26,7 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	if strings.Contains(page.Body.String(), "<script>") {
 		t.Fatal("cockpit contains an inline script")
 	}
-	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED"} {
+	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak"} {
 		if !strings.Contains(page.Body.String(), required) {
 			t.Fatalf("cockpit query lab missing %q", required)
 		}
@@ -47,6 +47,11 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	for _, safePath := range []string{"/market/quote/", "/market/bars/", "/market/expirations/", "/market/chain/", "/provider/status"} {
 		if !strings.Contains(script.Body.String(), safePath) {
 			t.Fatalf("query lab missing safe path %q", safePath)
+		}
+	}
+	for _, breakerFact := range []string{"realized_pnl", "daily_loss_limit", "consecutive_loss_days"} {
+		if !strings.Contains(script.Body.String(), breakerFact) {
+			t.Fatalf("cockpit missing breaker fact %q", breakerFact)
 		}
 	}
 	for _, forbidden := range []string{"CallTool", "tool_name", "place_", "cancel_", "remove_", "update_"} {

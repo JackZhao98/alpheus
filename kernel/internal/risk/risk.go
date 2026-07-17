@@ -42,13 +42,18 @@ type Operation struct {
 }
 
 type DayState struct {
-	TradesToday int          `json:"trades_today"`
-	OpenRisk    units.Micros `json:"open_risk"`
-	Equity      units.Micros `json:"equity"`
-	EquityKnown bool         `json:"equity_known"`
-	BuyingPower units.Micros `json:"buying_power"`
-	Halted      bool         `json:"halted"`
-	HaltReason  string       `json:"halt_reason,omitempty"`
+	TradesToday         int           `json:"trades_today"`
+	OpenRisk            units.Micros  `json:"open_risk"`
+	RealizedPnL         units.Micros  `json:"realized_pnl"`
+	LocalRealizedPnL    units.Micros  `json:"local_realized_pnl"`
+	ProviderRealizedPnL *units.Micros `json:"provider_realized_pnl,omitempty"`
+	DailyLossLimit      units.Micros  `json:"daily_loss_limit"`
+	ConsecutiveLossDays int           `json:"consecutive_loss_days"`
+	Equity              units.Micros  `json:"equity"`
+	EquityKnown         bool          `json:"equity_known"`
+	BuyingPower         units.Micros  `json:"buying_power"`
+	Halted              bool          `json:"halted"`
+	HaltReason          string        `json:"halt_reason,omitempty"`
 }
 
 type Verdict struct {

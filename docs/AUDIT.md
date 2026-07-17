@@ -77,7 +77,17 @@ violated, and severity.
   malformed input must land in C/REJECT/400 — never B, never a broker call.
 - **I6 Class A survives the breaker (by design).** Use the M2.6 Admin-token
   `POST /halt`; after it commits, `close` and `cancel` still execute.
-  Conversely `open` while halted must REJECT.
+  Conversely `open` while halted must REJECT. Independently seed M3C FIFO
+  allocations and verify fees, partial quantities and option multipliers in
+  realized PnL. At exactly `-daily_loss_limit`, live opens must halt while a
+  verified close still executes and shadow remains independent. Make the
+  provider lag above local PnL and then report an unexplained lower value: the
+  effective value must always be the more loss-making one, and divergence must
+  latch. `POST /breaker/resume` without Admin auth is 401; with Admin auth it
+  suppresses that reason for the current market day only. The next market day
+  must re-evaluate without inheriting the override. A preemptive resume or a
+  mismatched reason must return 409 and write no override. A positive
+  current-day PnL must break an earlier consecutive-loss streak.
 - **I7 Restart safety & idempotency.** Restart kernel mid-traffic; verify
   no state corruption. In live mode, omit `Idempotency-Key`, use whitespace,
   control bytes and 201 characters: each must be 400 before classification.
@@ -173,15 +183,13 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M3A plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M3C plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
 DB deadlines, idempotency, durable orders/fills, open reservations, exposure
-FIFO, the shadow paper book and production-read/cockpit boundaries are audit
-targets, not suppressed findings.
+FIFO, the shadow paper book, cost-basis PnL, per-ledger breakers and
+production-read/cockpit boundaries are audit targets, not suppressed findings.
 
-1. Cost-basis realized PnL and automatic daily/consecutive-loss breakers are
-   not implemented (PLAN M3C).
-2. Approved Class-C ops are not executed (PLAN M4).
+1. Approved Class-C ops are not executed (PLAN M4).
 
 Suppression is about the CURRENT build, not the plan: each item above is still
 the live behavior. When its milestone lands, the item leaves this list and

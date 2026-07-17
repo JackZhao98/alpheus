@@ -139,6 +139,19 @@ type AccountProvider interface {
 	AccountID(ctx context.Context) (string, error)
 }
 
+type RealizedPnLSnapshot struct {
+	Total  units.Micros
+	Source string
+	AsOf   time.Time
+}
+
+// RealizedPnLProvider is an optional read-only account capability. Simulation
+// and shadow ledgers use the kernel's durable FIFO ledger and need not
+// implement it; the production Robinhood reader does.
+type RealizedPnLProvider interface {
+	RealizedPnL(ctx context.Context, marketDay time.Time, marketTZ string) (RealizedPnLSnapshot, error)
+}
+
 type ExecutionProvider interface {
 	PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
 	CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)

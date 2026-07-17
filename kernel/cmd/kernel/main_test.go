@@ -35,37 +35,42 @@ type memoryFill struct {
 }
 
 type memoryStore struct {
-	mu               sync.Mutex
-	idempotencyMu    sync.Mutex
-	symbolMu         sync.Mutex
-	ledgerLocks      [2]sync.Mutex
-	idempotencyLocks map[string]*sync.Mutex
-	symbolLocks      map[string]*sync.Mutex
-	statuses         map[string]string
-	classes          map[string]string
-	shadows          map[string]bool
-	operations       map[string]risk.Operation
-	operationRows    map[string]store.OperationRow
-	grants           map[string]store.TradeGrant
-	reservations     map[string]store.CloseReservation
-	openReservations map[string]store.OpenReservation
-	shadowAccount    store.ShadowAccount
-	shadowPositions  map[string]store.ShadowPosition
-	exposureQty      map[string]units.Qty
-	firstExposureOp  map[string]string
-	attempts         map[string]store.ExecutionAttempt
-	orders           map[string]store.Order
-	fills            map[string]memoryFill
-	verdicts         map[string]json.RawMessage
-	journals         []journalEntry
-	events           []string
-	blackboards      map[string]json.RawMessage
-	journalErr       error
-	halted           bool
-	haltReason       string
-	proposalLockErr  error
-	m3aActive        bool
-	databaseNow      func() time.Time
+	mu                  sync.Mutex
+	idempotencyMu       sync.Mutex
+	symbolMu            sync.Mutex
+	ledgerLocks         [2]sync.Mutex
+	idempotencyLocks    map[string]*sync.Mutex
+	symbolLocks         map[string]*sync.Mutex
+	statuses            map[string]string
+	classes             map[string]string
+	shadows             map[string]bool
+	operations          map[string]risk.Operation
+	operationRows       map[string]store.OperationRow
+	grants              map[string]store.TradeGrant
+	reservations        map[string]store.CloseReservation
+	openReservations    map[string]store.OpenReservation
+	shadowAccount       store.ShadowAccount
+	shadowPositions     map[string]store.ShadowPosition
+	exposureQty         map[string]units.Qty
+	firstExposureOp     map[string]string
+	attempts            map[string]store.ExecutionAttempt
+	orders              map[string]store.Order
+	fills               map[string]memoryFill
+	verdicts            map[string]json.RawMessage
+	journals            []journalEntry
+	events              []string
+	blackboards         map[string]json.RawMessage
+	journalErr          error
+	halted              bool
+	haltReason          string
+	proposalLockErr     error
+	m3aActive           bool
+	databaseNow         func() time.Time
+	dayOpenEquity       map[string]units.Micros
+	realizedPnL         map[string]units.Micros
+	breakerStates       map[string]store.BreakerState
+	breakerOverrides    map[string]bool
+	consecutiveLossDays map[string]int
 }
 
 func newMemoryStore() *memoryStore {
@@ -91,6 +96,13 @@ func newMemoryStore() *memoryStore {
 		fills:           map[string]memoryFill{},
 		verdicts:        map[string]json.RawMessage{},
 		blackboards:     map[string]json.RawMessage{},
+		dayOpenEquity:   map[string]units.Micros{},
+		realizedPnL:     map[string]units.Micros{},
+		breakerStates: map[string]store.BreakerState{
+			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
+		},
+		breakerOverrides:    map[string]bool{},
+		consecutiveLossDays: map[string]int{},
 	}
 }
 
@@ -285,8 +297,86 @@ func (m *memoryStore) LedgerResources(ledger, excludeOperationID string) (store.
 	return resources, nil
 }
 
-func (m *memoryStore) InsertDayOpen(_ time.Time, _ string, _ units.Micros) error {
+func (m *memoryStore) InsertDayOpen(_ time.Time, ledger string, equity units.Micros) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.dayOpenEquity[ledger]; !exists {
+		m.dayOpenEquity[ledger] = equity
+	}
 	return nil
+}
+
+func (m *memoryStore) EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	local := m.realizedPnL[input.Ledger]
+	effective := local
+	if input.ProviderRealizedPnL != nil && *input.ProviderRealizedPnL < effective {
+		effective = *input.ProviderRealizedPnL
+	}
+	stats := store.DayRiskStats{
+		LocalRealizedPnL: local, EffectiveRealizedPnL: effective,
+		ConsecutiveLossDays: m.consecutiveLossDays[input.Ledger],
+	}
+	if input.ProviderRealizedPnL != nil {
+		copy := *input.ProviderRealizedPnL
+		stats.ProviderRealizedPnL = &copy
+	}
+	if input.MaxDailyLossPct > 0 && m.dayOpenEquity[input.Ledger] > 0 {
+		limit, err := units.PercentFloor(m.dayOpenEquity[input.Ledger], input.MaxDailyLossPct)
+		if err != nil {
+			return stats, err
+		}
+		stats.DailyLossLimit = limit
+	}
+	reason := ""
+	day := input.MarketDay.Format(time.DateOnly)
+	overridden := func(candidate string) bool {
+		return m.breakerOverrides[input.Ledger+"\x00"+candidate+"\x00"+day]
+	}
+	if input.ProviderRealizedPnL != nil &&
+		units.DifferenceExceeds(local, *input.ProviderRealizedPnL, input.PnLReconciliationLimit) &&
+		!overridden("pnl_divergence") {
+		reason = "pnl_divergence"
+	} else if stats.DailyLossLimit > 0 && effective <= -stats.DailyLossLimit && !overridden("daily_loss") {
+		reason = "daily_loss"
+	} else if input.ConsecutiveLossDaysHalt > 0 && stats.ConsecutiveLossDays >= input.ConsecutiveLossDaysHalt && !overridden("loss_streak") {
+		reason = "loss_streak"
+	}
+	state := m.breakerStates[input.Ledger]
+	if state.Halted && !overridden(state.Reason) {
+		switch state.Reason {
+		case "pnl_divergence":
+			reason = state.Reason
+		case "daily_loss":
+			if state.UpdatedAt.Format(time.DateOnly) == day && reason != "pnl_divergence" {
+				reason = state.Reason
+			}
+		}
+	}
+	nextHalted := reason != ""
+	if state.Halted != nextHalted || state.Reason != reason {
+		m.events = append(m.events, "breaker")
+	}
+	state.Halted, state.Reason, state.UpdatedAt = nextHalted, reason, input.MarketDay
+	m.breakerStates[input.Ledger] = state
+	stats.Halted, stats.Reason = state.Halted, state.Reason
+	return stats, nil
+}
+
+func (m *memoryStore) ResumeBreaker(ledger, reason string, marketDay time.Time, _ string) (store.BreakerState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.breakerStates[ledger]
+	if !state.Halted || state.Reason != reason {
+		return state, store.ErrBreakerNotActive
+	}
+	m.breakerOverrides[ledger+"\x00"+reason+"\x00"+marketDay.Format(time.DateOnly)] = true
+	state.Halted, state.Reason = false, ""
+	state.UpdatedAt = marketDay
+	m.events = append(m.events, "breaker")
+	m.breakerStates[ledger] = state
+	return state, nil
 }
 
 func (m *memoryStore) DatabaseNow() (time.Time, error) {
@@ -880,9 +970,12 @@ func dualLedgerLimits() config.Limits {
 	limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("35")
 	limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("80")
 	limits.HardLimits.MaxNewTradesPerDay = 6
+	limits.HardLimits.MaxDailyLossPct = units.MustPercent("40")
+	limits.HardLimits.ConsecutiveLossDaysHalt = 5
 	limits.InstrumentRules.MinOpenInterest = 300
 	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
 	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
+	limits.PnLReconciliationTolerance = units.MustMicros("0.01")
 	limits.ProposalTTLSec = 1800
 	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}

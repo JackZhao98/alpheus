@@ -92,6 +92,7 @@ type dayStateReader interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
+	EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskStats, error)
 }
 
 func main() {
@@ -404,7 +405,7 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
-func (s *server) dayStateAtAccount(gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
+func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
@@ -421,12 +422,49 @@ func (s *server) dayStateAtAccount(gate dayStateReader, shadow bool, account bro
 	if err := gate.InsertDayOpen(window.day, ledger, account.Equity); err != nil {
 		return risk.DayState{}, err
 	}
-	// TODO M3C: daily pnl and consecutive-loss breaker evaluation.
+	providerPnL, err := s.providerRealizedPnL(ctx, shadow, window.day)
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	stats, err := gate.EvaluateDayRisk(store.DayRiskInput{
+		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
+		ProviderRealizedPnL:     providerPnL,
+		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
+		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
+		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
+	})
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	if !halted && stats.Halted {
+		halted, haltReason = true, stats.Reason
+	}
 	return risk.DayState{
 		TradesToday: n, OpenRisk: resources.OpenRisk, Equity: account.Equity,
 		EquityKnown: account.EquityKnown, BuyingPower: buyingPower,
-		Halted: halted, HaltReason: haltReason,
+		RealizedPnL: stats.EffectiveRealizedPnL, LocalRealizedPnL: stats.LocalRealizedPnL,
+		ProviderRealizedPnL: stats.ProviderRealizedPnL, DailyLossLimit: stats.DailyLossLimit,
+		ConsecutiveLossDays: stats.ConsecutiveLossDays,
+		Halted:              halted, HaltReason: haltReason,
 	}, nil
+}
+
+func (s *server) providerRealizedPnL(ctx context.Context, shadow bool, marketDay time.Time) (*units.Micros, error) {
+	if shadow {
+		return nil, nil
+	}
+	provider, ok := s.accountProvider().(broker.RealizedPnLProvider)
+	if !ok {
+		return nil, nil
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	snapshot, err := provider.RealizedPnL(providerCtx, marketDay, config.Env("TZ_MARKET", "America/New_York"))
+	cancel()
+	if err != nil || snapshot.AsOf.IsZero() {
+		return nil, fmt.Errorf("%w: realized PnL", errBrokerDataUnavailable)
+	}
+	value := snapshot.Total
+	return &value, nil
 }
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
@@ -494,7 +532,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	var liveDay, shadowDay risk.DayState
 	if err := s.store.WithLedgerLock(false, window.day, func(gate store.OperationGate) error {
 		var err error
-		liveDay, err = s.dayStateAtAccount(gate, false, acct, window, halted, haltReason)
+		liveDay, err = s.dayStateAtAccount(r.Context(), gate, false, acct, window, halted, haltReason)
 		return err
 	}); err != nil {
 		writeStoreError(w, "get live day state", err)
@@ -505,7 +543,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		shadowDay, err = s.dayStateAtAccount(gate, true, shadowAccount, window, halted, haltReason)
+		shadowDay, err = s.dayStateAtAccount(r.Context(), gate, true, shadowAccount, window, halted, haltReason)
 		return err
 	}); err != nil {
 		writeStoreError(w, "get shadow day state", err)
@@ -748,7 +786,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		day := risk.DayState{}
 		if op.Action == "open" {
 			var err error
-			day, err = s.dayStateAtAccount(gate, op.Shadow, acct, window, halted, haltReason)
+			day, err = s.dayStateAtAccount(r.Context(), gate, op.Shadow, acct, window, halted, haltReason)
 			if err != nil {
 				return err
 			}

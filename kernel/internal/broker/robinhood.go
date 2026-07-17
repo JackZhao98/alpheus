@@ -165,6 +165,41 @@ func (r *Robinhood) AccountID(ctx context.Context) (string, error) {
 	return account.AccountNumber, nil
 }
 
+func (r *Robinhood) RealizedPnL(ctx context.Context, marketDay time.Time, marketTZ string) (RealizedPnLSnapshot, error) {
+	account, err := r.selectedAccount(ctx)
+	if err != nil {
+		return RealizedPnLSnapshot{}, err
+	}
+	if strings.TrimSpace(marketTZ) == "" {
+		return RealizedPnLSnapshot{}, fmt.Errorf("realized PnL timezone is required")
+	}
+	day := marketDay.Format(time.DateOnly)
+	raw, err := r.caller.Call(ctx, "get_realized_pnl", map[string]any{
+		"account_number": account.RHSAccountNumber,
+		"start_date":     day, "end_date": day, "timezone": marketTZ,
+		"asset_classes": []string{"equity", "option", "crypto"},
+	})
+	if err != nil {
+		return RealizedPnLSnapshot{}, fmt.Errorf("realized PnL unavailable")
+	}
+	var response struct {
+		AccountNumber string       `json:"account_number"`
+		Window        string       `json:"window"`
+		Currency      string       `json:"display_currency"`
+		Total         *exactMicros `json:"total_returns"`
+	}
+	if err := decodeRobinhoodData(r.caller, raw, &response); err != nil {
+		return RealizedPnLSnapshot{}, err
+	}
+	if response.AccountNumber != account.RHSAccountNumber || response.Window != day+".."+day ||
+		response.Currency != "USD" || response.Total == nil {
+		return RealizedPnLSnapshot{}, robinhoodSchemaError(r.caller, "realized PnL schema drift")
+	}
+	return RealizedPnLSnapshot{
+		Total: units.Micros(*response.Total), Source: robinhoodSource, AsOf: time.Now().UTC(),
+	}, nil
+}
+
 func (r *Robinhood) Account(ctx context.Context) (AccountState, error) {
 	account, err := r.selectedAccount(ctx)
 	if err != nil {

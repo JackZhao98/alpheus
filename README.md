@@ -174,7 +174,12 @@ inline script 的 CSP。
   稳定的 per-ledger 锁；总开仓风险等于已成交 exposure lots 加仍 held 的 open
   reservations，挂单不会制造风险或购买力的空窗。live fill 在同一事务里把预留
   转成 exposure lot；shadow 则原子写 synthetic order/fill、独立 paper 资金与
-  持仓，从不调用 broker（进攻档宪法见 `kernel/limits.yaml`）。
+  持仓，从不调用 broker。M3C 按 durable FIFO close allocation 计算成本基础
+  已实现 PnL（含费用与期权 multiplier）；live 同时读取 Robinhood 当日已实现
+  PnL，始终采用本地/Provider 中更亏损的值。超过对账容差、触及日亏阈值或达到
+  连亏天数都会按 ledger 独立熔断；`POST /breaker/resume` 只接受 Admin Token，
+  override 只在当前市场日有效。Cockpit 的 live/shadow 卡片显示 PnL、日亏阈值、
+  连亏天数与 breaker 状态（进攻档宪法见 `kernel/limits.yaml`）。
 - **C 例外**：清单未过但不违反绝对项 → `pending_review`，
   交 reviewer（不同家族模型）或人一键裁决（`POST /operations/{id}/review`）。
 - **REJECT 绝对项**：熔断中、任何单腿 `open + sell`、风险声明不实、
@@ -231,8 +236,7 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 
 reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、inbox/watchlist
 注入（assemble 有 TODO）、C 级批准后的执行路径、
-订单重挂状态机接线、基于成本的已实现 PnL 与自动日亏/连亏熔断
-（M3C）、watchdog 对 runtime `/wake` 的实际投递（端点和
+订单重挂状态机接线、watchdog 对 runtime `/wake` 的实际投递（端点和
 Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。
 这些都有明确的挂载点，但骨架的任务是把边界立住。

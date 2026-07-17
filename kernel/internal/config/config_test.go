@@ -62,6 +62,7 @@ instrument_rules:
 execution_policy:
   fee_per_contract: 0.01
 risk_declaration_tolerance: 0.01
+pnl_reconciliation_tolerance_usd: 0.01
 `)
 	if err := yaml.Unmarshal(doc, &limits); err != nil {
 		t.Fatal(err)
@@ -73,7 +74,8 @@ risk_declaration_tolerance: 0.01
 		t.Fatalf("spread=%s", limits.InstrumentRules.MaxRelativeSpread)
 	}
 	if limits.ExecutionPolicy.FeePerContract != units.MustMicros("0.01") ||
-		limits.RiskDeclarationTolerance != units.MustMicros("0.01") {
+		limits.RiskDeclarationTolerance != units.MustMicros("0.01") ||
+		limits.PnLReconciliationTolerance != units.MustMicros("0.01") {
 		t.Fatalf("money keys decoded incorrectly: %+v", limits)
 	}
 
