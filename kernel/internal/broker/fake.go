@@ -13,6 +13,7 @@ import (
 
 type Fake struct {
 	mu          sync.Mutex
+	accountID   string
 	cash        units.Micros
 	positions   map[string]*Position
 	quotes      map[string]Quote
@@ -34,6 +35,7 @@ type fakeOrder struct {
 func NewFake(startingCash units.Micros) *Fake {
 	now := time.Now().UTC()
 	return &Fake{
+		accountID: "fake-account",
 		cash:      startingCash,
 		positions: map[string]*Position{},
 		quotes: map[string]Quote{
@@ -48,6 +50,18 @@ func NewFake(startingCash units.Micros) *Fake {
 		},
 		orders: map[string]*fakeOrder{},
 	}
+}
+
+func (f *Fake) SetAccountID(accountID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accountID = accountID
+}
+
+func (f *Fake) AccountID() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accountID, nil
 }
 
 // SetQuote advances the replay venue: a sane quote that crosses a resting

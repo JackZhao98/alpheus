@@ -49,4 +49,7 @@ curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer
 echo "== 5) naked short -> expect rejected =="
 curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","qty":1,"max_risk_usd":200,"plan":'"$PLAN"'}'; echo; echo
 
+echo "== 6) runtime wake without KERNEL_TOKEN bearer -> expect HTTP 401 =="
+curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X POST http://localhost:8200/wake -H 'Content-Type: application/json' -d '{"role":"scout"}'; echo
+
 echo "db check: docker compose exec db psql -U alpheus -c \"select class,status from operations order by ts desc limit 5;\""

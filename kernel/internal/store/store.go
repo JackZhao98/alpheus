@@ -260,3 +260,16 @@ func (s *Store) PutBlackboard(day string, doc json.RawMessage) error {
 		 ON CONFLICT (day) DO UPDATE SET doc=EXCLUDED.doc, updated_at=now()`, day, string(doc))
 	return err
 }
+
+func (s *Store) LoadGlobalHalt() (bool, string, error) {
+	var halted bool
+	var reason string
+	err := s.DB.QueryRow(
+		`SELECT COALESCE((payload->>'halted')::boolean, false), COALESCE(payload->>'reason','')
+		 FROM events WHERE kind='global_halt_transition' ORDER BY id DESC LIMIT 1`).
+		Scan(&halted, &reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	return halted, reason, err
+}

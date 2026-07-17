@@ -1,7 +1,7 @@
 // alpheus agent-runtime — session runner. A session = {role}/{date}/{trigger}/{seq}:
 // stateless, disposable, restart-safe. Skeleton loop runs every role once per
-// tick so the plumbing is observable immediately; the real spine is kernel
-// watchdog wakes (TODO: expose POST /wake and let the kernel drive).
+// tick so the plumbing is observable immediately. POST /wake is authenticated
+// and ready; M6 wires the kernel watchdog to drive it.
 package main
 
 import (
@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"alpheus/agentruntime/internal/assemble"
@@ -19,12 +21,18 @@ import (
 	"alpheus/agentruntime/internal/roles"
 )
 
-var seq int
+var seq atomic.Uint64
 
 func main() {
 	kernel := env("KERNEL_URL", "http://localhost:8100")
 	rolesDir := env("ROLES_DIR", "/roles")
 	tick := envInt("TICK_SECONDS", 300)
+	runtimeToken := env("RUNTIME_TOKEN", "")
+	kernelToken := env("KERNEL_TOKEN", "")
+	tradingMode := env("TRADING_MODE", "sim")
+	if tradingMode != "sim" && (runtimeToken == "" || kernelToken == "") {
+		log.Fatal("RUNTIME_TOKEN and KERNEL_TOKEN are required outside sim mode")
+	}
 
 	rs, err := roles.Load(rolesDir)
 	if err != nil {
@@ -34,12 +42,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("cognition: %v", err)
 	}
-	client := assemble.New(kernel)
+	client := assemble.New(kernel, runtimeToken)
 
 	names := make([]string, len(rs))
 	for i, r := range rs {
 		names[i] = r.Role
 	}
+	roleByName := make(map[string]roles.Role, len(rs))
+	for _, role := range rs {
+		roleByName[role.Role] = role
+	}
+	wakeHandler := newWakeHandler(kernelToken, roleByName, func(role roles.Role, trigger string) {
+		go runSession(client, cog, role, trigger)
+	})
+	go func() {
+		addr := env("RUNTIME_ADDR", ":8200")
+		log.Printf("agent-runtime wake endpoint listening on %s", addr)
+		if err := http.ListenAndServe(addr, wakeHandler); err != nil {
+			log.Fatalf("wake server: %v", err)
+		}
+	}()
 	log.Printf("agent-runtime up: roles=%v cognition=%s kernel=%s", names, env("COGNITION", "stub"), kernel)
 
 	for {
@@ -57,8 +79,8 @@ func runSession(client *assemble.Client, cog cognition.Cognition, role roles.Rol
 			log.Printf("[%s] session panic: %v", role.Role, r)
 		}
 	}()
-	seq++
-	sid := fmt.Sprintf("%s/%s/%s/%d", role.Role, time.Now().Format("2006-01-02"), trigger, seq)
+	sequence := seq.Add(1)
+	sid := fmt.Sprintf("%s/%s/%s/%d", role.Role, time.Now().Format("2006-01-02"), trigger, sequence)
 
 	ctx, err := client.Assemble(role)
 	if err != nil {
@@ -118,11 +140,15 @@ func submit(client *assemble.Client, op contracts.ProposedOperation, role roles.
 			pb, _ := json.Marshal(op.Plan)
 			_ = json.Unmarshal(pb, &plan)
 		}
+		journalShadow := op.Shadow
+		if forcedShadow, ok := res["shadow"].(bool); ok {
+			journalShadow = forcedShadow
+		}
 		_, _ = postJSON(client, "/journal", map[string]any{
 			"operation_id":    res["operation_id"],
 			"hypothesis":      map[string]any{"thesis": op.Thesis, "setup": op.Setup, "plan": plan},
 			"prompt_versions": map[string]any{role.Role: role.Version},
-			"shadow":          op.Shadow,
+			"shadow":          journalShadow,
 		})
 	}
 	return res, nil
@@ -133,7 +159,13 @@ func postJSON(client *assemble.Client, path string, v any) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.HTTP.Post(client.Kernel+path, "application/json", bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, client.Kernel+path, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client.Authorize(req)
+	resp, err := client.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}

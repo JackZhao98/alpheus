@@ -6,7 +6,7 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M2.6**
+> Current implementation target: **M8A**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -42,7 +42,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 | Phase | Milestones | Status | File |
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
-| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M2.6 next** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
+| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M8A next** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Pending; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
@@ -57,8 +57,8 @@ Status vocabulary: `LANDED`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
 | M2 | LANDED | M1 | `b52d281` | Phase 0 |
 | M2.4 | LANDED | M2 | `5889771` | Phase 0 |
 | M2.5 | LANDED | M2.4 | exact-unit/risk acceptance suite + compose smoke | Phase 1 |
-| **M2.6** | **NEXT** | M2.5 | — | Phase 1 |
-| M8A | PENDING | M2.6; read capabilities only | — | Phase 1 |
+| M2.6 | LANDED | M2.5 | mode/auth/halt suite + container probes | Phase 1 |
+| **M8A** | **NEXT** | M2.6; read capabilities only | — | Phase 1 |
 | M8B | PENDING | M8A | — | Phase 1 |
 | M2.7 | PENDING | M8B | — | Phase 1 |
 | M2.8 | PENDING | M2.7 | — | Phase 1 |

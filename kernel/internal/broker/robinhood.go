@@ -19,6 +19,7 @@ var errTODO = errors.New("robinhood adapter not implemented yet — see plan mil
 
 type Robinhood struct{}
 
+func (r *Robinhood) AccountID() (string, error)            { return "", errTODO }
 func (r *Robinhood) GetAccount() (AccountState, error)     { return AccountState{}, errTODO }
 func (r *Robinhood) GetPositions() ([]Position, error)     { return nil, errTODO }
 func (r *Robinhood) GetQuote(symbol string) (Quote, error) { return Quote{}, errTODO }

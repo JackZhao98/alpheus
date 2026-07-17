@@ -32,10 +32,13 @@ type memoryStore struct {
 	classes     map[string]string
 	shadows     map[string]bool
 	operations  map[string]risk.Operation
+	verdicts    map[string]json.RawMessage
 	journals    []journalEntry
 	events      []string
 	blackboards map[string]json.RawMessage
 	journalErr  error
+	halted      bool
+	haltReason  string
 }
 
 func newMemoryStore() *memoryStore {
@@ -44,6 +47,7 @@ func newMemoryStore() *memoryStore {
 		classes:     map[string]string{},
 		shadows:     map[string]bool{},
 		operations:  map[string]risk.Operation{},
+		verdicts:    map[string]json.RawMessage{},
 		blackboards: map[string]json.RawMessage{},
 	}
 }
@@ -74,10 +78,16 @@ func (m *memoryStore) Event(kind string, _ any) {
 	_ = m.InsertEvent(kind, nil)
 }
 
-func (m *memoryStore) InsertEvent(kind string, _ any) error {
+func (m *memoryStore) InsertEvent(kind string, payload any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, kind)
+	if kind == globalHaltEvent {
+		if fields, ok := payload.(map[string]any); ok {
+			m.halted, _ = fields["halted"].(bool)
+			m.haltReason, _ = fields["reason"].(string)
+		}
+	}
 	return nil
 }
 
@@ -93,10 +103,17 @@ func (m *memoryStore) InsertOperation(id, _, class, status string, payload, _ an
 	return nil
 }
 
-func (m *memoryStore) SetOperationStatus(id, status string, _ any) error {
+func (m *memoryStore) SetOperationStatus(id, status string, verdict any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses[id] = status
+	if verdict != nil {
+		encoded, err := json.Marshal(verdict)
+		if err != nil {
+			return err
+		}
+		m.verdicts[id] = encoded
+	}
 	return nil
 }
 
@@ -107,7 +124,9 @@ func (m *memoryStore) GetOperation(id string) (*store.OperationRow, error) {
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return &store.OperationRow{ID: id, Class: m.classes[id], Status: status}, nil
+	return &store.OperationRow{
+		ID: id, Class: m.classes[id], Status: status, Verdict: m.verdicts[id],
+	}, nil
 }
 
 func (m *memoryStore) InsertJournal(operationID string, hypothesis, _, _ any, shadow bool) error {
@@ -136,6 +155,12 @@ func (m *memoryStore) PutBlackboard(day string, doc json.RawMessage) error {
 	defer m.mu.Unlock()
 	m.blackboards[day] = append(json.RawMessage(nil), doc...)
 	return nil
+}
+
+func (m *memoryStore) LoadGlobalHalt() (bool, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.halted, m.haltReason, nil
 }
 
 func postOperation(t *testing.T, s *server, payload string) (*httptest.ResponseRecorder, map[string]any) {

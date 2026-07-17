@@ -75,6 +75,7 @@ type OrderResult struct {
 }
 
 type Adapter interface {
+	AccountID() (string, error)
 	GetAccount() (AccountState, error)
 	GetPositions() ([]Position, error)
 	GetQuote(symbol string) (Quote, error)

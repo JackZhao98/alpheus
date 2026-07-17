@@ -24,9 +24,13 @@ import (
 
 type server struct {
 	limits      config.Limits
+	mode        config.ModeConfig
 	broker      broker.Adapter
 	store       storeAPI
 	executionMu sync.Mutex
+	haltMu      sync.RWMutex
+	halted      bool
+	haltReason  string
 }
 
 // storeAPI keeps the HTTP surface testable without adding a database-mocking
@@ -41,9 +45,17 @@ type storeAPI interface {
 	TopLessons(limit int) ([]store.Lesson, error)
 	GetBlackboard(day string) (json.RawMessage, error)
 	PutBlackboard(day string, doc json.RawMessage) error
+	LoadGlobalHalt() (bool, string, error)
 }
 
 func main() {
+	mode, err := config.LoadModeConfig()
+	if err != nil {
+		log.Fatalf("mode config: %v", err)
+	}
+	if err := mode.ValidateBroker(config.Env("BROKER", "fake")); err != nil {
+		log.Fatalf("mode config: %v", err)
+	}
 	limits, err := config.LoadLimits()
 	if err != nil {
 		log.Fatalf("limits: %v", err)
@@ -56,27 +68,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
-	s := &server{limits: limits, broker: b, store: st}
+	s := &server{limits: limits, mode: mode, broker: b, store: st}
+	if err := s.loadGlobalHalt(); err != nil {
+		log.Fatalf("halt state: %v", err)
+	}
 
 	if _, err := startWatchdog(s); err != nil {
 		log.Fatalf("watchdog: %v", err)
 	}
-	st.Event("kernel_start", map[string]string{"broker": os.Getenv("BROKER"), "profile": limits.Profile})
+	st.Event("kernel_start", map[string]string{
+		"broker": os.Getenv("BROKER"), "profile": limits.Profile, "mode": mode.TradingMode,
+	})
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /limits", s.getLimits)
-	mux.HandleFunc("GET /state", s.getState)
-	mux.HandleFunc("POST /operations", s.propose)
-	mux.HandleFunc("GET /operations/{id}", s.getOperation)
-	mux.HandleFunc("POST /operations/{id}/review", s.review)
-	mux.HandleFunc("POST /journal", s.postJournal)
-	mux.HandleFunc("GET /lessons", s.getLessons)
-	mux.HandleFunc("GET /blackboard/{day}", s.getBlackboard)
-	mux.HandleFunc("PUT /blackboard/{day}", s.putBlackboard)
-	mux.HandleFunc("POST /sim/quote", s.simQuote)
-
-	log.Println("alpheus-kernel listening on :8100")
-	log.Fatal(http.ListenAndServe(":8100", mux))
+	log.Printf("alpheus-kernel listening on :8100 mode=%s", mode.TradingMode)
+	log.Fatal(http.ListenAndServe(":8100", s.routes()))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -167,7 +172,7 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
-func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, account broker.AccountState, window marketWindow) (risk.DayState, error) {
+func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
@@ -177,12 +182,17 @@ func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, accoun
 	return risk.DayState{
 		TradesToday: n, OpenRisk: 0, Equity: account.Equity,
 		EquityKnown: account.EquityKnown, BuyingPower: account.BuyingPower,
+		Halted: halted, HaltReason: haltReason,
 	}, nil
 }
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
 
 func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
+	if err := s.refreshGlobalHalt(); err != nil {
+		writeInternalError(w, "refresh global halt", err)
+		return
+	}
 	acct, err := s.broker.GetAccount()
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
@@ -198,12 +208,13 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	liveDay, err := s.dayStateAtAccount(s.store, false, acct, window)
+	halted, haltReason := s.haltSnapshot()
+	liveDay, err := s.dayStateAtAccount(s.store, false, acct, window, halted, haltReason)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	shadowDay, err := s.dayStateAtAccount(s.store, true, acct, window)
+	shadowDay, err := s.dayStateAtAccount(s.store, true, acct, window, halted, haltReason)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -212,6 +223,7 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 		"account":   acct,
 		"positions": pos,
 		"day":       map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+		"mode":      s.tradingMode(),
 	})
 }
 
@@ -224,6 +236,9 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
+	}
+	if s.tradingMode() == config.ModeShadow {
+		op.Shadow = true
 	}
 
 	// A live close must keep the position read and order placement in one
@@ -273,12 +288,27 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	if op.Action == "open" {
 		op = s.deriveOpenOperation(op, quote)
+		if err := s.refreshGlobalHalt(); err != nil {
+			writeInternalError(w, "refresh global halt", err)
+			return
+		}
 	}
 	opID := store.NewID()
+	var halted bool
+	var haltReason string
+	if op.Action == "open" {
+		// An open and a halt transition are linearized here. Once POST /halt
+		// acquires the write lock, no later open can classify or reach a broker.
+		s.haltMu.RLock()
+		defer s.haltMu.RUnlock()
+		halted, haltReason = s.halted, s.haltReason
+	} else {
+		halted, haltReason = s.haltSnapshot()
+	}
 	var v risk.Verdict
 	status := "auto_approved"
 	if err := s.store.WithLedgerLock(op.Shadow, window.day, func(gate store.OperationGate) error {
-		day, err := s.dayStateAtAccount(gate, op.Shadow, acct, window)
+		day, err := s.dayStateAtAccount(gate, op.Shadow, acct, window, halted, haltReason)
 		if err != nil {
 			return err
 		}
@@ -370,6 +400,9 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	}
 
 	if op.Action == "cancel" {
+		if err := s.assertLiveAccountBinding(opID); err != nil {
+			return nil, err
+		}
 		res, err := s.broker.CancelOrder(op.BrokerOrderID)
 		if err != nil {
 			return nil, err
@@ -417,6 +450,9 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	sym := op.Symbol
 	if sym == "" {
 		sym = op.Underlying
+	}
+	if err := s.assertLiveAccountBinding(opID); err != nil {
+		return nil, err
 	}
 	res, err := s.broker.PlaceLimitOrder(sym, side, op.Qty, limit, op.Kind)
 	if err != nil {
@@ -675,7 +711,6 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Verdict   string `json:"verdict"` // approved | rejected
 		Rationale string `json:"rationale"`
-		Reviewer  string `json:"reviewer"` // role id or "human"
 	}
 	if !decodeJSONBody(w, r, &in) {
 		return
@@ -698,7 +733,9 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	if status == "approved" {
 		// TODO: execute approved C-class ops through the same path as Class B.
 	}
-	if err := s.store.SetOperationStatus(id, status, map[string]string{"reviewer": in.Reviewer, "rationale": in.Rationale}); err != nil {
+	if err := s.store.SetOperationStatus(id, status, map[string]string{
+		"reviewer": authenticatedSubject(r), "rationale": in.Rationale,
+	}); err != nil {
 		writeInternalError(w, "review operation", err)
 		return
 	}
@@ -715,6 +752,9 @@ func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {
 	}
 	if !decodeJSONBody(w, r, &in) {
 		return
+	}
+	if s.tradingMode() == config.ModeShadow {
+		in.Shadow = true
 	}
 	in.OperationID = strings.TrimSpace(in.OperationID)
 	if !validUUID(in.OperationID) {

@@ -17,19 +17,34 @@ import (
 
 type Client struct {
 	Kernel string
+	Token  string
 	HTTP   *http.Client
 }
 
-func New(kernelURL string) *Client {
-	return &Client{Kernel: kernelURL, HTTP: &http.Client{Timeout: 10 * time.Second}}
+func New(kernelURL, token string) *Client {
+	return &Client{Kernel: kernelURL, Token: token, HTTP: &http.Client{Timeout: 10 * time.Second}}
+}
+
+func (c *Client) Authorize(req *http.Request) {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 }
 
 func (c *Client) getJSON(path string) (json.RawMessage, error) {
-	resp, err := c.HTTP.Get(c.Kernel + path)
+	req, err := http.NewRequest(http.MethodGet, c.Kernel+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.Authorize(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
+	}
 	var raw json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

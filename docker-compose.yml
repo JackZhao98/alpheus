@@ -19,6 +19,12 @@ services:
     environment:
       DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
       BROKER: ${BROKER:-fake}            # fake | robinhood
+      TRADING_MODE: ${TRADING_MODE:-sim} # sim | shadow | read_only | live
+      RUNTIME_TOKEN: ${RUNTIME_TOKEN:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      KERNEL_TOKEN: ${KERNEL_TOKEN:-}
+      LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+      LIVE_ACCOUNT_ID: ${LIVE_ACCOUNT_ID:-}
       TZ_MARKET: America/New_York
     ports: ["8100:8100"]
     depends_on:
@@ -28,9 +34,13 @@ services:
     build: ./agent-runtime
     environment:
       KERNEL_URL: http://kernel:8100
+      TRADING_MODE: ${TRADING_MODE:-sim}
+      RUNTIME_TOKEN: ${RUNTIME_TOKEN:-}
+      KERNEL_TOKEN: ${KERNEL_TOKEN:-}
       COGNITION: ${COGNITION:-stub}      # stub | llm
       DECIDER_MODEL: ${DECIDER_MODEL:-}  # filled when COGNITION=llm
       MONITOR_MODEL: ${MONITOR_MODEL:-}
+    ports: ["8200:8200"]
     depends_on: [kernel]
 
 volumes:

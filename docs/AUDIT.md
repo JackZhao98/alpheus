@@ -75,8 +75,8 @@ violated, and severity.
   present but empty/whitespace; unknown extra fields; absurdly long
   strings; unicode symbols; content-type omitted; truncated JSON. Every
   malformed input must land in C/REJECT/400 — never B, never a broker call.
-- **I6 Class A survives the breaker (by design).** When halted (once M3
-  lands; before that, note as untestable), `close` still executes.
+- **I6 Class A survives the breaker (by design).** Use the M2.6 Admin-token
+  `POST /halt`; after it commits, `close` and `cancel` still execute.
   Conversely `open` while halted must REJECT.
 - **I7 Restart safety & idempotency.** Restart kernel mid-traffic; verify
   no state corruption. Then: submit the same proposal twice (simulating a
@@ -101,23 +101,29 @@ violated, and severity.
   consumption degrades to pending_review (it does — this is by design) and
   that the pending queue growing unbounded does not degrade the API
   (propose latency stable with 1,000+ pending rows; seed via script).
+- **I12 Mode and identity boundary.** Outside sim, reads without a valid bearer
+  return 401; Runtime Token can propose/write journal and blackboard but cannot
+  review; reviewer identity is `admin`, never payload text. In `read_only`,
+  every write is 405. In `live`, `/sim/*` is 404. Agent-runtime `/wake` rejects
+  every token except `KERNEL_TOKEN`. Confirm no token or account id appears in
+  logs, events, operation payloads, or API responses.
 
 ## Suppression list — known, tracked, NOT findings
 
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 and M2 have landed: Class-A behavior and dual-ledger counters are audit
-targets, not suppressed findings.
+M1 through M2.6 have landed: Class-A behavior, dual-ledger counters, exact
+risk, mode/auth, account binding and the kill switch are audit targets, not
+suppressed findings.
 
 1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3A/M3C).
 2. `orders`/`fills` tables are never written (PLAN M2.9).
-3. No auth on any endpoint (PLAN M2.6, P0 — scheduled, not yet landed).
-4. Approved Class-C ops are not executed (PLAN M4).
+3. Approved Class-C ops are not executed (PLAN M4).
 
 Suppression is about the CURRENT build, not the plan: each item above is still
 the live behavior. When its milestone lands, the item leaves this list and
-becomes an audit target — item 3 in particular, the moment M2.6 ships.
+becomes an audit target.
 
 If any suppressed item's ACTUAL behavior differs from its description here
 (e.g. a shadow op somehow places an order), that IS a finding.
