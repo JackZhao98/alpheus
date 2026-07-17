@@ -27,6 +27,7 @@ services:
       RUNTIME_TOKEN: ${RUNTIME_TOKEN:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
+      RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
       LIVE_ACCOUNT_ID: ${LIVE_ACCOUNT_ID:-}
       RH_MCP_TOKEN_FILE: ${RH_MCP_TOKEN_FILE:-}
@@ -46,10 +47,10 @@ services:
       TRADING_MODE: ${TRADING_MODE:-sim}
       RUNTIME_TOKEN: ${RUNTIME_TOKEN:-}
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
+      TICK_SECONDS: ${TICK_SECONDS:-300}
       COGNITION: ${COGNITION:-stub}      # stub | llm
       DECIDER_MODEL: ${DECIDER_MODEL:-}  # filled when COGNITION=llm
       MONITOR_MODEL: ${MONITOR_MODEL:-}
-    ports: ["8200:8200"]
     depends_on: [kernel]
 
 volumes:

@@ -1,7 +1,7 @@
-// alpheus agent-runtime — session runner. A session = {role}/{date}/{trigger}/{seq}:
-// stateless, disposable, restart-safe. Skeleton loop runs every role once per
-// tick so the plumbing is observable immediately. POST /wake is authenticated
-// and ready; M6 wires the kernel watchdog to drive it.
+// alpheus agent-runtime — session runner. A session is identified by role,
+// date, trigger, occurrence, and a local sequence: stateless, disposable, and
+// restart-safe. The authenticated POST /wake path is the schedule spine; the
+// configurable tick loop is only a fallback.
 package main
 
 import (
@@ -28,7 +28,10 @@ var seq atomic.Uint64
 func main() {
 	kernel := env("KERNEL_URL", "http://localhost:8100")
 	rolesDir := env("ROLES_DIR", "/roles")
-	tick := envInt("TICK_SECONDS", 300)
+	tick, err := envNonNegativeInt("TICK_SECONDS", 300)
+	if err != nil {
+		log.Fatalf("runtime config: %v", err)
+	}
 	runtimeToken := env("RUNTIME_TOKEN", "")
 	kernelToken := env("KERNEL_TOKEN", "")
 	tradingMode := env("TRADING_MODE", "sim")
@@ -54,35 +57,43 @@ func main() {
 	for _, role := range rs {
 		roleByName[role.Role] = role
 	}
-	wakeHandler := newWakeHandler(kernelToken, roleByName, func(role roles.Role, trigger string) {
-		go runSession(client, cog, role, trigger)
+	wakeHandler := newWakeHandler(kernelToken, roleByName, func(role roles.Role, trigger, occurrenceID string) {
+		go runSession(client, cog, role, trigger, occurrenceID)
 	})
-	go func() {
-		addr := env("RUNTIME_ADDR", ":8200")
-		log.Printf("agent-runtime wake endpoint listening on %s", addr)
-		if err := http.ListenAndServe(addr, wakeHandler); err != nil {
-			log.Fatalf("wake server: %v", err)
-		}
-	}()
 	log.Printf("agent-runtime up: roles=%v cognition=%s kernel=%s", names, env("COGNITION", "stub"), kernel)
+	if tick > 0 {
+		go runTickFallback(client, cog, rs, time.Duration(tick)*time.Second)
+	} else {
+		log.Printf("agent-runtime tick fallback disabled; watchdog spine is the only driver")
+	}
+	addr := env("RUNTIME_ADDR", ":8200")
+	log.Printf("agent-runtime wake endpoint listening on %s", addr)
+	if err := http.ListenAndServe(addr, wakeHandler); err != nil {
+		log.Fatalf("wake server: %v", err)
+	}
+}
 
+func runTickFallback(client *assemble.Client, cog cognition.Cognition, rs []roles.Role, interval time.Duration) {
 	for {
 		for _, role := range rs {
-			runSession(client, cog, role, "tick")
+			runSession(client, cog, role, "tick", "")
 		}
-		time.Sleep(time.Duration(tick) * time.Second)
+		time.Sleep(interval)
 	}
 }
 
 // runSession never lets one dead session kill the runtime.
-func runSession(client *assemble.Client, cog cognition.Cognition, role roles.Role, trigger string) {
+func runSession(client *assemble.Client, cog cognition.Cognition, role roles.Role, trigger, occurrenceID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[%s] session panic: %v", role.Role, r)
 		}
 	}()
 	sequence := seq.Add(1)
-	sid := fmt.Sprintf("%s/%s/%s/%d", role.Role, time.Now().Format("2006-01-02"), trigger, sequence)
+	if occurrenceID == "" {
+		occurrenceID = fmt.Sprintf("local-%d", sequence)
+	}
+	sid := fmt.Sprintf("%s/%s/%s/%s/%d", role.Role, time.Now().Format("2006-01-02"), trigger, occurrenceID, sequence)
 
 	ctx, err := client.Assemble(role)
 	if err != nil {
@@ -234,11 +245,14 @@ func env(k, fallback string) string {
 	return fallback
 }
 
-func envInt(k string, fallback int) int {
-	if v := os.Getenv(k); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+func envNonNegativeInt(k string, fallback int) (int, error) {
+	value := os.Getenv(k)
+	if value == "" {
+		return fallback, nil
 	}
-	return fallback
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", k)
+	}
+	return n, nil
 }

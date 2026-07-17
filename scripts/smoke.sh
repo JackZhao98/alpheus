@@ -69,7 +69,11 @@ echo "== 5) naked short -> expect rejected =="
 curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","qty":1,"max_risk_usd":200,"plan":'"$PLAN"'}'; echo; echo
 
 echo "== 6) runtime wake without KERNEL_TOKEN bearer -> expect HTTP 401 =="
-curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X POST http://localhost:8200/wake -H 'Content-Type: application/json' -d '{"role":"scout"}'; echo
+runtime_unauth=$(docker compose exec -T agent-runtime sh -c \
+  "wget -S -O /dev/null --header='Content-Type: application/json' --post-data='{\"role\":\"scout\",\"trigger\":\"spine\",\"occurrence_id\":\"smoke-unauthorized\"}' http://127.0.0.1:8200/wake" 2>&1 || true)
+echo "$runtime_unauth"
+printf '%s' "$runtime_unauth" | grep -q '401 Unauthorized'
+echo
 
 echo "== final state (shadow risk must remain isolated from live) =="
 curl -s "$K/state"; echo; echo

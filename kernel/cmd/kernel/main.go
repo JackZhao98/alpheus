@@ -46,6 +46,8 @@ type server struct {
 	attemptStale           time.Duration
 	providerDedupeVerified bool
 	proposalTTL            time.Duration
+	runtimeURL             string
+	runtimeHTTP            *http.Client
 	haltMu                 sync.RWMutex
 	halted                 bool
 	haltReason             string
@@ -235,6 +237,7 @@ func main() {
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
 		providerDedupeVerified: brokerName == "fake",
 		proposalTTL:            proposalTTL,
+		runtimeURL:             config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)

@@ -55,3 +55,16 @@ func TestOperationRetryReusesIdempotencyKeyAndBody(t *testing.T) {
 		t.Fatalf("bodies differ: %q vs %q", bodies[0], bodies[1])
 	}
 }
+
+func TestTickSecondsAllowsZeroAndRejectsInvalidValues(t *testing.T) {
+	t.Setenv("TICK_SECONDS", "0")
+	if value, err := envNonNegativeInt("TICK_SECONDS", 300); err != nil || value != 0 {
+		t.Fatalf("zero tick: value=%d err=%v", value, err)
+	}
+	for _, invalid := range []string{"-1", "banana"} {
+		t.Setenv("TICK_SECONDS", invalid)
+		if _, err := envNonNegativeInt("TICK_SECONDS", 300); err == nil {
+			t.Fatalf("invalid TICK_SECONDS %q accepted", invalid)
+		}
+	}
+}
