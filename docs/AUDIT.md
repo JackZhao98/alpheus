@@ -6,8 +6,9 @@ deterministic risk rules. Your job is to try to make the DEPLOYED system
 violate its invariants, and to report reproducible findings. You are NOT
 the builder: do not fix anything, do not refactor, do not open PRs.
 
-Companion document: PLAN.md (the implementation plan). Read it first for
-context and for the suppression list below.
+Companion plan: [`plan/INDEX.md`](plan/INDEX.md). Read the index first, then
+[`plan/00_CHARTER.md`](plan/00_CHARTER.md) and only the phase file containing
+the current milestone. `PLAN.md` is a compatibility entrypoint.
 
 ## Methodology — behavior first
 
@@ -103,8 +104,8 @@ violated, and severity.
 
 ## Suppression list — known, tracked, NOT findings
 
-These are scheduled work in PLAN.md; verify they behave as currently
-documented, but do not report them as discoveries:
+These are scheduled work in the plan index and its phase files; verify they
+behave as currently documented, but do not report them as discoveries:
 
 M1 and M2 have landed: Class-A behavior and dual-ledger counters are audit
 targets, not suppressed findings.
