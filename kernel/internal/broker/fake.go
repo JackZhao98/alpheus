@@ -171,7 +171,6 @@ func (f *Fake) Account(_ context.Context) (AccountState, error) {
 	return AccountState{
 		ExternalID: f.accountID, AccountType: "cash", BuyingPower: f.cash,
 		Equity: equity, EquityKnown: known, Cash: f.cash, CashKnown: true,
-		SettledCash: f.cash, SettledCashKnown: true,
 		Source: "fake", AsOf: time.Now().UTC(),
 	}, nil
 }

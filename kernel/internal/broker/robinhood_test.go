@@ -25,7 +25,11 @@ func validAccount(number string) string {
 }
 
 func portfolioFixture(total string) json.RawMessage {
-	return json.RawMessage(`{"data":{"total_value":"` + total + `","equity_value":"0","options_value":"0","futures_value":"0","event_contracts_value":"0","crypto_value":"0","cash":"` + total + `","pending_deposits":"0","mutual_funds_value":"0","fixed_income_value":"0","currency":"USD","buying_power":{"buying_power":"` + total + `","unleveraged_buying_power":"` + total + `","display_currency":"USD"}},"guide":"fixture"}`)
+	return portfolioBuyingPowerFixture(total, total, total, total)
+}
+
+func portfolioBuyingPowerFixture(total, cash, buyingPower, unleveraged string) json.RawMessage {
+	return json.RawMessage(`{"data":{"total_value":"` + total + `","equity_value":"0","options_value":"0","futures_value":"0","event_contracts_value":"0","crypto_value":"0","cash":"` + cash + `","pending_deposits":"0","mutual_funds_value":"0","fixed_income_value":"0","currency":"USD","buying_power":{"buying_power":"` + buyingPower + `","unleveraged_buying_power":"` + unleveraged + `","display_currency":"USD"}},"guide":"fixture"}`)
 }
 
 func TestRobinhoodAccountMatchesExactAllowlistAndRedactsID(t *testing.T) {
@@ -49,6 +53,25 @@ func TestRobinhoodAccountMatchesExactAllowlistAndRedactsID(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "wanted") || strings.Contains(string(raw), "account_number") {
 		t.Fatalf("account id leaked in API JSON: %s", raw)
+	}
+}
+
+func TestRobinhoodAccountUsesAuthoritativeBuyingPowerNotCashOrUnleveraged(t *testing.T) {
+	provider, err := NewRobinhood(fixtureCaller{
+		"get_accounts": accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_portfolio": portfolioBuyingPowerFixture(
+			"500", "450", "401.160001", "390",
+		),
+	}, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := provider.Account(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.BuyingPower != units.MustMicros("401.160001") || account.Cash != units.MustMicros("450") {
+		t.Fatalf("account=%+v", account)
 	}
 }
 

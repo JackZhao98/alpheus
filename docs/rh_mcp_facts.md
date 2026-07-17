@@ -42,14 +42,14 @@ Primary sources:
 | Fact required by M8A | Status |
 |---|---|
 | Exact bound Agentic account and account type | Verified active `cash/individual`; exact ID is private and explicitly bound; no default-account selection |
-| Settlement behavior | `get_portfolio` exposes `cash`, buying power and unleveraged buying power, but no settled-cash/funds field; M3D remains blocked pending a conservative settlement model or a new provider field |
+| Spendable-funds behavior | `get_portfolio.buying_power.buying_power` is Alpheus's sole hard funds capacity under owner-approved amendment v1.4. The gate uses that exact value minus durable local reservations; `cash`, `pending_deposits` and unleveraged buying power are informational only. |
 | Options approval level | Verified `option_level_2` |
 | Exact supported order types and time-in-force values | Equity and single-leg options: market, limit, stop-market and stop-limit; GFD/GTC, subject to the session restrictions in the committed schemas |
 | Equity/option quantity increments | Options are positive whole contracts. Equity decimals are documented only for regular-hours market orders; there is no single proven equity increment across order types, so the equity `Instrument` precision capability fails closed |
 | Price ticks and sub-penny behavior | SPY option chain/instruments expose a fixed 0.01 tick. The schema supports above/below-cutoff tick rules; variable schedules fail closed. No exact equity tick field is exposed |
 | Live `quote_max_age_sec` value | Human approved at 15 seconds for the read-only Robinhood session; startup still refuses zero |
 | Option multiplier and non-standard deliverables | Standard SPY chain verified exact `100`, one underlying and null cash component. Anything else is unsupported |
-| Buying-power versus settled-cash semantics | `get_portfolio.buying_power.buying_power` is the normalized buying-power source; `cash` is recorded separately and is not mislabeled as settled cash |
+| Buying-power source | `get_portfolio.buying_power.buying_power` is the normalized and authoritative hard-capacity source; `cash` is recorded separately for display only |
 | Stable order and fill identifiers | Equity and option order IDs plus execution IDs are UUIDs; option executions are nested under legs |
 | Cumulative-fill behavior | Equity uses `cumulative_quantity`; options use `processed_quantity`, with per-fill quantities under executions |
 | Client-supplied id query/deduplication | Both place schemas accept UUID `ref_id` and explicitly document retry deduplication. Read-order schemas do not expose/query it, so live proof and automatic replacement remain disabled |
@@ -80,9 +80,10 @@ for every supported equity order type.
 
 ## Downstream decisions exposed by M8A
 
-- Resolve M3D without pretending `cash` is settled cash: either add a verified
-  provider field or amend the frozen plan around a conservative local
-  settlement ledger.
+- M3D uses exact provider-authoritative buying power as the sole hard funds
+  capacity. Durable local reservations close the pre-broker concurrency window;
+  exact provider-hold add-back remains an M11 optimization and must never use
+  approximate matching.
 - Keep `ref_id` replacement/recovery disabled until M11 can prove the behavior
   with a human-approved canary. Discovery placed, reviewed, cancelled and
   replaced no orders.

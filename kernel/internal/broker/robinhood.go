@@ -241,7 +241,7 @@ func (r *Robinhood) Account(ctx context.Context) (AccountState, error) {
 	return AccountState{
 		ExternalID: account.AccountNumber, AccountType: account.Type + "/" + account.BrokerageAccountType,
 		BuyingPower: *portfolio.BuyingPower.BuyingPower, Equity: *portfolio.TotalValue, EquityKnown: true,
-		Cash: *portfolio.Cash, CashKnown: true, SettledCashKnown: false,
+		Cash: *portfolio.Cash, CashKnown: true,
 		Source: robinhoodSource, AsOf: time.Now().UTC(),
 	}, nil
 }

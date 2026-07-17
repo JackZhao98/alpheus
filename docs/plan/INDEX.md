@@ -1,12 +1,12 @@
 # Alpheus Plan Index
 
-> Plan version: **v1.3 — frozen**
+> Plan version: **v1.4 — frozen**
 >
 > Semantic baseline: commit `fa5a29e` (`docs: harden roadmap execution invariants`)
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M3D — BLOCKED on provider-confirmed settlement evidence**
+> Current implementation target: **M4 — execute approved Class-C operations**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -43,7 +43,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
 | 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | Landed | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
-| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | M3C landed; **blocked at M3D** on provider-confirmed settlement evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
+| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | **Active: M4** | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
@@ -65,8 +65,8 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M2.9** | **LANDED** | M2.8 | typed migrations 4–5 with M2.8 attempt backfill; one order per place attempt; stable Fake fill ids; state-machine-only transitions with rejection events; duplicate/collision and partial-close atomicity PostgreSQL probes; 2-order/2-fill zero-orphan smoke; race/vet and read-only deployment green | Phase 1 |
 | **M3A** | **LANDED** | M2.9 | migration 6; stable cross-day ledger gate; atomic open reservation/fill/exposure transfer and FIFO close allocation; durable shadow paper book; entitlement and terminal-proof probes; activation backfill/rollback/idempotency; fresh-PostgreSQL suite and isolated compose smoke; Robinhood read-only upgrade with 0 orders/fills/place attempts; race/vet green | Phase 2 |
 | **M3C** | **LANDED** | M3A plus M8A provider evidence | migration 7; durable FIFO cost-basis PnL with fees/partial fills/option multipliers; conservative local/provider reconciliation and divergence latch; exact daily-loss and consecutive-loss breakers; day-scoped Admin override; Cockpit breaker facts; fresh PostgreSQL suite, isolated compose smoke, race/vet; Robinhood read-only upgrade with provider PnL and 0 orders/fills/place attempts | Phase 2 |
-| M3D | BLOCKED | M8A account/settlement evidence | — | Phase 2 |
-| M4 | PENDING | M3D; amend the frozen plan first if M8A voids M3D's premise | — | Phase 2 |
+| **M3D** | **LANDED** | M8A account and buying-power evidence; v1.4 amendment | exact provider-field fixture; provider buying power minus durable local reservations; micro-dollar and negative-capacity boundaries; no secondary funds model in types/API/Cockpit; unit/race/vet and isolated compose smoke green; Robinhood read-only upgrade reports authoritative 401.16 buying power with 0 orders/fills/place attempts | Phase 2 |
+| **M4** | **NEXT** | M3D | — | Phase 2 |
 | M5B | PENDING | M4 | — | Phase 2 |
 | M6 | PENDING | M5B | — | Phase 3 |
 | M7 | PENDING | M6 | — | Phase 3 |
@@ -97,3 +97,4 @@ When a milestone lands:
 | 2026-07-16 | v1.1 | Move M8A after M2.6; add M8B | Validate provider shapes and a read-only cockpit early; production writes remain M11 |
 | 2026-07-16 | v1.2 | Add M8B Live MCP Tool Lab | Human-requested inspection surface for all 34 reviewed no-state-change tools; 15 mutations remain structurally absent |
 | 2026-07-17 | v1.3 | M2.8 proposal TTL and fill-dependent close release boundary | Human approved `proposal_ttl_sec: 1800`. M2.8 has no durable fill identity/order linkage because M2.9 introduces it; therefore M2.8 releases only conclusively zero-fill terminal closes, keeps any filled quantity reserved fail-closed, and defers fill decrement plus safe-orphan proof to M2.9. This removes a circular acceptance dependency without weakening the reservation invariant. |
+| 2026-07-17 | v1.4 | Make provider-authoritative buying power the sole hard funds capacity | Authenticated M8A evidence on the exact bound `cash/individual`, Level-2 Agentic account shows `get_portfolio.buying_power.buying_power` as the provider's authoritative spendable amount. The human owner confirmed this is the only funds gate Alpheus needs. M3D therefore removes the redundant secondary funds model and gates required cash against provider buying power minus durable local reservations; `cash` remains informational only. |

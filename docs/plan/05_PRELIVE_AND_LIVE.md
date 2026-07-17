@@ -22,7 +22,7 @@ milestones after the code is a test written against the bug. M9 is instead the
   a M5B cancel and its replace; clock skew across a market-day boundary;
   postgres failover.
 - The barrier harness on every gated counter (daily trades, open risk, close
-  reservation, settled funds) **plus** the deterministic advisory-lock probe —
+  reservation, buying power) **plus** the deterministic advisory-lock probe —
   the barrier alone has been measured at ~40% sensitivity against known-racy
   code and cannot be the only gate. See AUDIT.md I4.
 - Idempotent replay of a full trading day against FakeBroker: same input, same
@@ -74,7 +74,7 @@ the kernel receives.
 ## Milestone 11 — Robinhood live adapter + canary
 
 **Preconditions, all of them:** M8A's capability snapshot records the Agentic
-account's type/settlement/options level and the *documented* answers to M2.8's
+account's type/buying-power/options level and the *documented* answers to M2.8's
 three client-id questions, plus a stable fill-reconciliation identity; M3D is
 either implemented against those facts or explicitly waived in writing; M9
 certification passes.

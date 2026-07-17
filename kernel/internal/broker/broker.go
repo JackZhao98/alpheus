@@ -70,18 +70,16 @@ type Position struct {
 }
 
 type AccountState struct {
-	ExternalID       string       `json:"-"`
-	AccountType      string       `json:"account_type"`
-	BuyingPower      units.Micros `json:"buying_power"`
-	Equity           units.Micros `json:"equity"`
-	EquityKnown      bool         `json:"equity_known"`
-	DayTradesUsed    int          `json:"day_trades_used"`
-	Cash             units.Micros `json:"cash"`
-	CashKnown        bool         `json:"cash_known"`
-	SettledCash      units.Micros `json:"settled_cash"`
-	SettledCashKnown bool         `json:"settled_cash_known"`
-	Source           string       `json:"source"`
-	AsOf             time.Time    `json:"as_of"`
+	ExternalID    string       `json:"-"`
+	AccountType   string       `json:"account_type"`
+	BuyingPower   units.Micros `json:"buying_power"`
+	Equity        units.Micros `json:"equity"`
+	EquityKnown   bool         `json:"equity_known"`
+	DayTradesUsed int          `json:"day_trades_used"`
+	Cash          units.Micros `json:"cash"`
+	CashKnown     bool         `json:"cash_known"`
+	Source        string       `json:"source"`
+	AsOf          time.Time    `json:"as_of"`
 }
 
 type ReadOrder struct {

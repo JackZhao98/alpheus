@@ -1477,6 +1477,17 @@ func TestRequiredCashBuyingPowerBoundary(t *testing.T) {
 	}
 }
 
+func TestSpendableBuyingPowerUsesProviderValueMinusLocalReservations(t *testing.T) {
+	available, err := spendableBuyingPower(units.MustMicros("401.16"), units.MustMicros("125.123456"))
+	if err != nil || available != units.MustMicros("276.036544") {
+		t.Fatalf("available=%s err=%v", available, err)
+	}
+	available, err = spendableBuyingPower(units.MustMicros("50"), units.MustMicros("60"))
+	if err != nil || available != units.MustMicros("-10") {
+		t.Fatalf("negative available=%s err=%v", available, err)
+	}
+}
+
 func TestDerivedRequestFieldsAreStructurallyRejected(t *testing.T) {
 	s := &server{limits: dualLedgerLimits(), broker: newFake("300"), store: newMemoryStore()}
 	for _, field := range []string{

@@ -122,7 +122,7 @@ expirations 工具，因此生产实现不会猜工具名：前两者明确 fail
 `get_option_chains` 的已验证字段提供。期权 instrument 只有在链与合约共同证明
 固定 tick、整数数量、标准 multiplier=100 且没有调整现金交付时才可用；股票
 instrument 因缺少跨订单类型的精确 tick/数量增量字段仍然 fail closed。
-已核实事实和仍阻塞 M3D 的问题见
+已核实的 Provider 字段与 M3D buying-power 决策见
 [`docs/rh_mcp_facts.md`](docs/rh_mcp_facts.md)。
 
 ### Trading Cockpit（M8B，已落地）

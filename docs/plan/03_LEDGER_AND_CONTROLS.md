@@ -2,8 +2,8 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1.1. This phase covers M3A, M3C, M3D, M4, and M5B.
-> M3D remains blocked until the earlier M8A supplies provider evidence.
+> Frozen specification v1.4. This phase covers M3A, M3C, M3D, M4, and M5B.
+> M3D follows the provider-authoritative buying-power amendment recorded in the index.
 > Progress is tracked only in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->
@@ -26,7 +26,7 @@ and released the whole open as soon as *any* operation carrying
 
 There is a second gap between authorization and fill. Exposure is correctly
 written only on fill, but that means a resting open order is absent from
-`open_risk`, settled-cash usage and the daily counter for its entire resting
+`open_risk`, buying-power usage and the daily counter for its entire resting
 life. Serializing proposals with the M2 ledger lock does not help when the
 state being read changes only after a later fill. M2.9 lands durable fills
 first; this milestone can therefore reserve the entitlement before execution
@@ -418,64 +418,48 @@ token → 401.
 
 ---
 
-## Milestone 3D ⛔ BLOCKED — Provider-confirmed account/settlement model
+## Milestone 3D — Provider-authoritative buying-power contract
 
-**Do not implement until M8A records the Agentic account's real type,
-settlement behaviour, and options level.** The old M3b was written against
-"Context (confirmed): the live account is a Robinhood CASH account, options
-Level 2" — a fact confirmed for the user's main account, not for the Agentic
-account that is the only account an agent may trade. Robinhood's public
-documentation does not state the Agentic account's type. If M8A finds it is a
-margin account, or that settlement differs, this milestone's premise is void
-and it must be rewritten rather than adapted.
+Amendment v1.4 replaces the redundant secondary funds model with authenticated
+M8A evidence. The exact bound Agentic account is active `cash/individual`,
+options Level 2. Its `get_portfolio` response exposes exact `cash`,
+`pending_deposits`, `buying_power.buying_power`, and
+`unleveraged_buying_power`. The provider contract describes
+`buying_power.buying_power` as the authoritative spendable amount, and the
+human owner confirmed that it is Alpheus's sole hard funds capacity.
 
-**When unblocked**, the shape is the old M3b with two corrections:
-- The `settled_funds` checklist item compares `required_cash` (M2.5), **not**
-  the declared `max_risk_usd`.
-- FakeBroker's settlement model mirrors what M8A actually found — not what the
-  main account does.
+**Spec:**
+- For live, `broker.AccountState.BuyingPower` comes from the exact
+  `get_portfolio.buying_power.buying_power` field. Do not substitute `cash` or
+  `unleveraged_buying_power`; fixtures must use different values to prove the
+  selected field. Missing, malformed, non-USD or over-precision data fails
+  closed.
+- `cash` and `pending_deposits` remain informational provider facts. They do
+  not create a second funds gate or override authoritative buying power.
+- Under M3A's stable per-ledger gate, available buying power is
+  `provider_authoritative_buying_power - Σ(remaining_cash_micros of held
+  open_reservation for that ledger)`. The reservation closes the stale-read
+  window before the broker sees an order. If Robinhood has already reflected a
+  resting Alpheus order, subtracting its durable reservation again is permitted
+  conservative under-utilization. An add-back is allowed only after M11 can
+  match the exact provider hold to the exact durable broker order.
+- `required_cash > available_buying_power` remains absolute REJECT
+  `insufficient_buying_power`; equality passes this absolute. Human approval
+  cannot manufacture provider capacity.
+- Shadow uses its own transactional paper buying power. Class-A closes and
+  cancels do not depend on buying power.
+- Cockpit shows informational `Provider cash` separately from authoritative
+  `Buying power`.
 
-Sketch (subject to M8A):
-- `broker.AccountState.SettledCash` becomes real: buys consume settled cash
-  only (reject `insufficient settled funds`); sell proceeds land in an
-  unsettled bucket and settle at the next market-day rollover. Sim control
-  `POST /sim/advance_day` (fake broker only, admin auth, sim mode only).
-- `risk.DayState` gains `SettledCash Micros` and `AccountType string`.
-- `risk.Classify`: for `open` on a cash account (live ledger), checklist item
-  `settled_funds`: `required_cash <= day.SettledCash −
-  Σ(remaining_cash_micros of open_reservation WHERE
-  resource_state='held' for that ledger)`. **Cash has the same stale-read hole
-  as open risk**: broker settled cash does not drop until the buy settles, so
-  without subtracting held reservations several pending buys each see the
-  whole balance and all pass. M3A already uses the cash upper bound to reserve
-  generic buying power; this milestone additionally applies the same held amount
-  to settled cash once the account type is known.
-  Shadow uses its own paper settled cash (M3A gave it a real book).
-  `SettledCash` follows the same normalized-gross contract as M2.5
-  `BuyingPower`: do not subtract a held reservation from a provider number that
-  already includes that exact order hold. M8A must provide the fields needed to
-  add back only Alpheus-owned holds or this model cannot be enabled live.
-  Insufficient settled cash is an absolute REJECT
-  `insufficient_settled_funds`, not Class C: human approval cannot settle funds
-  or make a broker accept the order.
-- Evaluate settled cash under M3A's stable per-ledger gate. For a live fill the
-  broker account debit is already authoritative before the fill event reaches
-  the database; FakeBroker must likewise debit cash **before** committing the
-  fill/reservation transfer, so the only observable intermediate state is more
-  conservative (new cash minus old reservation), never old cash minus a released
-  reservation. Shadow cash, fill and reservation move in one paper transaction.
-- Note for humans: if the account is cash with a small balance, the practical
-  playbook is long calls/puts only. Robinhood cash accounts also do not support
-  option ROLLING; alpheus only ever issues sequential ops. Never build an
-  atomic roll.
-
-**Acceptance (when unblocked):** suppress the first buy's fill so it rests while
-reserving all settled cash; a second buy is immediately REJECT
-`insufficient_settled_funds`. Partially fill the first: broker settled cash decreases
-for the filled slice while `remaining_cash_micros` decreases by the same slice,
-with no double subtraction or free window. After sale proceeds settle via
-`POST /sim/advance_day`, the same affordable proposal is B. FakeBroker rejects
-a direct over-settled-cash order with `insufficient settled funds`.
+**Acceptance:** decode a fixture whose cash, buying power and unleveraged buying
+power are all different and prove the exact buying-power field wins. At the
+micro-dollar boundary, one unit below `required_cash` rejects and equality
+passes the absolute. Suppress the first fake buy's fill so its durable
+reservation consumes capacity; a second buy that would reuse it immediately
+REJECTs `insufficient_buying_power`. A negative post-reservation amount also
+rejects. Cockpit contains Provider cash and Buying power. Fresh
+unit/race/vet, compose smoke and Robinhood read-only deployment remain green
+with zero real orders/fills/place attempts.
 
 ---
 

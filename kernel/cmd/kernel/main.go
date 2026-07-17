@@ -405,6 +405,16 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
+// spendableBuyingPower treats the account provider's buying_power as the
+// authoritative amount the venue will currently permit, then reserves every
+// locally entitled open that may not yet be reflected by the provider. A
+// provider-visible resting order can therefore be counted twice; that is a
+// conservative capacity reduction, never permission to overspend. M11 may add
+// back a hold only after matching it to the same durable Alpheus order.
+func spendableBuyingPower(authoritative, locallyHeld units.Micros) (units.Micros, error) {
+	return units.Add(authoritative, -locallyHeld)
+}
+
 func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
@@ -415,7 +425,7 @@ func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, sha
 	if err != nil {
 		return risk.DayState{}, err
 	}
-	buyingPower, err := units.Add(account.BuyingPower, -resources.HeldCash)
+	buyingPower, err := spendableBuyingPower(account.BuyingPower, resources.HeldCash)
 	if err != nil {
 		return risk.DayState{}, err
 	}
@@ -1047,7 +1057,6 @@ func (s *server) shadowAccountSnapshot(ctx context.Context, gate store.Operation
 	return broker.AccountState{
 		AccountType: "paper", BuyingPower: paper.BuyingPower,
 		Equity: equity, EquityKnown: true, Cash: paper.Cash, CashKnown: true,
-		SettledCash: paper.Cash, SettledCashKnown: true,
 		Source: "shadow", AsOf: time.Now().UTC(),
 	}, nil
 }

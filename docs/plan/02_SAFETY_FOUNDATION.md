@@ -143,17 +143,16 @@ invariant 9; 0 disables the age check until M8A supplies timestamps).
   may read the payload.
 - `required_cash > AccountState.BuyingPower` is an absolute REJECT
   `insufficient_buying_power`, not a human-overridable Class C: an approval
-  cannot manufacture broker capacity. M3D may add the stricter settled-cash
-  check once the account model is known.
-  `AccountState.BuyingPower` has a normalized contract: buying power **before
-  subtracting Alpheus's own currently held open-order reservations**, but after
-  filled positions and any external activity. FakeBroker can supply that
-  directly. A live adapter must add back provider-side holds attributable to the
-  same durable Alpheus orders before the kernel subtracts `open_reservation`, or
-  otherwise prove equivalent semantics; feeding a provider's already-net
-  "available buying power" into the formula would double-subtract every resting
-  order. M8A records whether normalization is possible; M11 does not ship if it
-  is not.
+  cannot manufacture broker capacity. Under amendment v1.4,
+  `AccountState.BuyingPower` is the exact provider-authoritative spendable
+  amount after filled positions and external activity. The kernel subtracts
+  every locally held `open_reservation` under the stable ledger gate so a
+  pre-broker entitlement cannot reuse the same capacity. If the provider has
+  already reflected an Alpheus resting-order hold, this may count that hold
+  twice; that is conservative under-utilization, never extra permission. M11
+  may add a provider-side hold back only after matching it to the exact durable
+  Alpheus broker order. Approximate matching by symbol, side or quantity is
+  forbidden.
 - Payload `max_risk_usd` is a **declaration**: if present and
   `abs(declared - derived_max_risk) > risk_declaration_tolerance` → REJECT
   `risk_declaration_mismatch`. Rationale: a proposer that misstates its own
@@ -178,7 +177,7 @@ invariant 9; 0 disables the age check until M8A supplies timestamps).
   liability marks at sane ask and its magnitude rounds up. Mid would overstate
   immediately realizable equity by half the spread and inflate every
   percentage cap. Compute quantity × price × multiplier in `big.Int` with the
-  M2.5 scale division. `BuyingPower` / `SettledCash` stay cash-based.
+  M2.5 scale division. `BuyingPower` stays cash-based.
   `broker.Position` persists kernel-derived `Kind` and `Multiplier`; never infer
   either from symbol text or a proposal.
 - **There is no `AvgPrice` fallback.** Cost is not market value: a position that
@@ -301,7 +300,7 @@ an order. Real broker mutations remain M11.
 
 **Context — verify, do not assume.** Robinhood MCP uses a separately funded
 Agentic account. Public product pages and the user's main-account settings do
-not establish the Agentic account's type, settlement semantics, approval level,
+not establish the Agentic account's type, buying-power semantics, approval level,
 tool schemas, fill identity or buying-power semantics. Connect early so the
 remaining ledger and execution milestones are designed against production
 shapes rather than a late guess.
@@ -377,16 +376,17 @@ shapes rather than a late guess.
   edge cases while removing account numbers, tokens and user data. Offline CI
   decodes these fixtures through the real adapter and runs the same semantic
   contract suite as FakeProvider.
-- Record as facts: account type, settlement behavior, options level, supported
+- Record as facts: account type, buying-power behavior, options level, supported
   assets/order types, quantity increments, price ticks, contract
-  multiplier/deliverables, buying-power/settled-cash semantics, order and fill
+  multiplier/deliverables, buying-power semantics, order and fill
   identifiers, cumulative fill behavior, and whether the order API accepts,
   queries and deduplicates a client-supplied id. Read-only discovery may record
   documentation for dedupe but cannot safely prove it with a live duplicate
   order; mark it unverified and keep automatic replacement disabled.
-- M3D remains blocked until the account/settlement facts are recorded. M2.8 and
-  M2.9 use the discovered order/fill shapes while implementing their durable
-  models rather than discovering them again at M11.
+- M3D was unblocked by the authenticated account/buying-power facts and owner
+  decision recorded in amendment v1.4. M2.8 and M2.9 use the discovered
+  order/fill shapes while implementing their durable models rather than
+  discovering them again at M11.
 
 **Kernel integration:**
 - `TRADING_MODE=read_only` reads the production account and marketdata but
@@ -431,7 +431,7 @@ surface.
 - Kernel serves one embedded, mobile-friendly HTML/JS application with no build
   step or new framework. It works in `sim`, `shadow` and `read_only`.
 - Display: trading mode; provider connection and capability-snapshot status;
-  masked account id; account type, equity, buying power and settled cash;
+  masked account id; account type, equity, buying power and provider cash;
   positions with normalized quantity/kind/multiplier and current quote; market
   hours; live/shadow day ledgers; paginated recent operations; and per-panel
   `source`, `as_of`, stale state and last sanitized error.

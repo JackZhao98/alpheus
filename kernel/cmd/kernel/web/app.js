@@ -91,7 +91,7 @@ async function renderState(state) {
   setText("mode-badge", state.mode);
   setText("account-type", state.account.account_type); setText("account-source", state.account.source);
   setText("equity", money(state.account.equity)); setText("buying-power", money(state.account.buying_power));
-  setText("settled-cash", money(state.account.settled_cash)); setText("account-asof", `As of ${when(state.account.as_of)} · current`);
+  setText("provider-cash", state.account.cash_known ? money(state.account.cash) : "Unknown"); setText("account-asof", `As of ${when(state.account.as_of)} · current`);
   renderLedger("live", state.day.live, state.as_of); renderLedger("shadow", state.day.shadow, state.as_of);
   await renderPositions(state.positions);
   renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => ({title:`${o.side} ${o.symbol} · ${o.state}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${when(o.as_of)}`}));

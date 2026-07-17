@@ -19,8 +19,7 @@ Primary method: black-box testing against the running stack
 - The agent-runtime logs (`docker compose logs`).
 - Read-only SQL via `docker compose exec db psql -U alpheus` (events,
   operations, orders, fills, journal — the audit's ground truth).
-- Fake-broker sim controls (`POST /sim/quote`, `/sim/advance_day` once it
-  exists) to shape market conditions.
+- Fake-broker sim controls (`POST /sim/quote`) to shape market conditions.
 - Container lifecycle: restart/pause/kill of kernel, agent-runtime, db.
 
 Reading source code is permitted ONLY to localize and explain a behavioral
@@ -63,7 +62,10 @@ violated, and severity.
   ./audit/repro/i4_barrier.go`, then repeat on another fresh database with
   `-shadow`. To probe multiple kernel instances, pass comma-separated endpoints
   with `-urls http://localhost:8100,http://localhost:8101`. Repeat this barrier
-  pattern for total_open_risk near the cap. This harness is a reference
+  pattern for total_open_risk near the cap. Hold a buy before fill so its
+  durable reservation consumes the remaining provider buying power; a second
+  buy must REJECT `insufficient_buying_power`, including when the resulting
+  available amount is negative. This harness is a reference
   implementation, not the audit oracle: auditors should design and run an
   independent concurrency probe as well. M3A uses a stable per-ledger gate key;
   add a market-midnight barrier case and verify two requests assigned to
@@ -183,11 +185,12 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M3C plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M3D plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
 DB deadlines, idempotency, durable orders/fills, open reservations, exposure
 FIFO, the shadow paper book, cost-basis PnL, per-ledger breakers and
-production-read/cockpit boundaries are audit targets, not suppressed findings.
+provider-authoritative buying power plus production-read/cockpit boundaries are
+audit targets, not suppressed findings.
 
 1. Approved Class-C ops are not executed (PLAN M4).
 

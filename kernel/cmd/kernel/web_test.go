@@ -26,12 +26,11 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	if strings.Contains(page.Body.String(), "<script>") {
 		t.Fatal("cockpit contains an inline script")
 	}
-	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak"} {
+	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "provider-cash", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak"} {
 		if !strings.Contains(page.Body.String(), required) {
 			t.Fatalf("cockpit query lab missing %q", required)
 		}
 	}
-
 	script := routeRequest(handler, http.MethodGet, "/assets/cockpit.js", "", "")
 	if script.Code != http.StatusOK {
 		t.Fatalf("script status=%d", script.Code)

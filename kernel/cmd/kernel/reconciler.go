@@ -35,7 +35,7 @@ func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingD
 	if err != nil {
 		return risk.DayState{}, err
 	}
-	buyingPower, err := units.Add(account.BuyingPower, -resources.HeldCash)
+	buyingPower, err := spendableBuyingPower(account.BuyingPower, resources.HeldCash)
 	if err != nil {
 		return risk.DayState{}, err
 	}
