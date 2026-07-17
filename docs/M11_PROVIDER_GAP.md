@@ -48,6 +48,11 @@ Canonical input+output schema SHA-256:
   quantity increment. Missing increment metadata fails before the grant; with
   today's provider facts, this permits a one-contract option canary and keeps
   equity live trading closed until its exact increment/tick contract exists.
+- Canary limit revisions have an immutable database audit trail. Tightening is
+  immediate; widening requires the greater of the old/new clean-day thresholds,
+  that many completed live-ledger days, no PnL-divergence event on those days,
+  and zero currently unresolved `unknown` attempts. Concurrent identical
+  startup revisions collapse to one row under a transaction advisory lock.
 - No real-money deduplication experiment is permitted.
 
 ## Provider capability that unblocks M11

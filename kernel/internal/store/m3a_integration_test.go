@@ -1017,7 +1017,7 @@ func seedHistoricalClose(t *testing.T, s *Store, symbol string, quantity units.Q
 
 func resetM3AIntegrationData(t *testing.T, s *Store) {
 	t.Helper()
-	if _, err := s.DB.Exec(`TRUNCATE TABLE events,feature_activation,shadow_account,
+	if _, err := s.DB.Exec(`TRUNCATE TABLE events,live_canary_revision,feature_activation,shadow_account,
 		shadow_positions,day_open,operations CASCADE`); err != nil {
 		t.Fatal(fmt.Errorf("reset M3A integration database: %w", err))
 	}
