@@ -1,6 +1,7 @@
 // Package rhmcp owns the single Robinhood MCP transport boundary. Higher
 // layers only see normalized JSON documents and never receive OAuth state,
-// response headers, raw transport errors, or mutation tools.
+// response headers, or raw transport errors. Read and mutation clients are
+// distinct types because mutation calls must never inherit caching or retries.
 package rhmcp
 
 import (
@@ -132,6 +133,15 @@ type Client struct {
 }
 
 func New(cfg Config) (*Client, error) {
+	for _, tool := range cfg.AllowedTools {
+		if !IsSafeQueryTool(tool) {
+			return nil, fmt.Errorf("provider tool is not read-allowlisted")
+		}
+	}
+	return newClient(cfg, cfg.AllowedTools)
+}
+
+func newClient(cfg Config, allowedTools []string) (*Client, error) {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = DefaultEndpoint
 	}
@@ -157,8 +167,8 @@ func New(cfg Config) (*Client, error) {
 		}
 		cfg.HTTPClient = &http.Client{Transport: transport}
 	}
-	allowed := make(map[string]struct{}, len(cfg.AllowedTools))
-	for _, tool := range cfg.AllowedTools {
+	allowed := make(map[string]struct{}, len(allowedTools))
+	for _, tool := range allowedTools {
 		if tool != "" {
 			allowed[tool] = struct{}{}
 		}

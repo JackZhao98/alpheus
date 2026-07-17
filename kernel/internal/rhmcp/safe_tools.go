@@ -43,8 +43,27 @@ var SafeQueryTools = []string{
 	"search",
 }
 
+// MutationTools is intentionally separate from SafeQueryTools. Only
+// MutationClient may invoke this surface, without response caching or any
+// automatic CallTool retry.
+var MutationTools = []string{
+	"place_equity_order",
+	"place_option_order",
+	"cancel_equity_order",
+	"cancel_option_order",
+}
+
 func IsSafeQueryTool(name string) bool {
 	for _, allowed := range SafeQueryTools {
+		if name == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func IsMutationTool(name string) bool {
+	for _, allowed := range MutationTools {
 		if name == allowed {
 			return true
 		}

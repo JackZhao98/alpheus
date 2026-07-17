@@ -361,6 +361,29 @@ func (m *memoryStore) InsertTradeGrant(grant store.TradeGrant) error {
 	return nil
 }
 
+func (m *memoryStore) TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (store.TradeGrantUsage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var usage store.TradeGrantUsage
+	for operationID, grant := range m.grants {
+		if operationID == excludeOperationID || grant.Ledger != ledger || !sameDate(grant.MarketDay, marketDay) {
+			continue
+		}
+		if grant.RiskSource == "legacy_unknown" {
+			usage.HasLegacyUnknown = true
+		} else {
+			usage.AuthorizedRisk += grant.AuthorizedRisk
+		}
+	}
+	return usage, nil
+}
+
+func sameDate(left, right time.Time) bool {
+	ly, lm, ld := left.Date()
+	ry, rm, rd := right.Date()
+	return ly == ry && lm == rm && ld == rd
+}
+
 func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1322,6 +1345,8 @@ func dualLedgerLimits() config.Limits {
 	limits.ProposalTTLSec = 1800
 	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
+	limits.LiveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros("1000000")
+	limits.LiveCanary.CleanDaysBeforeRaise = 1
 	return limits
 }
 

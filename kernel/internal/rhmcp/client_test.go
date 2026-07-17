@@ -3,6 +3,7 @@ package rhmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +103,70 @@ func TestRateLimiterHonorsContextDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
 		t.Fatalf("rate limiter returned too late: %s", elapsed)
+	}
+}
+
+func TestReadClientRejectsMutationAllowlist(t *testing.T) {
+	if _, err := New(Config{AllowedTools: []string{"place_equity_order"}}); err == nil {
+		t.Fatal("read client accepted mutation tool")
+	}
+}
+
+func TestMutationClientNeverCachesOrRetries(t *testing.T) {
+	var successfulCalls atomic.Int32
+	var failedCalls atomic.Int32
+	success := func(_ context.Context, _ string, _ map[string]any) (json.RawMessage, error) {
+		successfulCalls.Add(1)
+		return json.RawMessage(`{"data":{"id":"broker-order"}}`), nil
+	}
+	fail := func(_ context.Context, _ string, _ map[string]any) (json.RawMessage, error) {
+		failedCalls.Add(1)
+		return nil, errors.New("lost response")
+	}
+	args := map[string]any{"account_id": "fixture", "ref_id": "bbd2c894-f765-4dc4-9566-bfad4a87c12c"}
+	for range 2 {
+		raw, err := callMutationOnce(context.Background(), "place_equity_order", args, success)
+		if err != nil || !json.Valid(raw) {
+			t.Fatalf("mutation raw=%s err=%v", raw, err)
+		}
+	}
+	if successfulCalls.Load() != 2 {
+		t.Fatalf("successful mutation calls=%d, want 2 uncached calls", successfulCalls.Load())
+	}
+	if _, err := callMutationOnce(context.Background(), "cancel_equity_order", map[string]any{"order_id": "fixture"}, fail); !errors.Is(err, ErrMutationOutcomeUnknown) {
+		t.Fatalf("failed mutation error=%v", err)
+	}
+	if failedCalls.Load() != 1 {
+		t.Fatalf("failed mutation calls=%d, want exactly 1", failedCalls.Load())
+	}
+	if _, err := (&MutationClient{}).Call(context.Background(), "get_accounts", nil); err == nil {
+		t.Fatal("mutation client accepted read tool")
+	}
+}
+
+func TestMutationArgumentsRequireAccountBindingAndStableIDs(t *testing.T) {
+	const account = "518428891"
+	validRef := "bbd2c894-f765-4dc4-9566-bfad4a87c12c"
+	for name, test := range map[string]struct {
+		tool string
+		args map[string]any
+		ok   bool
+	}{
+		"place":         {"place_equity_order", map[string]any{"account_number": account, "ref_id": validRef}, true},
+		"cancel":        {"cancel_option_order", map[string]any{"account_number": account, "order_id": validRef}, true},
+		"wrong account": {"place_equity_order", map[string]any{"account_number": "other", "ref_id": validRef}, false},
+		"missing ref":   {"place_option_order", map[string]any{"account_number": account}, false},
+		"bad order id":  {"cancel_equity_order", map[string]any{"account_number": account, "order_id": "not-a-uuid"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateMutationArguments(test.tool, test.args, account)
+			if (err == nil) != test.ok {
+				t.Fatalf("error=%v, want ok=%v", err, test.ok)
+			}
+		})
+	}
+	if _, err := NewMutation(Config{}, ""); err == nil {
+		t.Fatal("mutation client accepted missing account binding")
 	}
 }
 

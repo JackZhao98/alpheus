@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"alpheus/kernel/internal/units"
@@ -37,10 +38,27 @@ type Limits struct {
 		FeePerContract     units.Micros `yaml:"fee_per_contract" json:"fee_per_contract"`
 		FeePerShare        units.Micros `yaml:"fee_per_share" json:"fee_per_share"`
 	} `yaml:"execution_policy" json:"execution_policy"`
+	LiveCanary struct {
+		DailyAuthorizedRiskCapUSD units.Micros `yaml:"daily_authorized_risk_cap_usd" json:"daily_authorized_risk_cap_usd"`
+		CleanDaysBeforeRaise      int          `yaml:"clean_days_before_raise" json:"clean_days_before_raise"`
+	} `yaml:"live_canary" json:"live_canary"`
 	RiskDeclarationTolerance   units.Micros `yaml:"risk_declaration_tolerance" json:"risk_declaration_tolerance"`
 	PnLReconciliationTolerance units.Micros `yaml:"pnl_reconciliation_tolerance_usd" json:"pnl_reconciliation_tolerance_usd"`
 	QuoteMaxAgeSec             int          `yaml:"quote_max_age_sec" json:"quote_max_age_sec"`
 	ProposalTTLSec             int          `yaml:"proposal_ttl_sec" json:"proposal_ttl_sec"`
+}
+
+func (l Limits) ValidateForMode(mode string) error {
+	if mode != ModeLive {
+		return nil
+	}
+	if l.LiveCanary.DailyAuthorizedRiskCapUSD <= 0 {
+		return fmt.Errorf("live_canary.daily_authorized_risk_cap_usd must be positive in live mode")
+	}
+	if l.LiveCanary.CleanDaysBeforeRaise <= 0 {
+		return fmt.Errorf("live_canary.clean_days_before_raise must be positive in live mode")
+	}
+	return nil
 }
 
 func LoadLimits() (Limits, error) {

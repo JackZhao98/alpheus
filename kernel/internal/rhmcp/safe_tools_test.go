@@ -27,6 +27,14 @@ func TestSafeQueryToolsExcludeMutations(t *testing.T) {
 	if IsSafeQueryTool("place_equity_order") || IsSafeQueryTool("cancel_option_order") {
 		t.Fatal("money-path mutation was allowlisted")
 	}
+	if len(MutationTools) != 4 {
+		t.Fatalf("mutation tool count = %d, want 4", len(MutationTools))
+	}
+	for _, name := range MutationTools {
+		if !IsMutationTool(name) || IsSafeQueryTool(name) {
+			t.Fatalf("invalid mutation classification for %q", name)
+		}
+	}
 }
 
 func TestSafeQueryCategories(t *testing.T) {

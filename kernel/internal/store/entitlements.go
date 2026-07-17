@@ -21,6 +21,11 @@ type TradeGrant struct {
 	RiskSource     string
 }
 
+type TradeGrantUsage struct {
+	AuthorizedRisk   units.Micros
+	HasLegacyUnknown bool
+}
+
 type CloseReservation struct {
 	ID           string
 	OperationID  string
@@ -93,6 +98,20 @@ func (t *ledgerTx) InsertTradeGrant(grant TradeGrant) error {
 		VALUES ($1,$2,$3,$4,$5)`,
 		grant.OperationID, grant.Ledger, grant.MarketDay, authorizedRisk, grant.RiskSource)
 	return normalizeDBError(err)
+}
+
+func (t *ledgerTx) TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (TradeGrantUsage, error) {
+	var usage TradeGrantUsage
+	var authorizedRisk int64
+	err := t.tx.QueryRowContext(t.ctx, `SELECT
+		COALESCE(sum(authorized_risk_micros) FILTER (WHERE risk_source='computed'),0),
+		COALESCE(bool_or(risk_source='legacy_unknown'),false)
+		FROM trade_grant
+		WHERE ledger=$1 AND market_day=$2::date
+		  AND (NULLIF($3,'') IS NULL OR operation_id <> NULLIF($3,'')::uuid)`,
+		ledger, marketDay, excludeOperationID).Scan(&authorizedRisk, &usage.HasLegacyUnknown)
+	usage.AuthorizedRisk = units.Micros(authorizedRisk)
+	return usage, normalizeDBError(err)
 }
 
 func (t *ledgerTx) InsertCloseReservation(reservation CloseReservation) error {

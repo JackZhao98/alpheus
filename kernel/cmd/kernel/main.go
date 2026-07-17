@@ -121,6 +121,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("limits: %v", err)
 	}
+	if err := limits.ValidateForMode(mode.TradingMode); err != nil {
+		log.Fatalf("limits: %v", err)
+	}
 	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
 	if err != nil {
 		log.Fatalf("limits: %v", err)
@@ -823,6 +826,18 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		v = risk.Classify(op, s.limits, day, quote)
 		if op.Action == "close" && !op.Shadow && (quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC())) {
 			v = risk.Verdict{Class: "REJECT", Reasons: []string{"market_data_unavailable"}}
+		}
+		if v.Class == "B" && op.Action == "open" && !op.Shadow {
+			reason, usage, err := s.liveCanaryRefusal(gate, opID, window.day, op.DerivedMaxRisk)
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				v = risk.Verdict{Class: "REJECT", Reasons: []string{reason}}
+				if err := s.insertCanaryRefusalEvent(gate, opID, reason, window.day, op.DerivedMaxRisk, usage); err != nil {
+					return err
+				}
+			}
 		}
 		if err := gate.InsertEvent("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v}); err != nil {
 			return err
@@ -1836,6 +1851,16 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			}
 			return errReviewGateRejected
 		}
+		if !prepared.Shadow {
+			canaryReason, usage, err := s.liveCanaryRefusal(gate, id, window.day, prepared.DerivedMaxRisk)
+			if err != nil {
+				return err
+			}
+			if canaryReason != "" {
+				conflictReason = canaryReason
+				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, usage)
+			}
+		}
 		approvedOp = prepared
 		staged, err := s.stageApprovedOpen(gate, id, prepared, window.day)
 		if err != nil {
@@ -1874,7 +1899,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "approve operation", err)
 		return
 	}
-	if conflictReason == "proposal_expired" {
+	if conflictReason != "" {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": conflictReason})
 		return
 	}
