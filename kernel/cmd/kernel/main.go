@@ -1255,9 +1255,13 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 	if attempt.Intent == "cancel" {
 		result, err = execution.CancelOrder(brokerCtx, attempt.TargetBrokerOrderID)
 	} else {
+		positionEffect := "open"
+		if op.Action == "close" {
+			positionEffect = "close"
+		}
 		result, err = execution.PlaceLimitOrder(brokerCtx, broker.PlaceRequest{
 			ClientOrderID: attempt.ClientOrderID, Symbol: operationSymbol(op), Side: op.Side,
-			Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
+			PositionEffect: positionEffect, Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
 		})
 	}
 	cancel()

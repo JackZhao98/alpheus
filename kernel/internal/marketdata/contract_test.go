@@ -115,6 +115,9 @@ func TestRobinhoodFixtureSemanticContract(t *testing.T) {
 	if err != nil || len(fills) != 2 {
 		t.Fatalf("fixture fills=%d err=%v", len(fills), err)
 	}
+	if fills[0].Fees != units.MustMicros("0.01") || fills[1].Fees != 0 {
+		t.Fatalf("fixture fill fees were not preserved: %+v", fills)
+	}
 }
 
 func TestRobinhoodInstrumentFailsClosedUntilDiscovery(t *testing.T) {

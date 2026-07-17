@@ -111,12 +111,21 @@ type ReadFill struct {
 }
 
 type PlaceRequest struct {
-	ClientOrderID string       `json:"client_order_id"`
-	Symbol        string       `json:"symbol"`
-	Side          string       `json:"side"`
-	Qty           units.Qty    `json:"qty"`
-	Limit         units.Micros `json:"limit"`
-	Kind          string       `json:"kind"`
+	ClientOrderID  string       `json:"client_order_id"`
+	Symbol         string       `json:"symbol"`
+	Side           string       `json:"side"`
+	PositionEffect string       `json:"position_effect"`
+	Qty            units.Qty    `json:"qty"`
+	Limit          units.Micros `json:"limit"`
+	Kind           string       `json:"kind"`
+}
+
+// InstrumentReader is the minimum read capability an execution adapter needs
+// to revalidate the persisted order against current provider metadata before
+// any mutation. marketdata.Provider satisfies it without creating a package
+// dependency from broker back to marketdata.
+type InstrumentReader interface {
+	Instrument(ctx context.Context, symbol string) (Instrument, error)
 }
 
 type OrderResult struct {

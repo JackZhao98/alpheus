@@ -176,6 +176,9 @@ func TestM5BRepriceWalksWithinCapThenExpiresAtMax(t *testing.T) {
 	if request.Qty != units.MustQty("1") {
 		t.Fatalf("first replacement qty=%s, want 1", request.Qty)
 	}
+	if request.PositionEffect != "open" {
+		t.Fatalf("first replacement position_effect=%q, want open", request.PositionEffect)
+	}
 	if len(st.grants) != 1 {
 		t.Fatalf("trade grants=%d, replacement allocated a new slot", len(st.grants))
 	}
@@ -459,7 +462,8 @@ func TestM5BHaltCancelsOpenButDoesNotSuppressClose(t *testing.T) {
 	if err := closeServer.repriceOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(closeExecution.requests) != 1 || closeExecution.requests[0].Side != "sell" {
+	if len(closeExecution.requests) != 1 || closeExecution.requests[0].Side != "sell" ||
+		closeExecution.requests[0].PositionEffect != "close" {
 		t.Fatalf("halted close requests=%+v, want one eligible replacement", closeExecution.requests)
 	}
 }

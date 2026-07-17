@@ -426,6 +426,7 @@ type equityExecution struct {
 	ID        string        `json:"id"`
 	Quantity  *units.Qty    `json:"quantity"`
 	Price     *units.Micros `json:"price"`
+	Fees      *units.Micros `json:"fees"`
 	Timestamp string        `json:"timestamp"`
 }
 
@@ -438,6 +439,8 @@ type equityReadOrder struct {
 	Quantity           *units.Qty        `json:"quantity"`
 	CumulativeQuantity *units.Qty        `json:"cumulative_quantity"`
 	Price              *units.Micros     `json:"price"`
+	AveragePrice       optionalMicros    `json:"average_price"`
+	RejectReason       string            `json:"reject_reason"`
 	CreatedAt          string            `json:"created_at"`
 	LastTransactionAt  *string           `json:"last_transaction_at"`
 	Executions         []equityExecution `json:"executions"`
@@ -466,6 +469,9 @@ type optionReadOrder struct {
 	Quantity          *units.Qty       `json:"quantity"`
 	ProcessedQuantity *units.Qty       `json:"processed_quantity"`
 	Price             optionalMicros   `json:"price"`
+	RejectReason      string           `json:"reject_reason"`
+	CreatedAt         string           `json:"created_at"`
+	LastTransactionAt *string          `json:"last_transaction_at"`
 	UpdatedAt         string           `json:"updated_at"`
 	Legs              []optionOrderLeg `json:"legs"`
 }
@@ -624,12 +630,16 @@ func (r *Robinhood) RecentFills(ctx context.Context, since time.Time) ([]ReadFil
 			if err != nil || execution.ID == "" || execution.Quantity == nil || execution.Price == nil {
 				return nil, robinhoodSchemaError(r.caller, "fill schema drift")
 			}
+			if execution.Fees == nil {
+				return nil, robinhoodSchemaError(r.caller, "equity fill fee schema drift")
+			}
 			if asOf.Before(since) {
 				continue
 			}
 			out = append(out, ReadFill{
 				FillID: execution.ID, BrokerOrderID: order.ID, InstrumentID: order.InstrumentID,
 				Symbol: order.Symbol, Side: order.Side, Qty: *execution.Quantity, Price: *execution.Price,
+				Fees:   *execution.Fees,
 				Source: robinhoodSource, AsOf: asOf,
 			})
 		}

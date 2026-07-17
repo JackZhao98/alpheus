@@ -11,6 +11,11 @@ import (
 
 var ErrMutationOutcomeUnknown = errors.New("provider mutation outcome unknown")
 
+type MutationCaller interface {
+	Caller
+	MutationBoundary()
+}
+
 // MutationClient is the only MCP client type permitted to call Robinhood
 // mutation tools. It has no cache and issues exactly one CallTool request. A
 // failed response is conservatively ambiguous and must not be retried here.
@@ -36,6 +41,10 @@ func NewMutation(cfg Config, accountNumber string) (*MutationClient, error) {
 func (c *MutationClient) Close() error {
 	return c.client.Close()
 }
+
+// MutationBoundary prevents the retrying read Client from being passed to a
+// broker execution adapter merely because both expose Call.
+func (c *MutationClient) MutationBoundary() {}
 
 func (c *MutationClient) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
 	if !IsMutationTool(tool) {
@@ -117,3 +126,5 @@ func callMutationOnce(
 	}
 	return raw, nil
 }
+
+var _ MutationCaller = (*MutationClient)(nil)

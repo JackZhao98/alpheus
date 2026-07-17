@@ -39,6 +39,11 @@ Canonical input+output schema SHA-256:
   and place calls must include a caller-supplied UUID `ref_id`.
 - Any mutation response failure is `provider mutation outcome unknown`; it is
   never automatically retried.
+- The dormant execution adapter cannot be constructed without a distinct
+  `ClientOrderLookup` capability. It revalidates exact instrument identity,
+  multiplier, price tick and quantity increment before mutation; requires an
+  explicit option `position_effect`; validates the provider's order echo; and
+  normalizes only reviewed order states and stable execution IDs/fills.
 - No real-money deduplication experiment is permitted.
 
 ## Provider capability that unblocks M11
