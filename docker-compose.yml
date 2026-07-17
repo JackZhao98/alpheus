@@ -37,6 +37,11 @@ services:
     volumes:
       - ./docs:/docs:ro
       - ./db/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --header='Authorization: Bearer $${RUNTIME_TOKEN}' http://127.0.0.1:8100/limits >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     depends_on:
       db: { condition: service_healthy }
 
@@ -51,7 +56,8 @@ services:
       COGNITION: ${COGNITION:-stub}      # stub | llm
       DECIDER_MODEL: ${DECIDER_MODEL:-}  # filled when COGNITION=llm
       MONITOR_MODEL: ${MONITOR_MODEL:-}
-    depends_on: [kernel]
+    depends_on:
+      kernel: { condition: service_healthy }
 
 volumes:
   pgdata:
