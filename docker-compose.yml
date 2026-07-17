@@ -38,7 +38,7 @@ services:
       - ./docs:/docs:ro
       - ./db/migrations:/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --header='Authorization: Bearer $${RUNTIME_TOKEN}' http://127.0.0.1:8100/limits >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- --header=\"Authorization: Bearer $${RUNTIME_TOKEN}\" http://127.0.0.1:8100/limits >/dev/null"]
       interval: 3s
       timeout: 3s
       retries: 20
