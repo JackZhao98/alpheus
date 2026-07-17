@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -167,7 +168,7 @@ func TestShadowModeForcesEveryOperationOntoPaperLedger(t *testing.T) {
 	if !journalShadow {
 		t.Fatal("shadow mode accepted a live journal entry")
 	}
-	if order, _ := b.GetOrder("fake-1"); order.Reason != "unknown order" {
+	if order, _ := b.GetOrder(context.Background(), "fake-1"); order.Reason != "unknown order" {
 		t.Fatalf("shadow reached broker: %+v", order)
 	}
 }
@@ -227,7 +228,7 @@ func TestLiveAccountBindingFailurePrecedesBrokerMutation(t *testing.T) {
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "account_binding_violation") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if order, _ := b.GetOrder("fake-1"); order.Reason != "unknown order" {
+	if order, _ := b.GetOrder(context.Background(), "fake-1"); order.Reason != "unknown order" {
 		t.Fatalf("binding failure reached broker: %+v", order)
 	}
 	if !containsString(st.events, "account_binding_violation") {

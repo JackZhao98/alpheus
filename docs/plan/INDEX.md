@@ -42,14 +42,14 @@ PR/commit and update this index only after its acceptance criteria pass.
 | Phase | Milestones | Status | File |
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
-| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M8A next** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
+| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M2.7** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Pending; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
 ## Milestone tracker
 
-Status vocabulary: `LANDED`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
+Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
 
 | Milestone | Status | Depends on / gate | Evidence | Phase |
 |---|---|---|---|---|
@@ -58,9 +58,9 @@ Status vocabulary: `LANDED`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
 | M2.4 | LANDED | M2 | `5889771` | Phase 0 |
 | M2.5 | LANDED | M2.4 | exact-unit/risk acceptance suite + compose smoke | Phase 1 |
 | M2.6 | LANDED | M2.5 | mode/auth/halt suite + container probes | Phase 1 |
-| **M8A** | **NEXT** | M2.6; read capabilities only | — | Phase 1 |
-| M8B | PENDING | M8A | — | Phase 1 |
-| M2.7 | PENDING | M8B | — | Phase 1 |
+| **M8A** | **LANDED** | M2.6; read capabilities only | authenticated 49-tool snapshot, exact Agentic binding, real-shape decoders, 15-second quote age, read-only startup/API and env-gated live contract pass | Phase 1 |
+| **M8B** | **LANDED** | M8A offline provider boundary | embedded Cockpit, Live production display, 34-tool safe MCP Lab, race/vet/browser and independent mutation/account-override probes pass | Phase 1 |
+| **M2.7** | **NEXT** | M8B | migrations + DB deadlines + idempotency | Phase 1 |
 | M2.8 | PENDING | M2.7 | — | Phase 1 |
 | M2.9 | PENDING | M2.8 | — | Phase 1 |
 | M3A | PENDING | M2.9 | — | Phase 2 |
@@ -95,3 +95,4 @@ When a milestone lands:
 |---|---|---|---|
 | 2026-07-16 | v1 | Freeze and file split only | Semantic baseline `fa5a29e`; no milestone behavior changed |
 | 2026-07-16 | v1.1 | Move M8A after M2.6; add M8B | Validate provider shapes and a read-only cockpit early; production writes remain M11 |
+| 2026-07-16 | v1.2 | Add M8B Live MCP Tool Lab | Human-requested inspection surface for all 34 reviewed no-state-change tools; 15 mutations remain structurally absent |

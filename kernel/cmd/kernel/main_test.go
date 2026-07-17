@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -26,29 +28,43 @@ type journalEntry struct {
 }
 
 type memoryStore struct {
-	mu          sync.Mutex
-	ledgerLocks [2]sync.Mutex
-	statuses    map[string]string
-	classes     map[string]string
-	shadows     map[string]bool
-	operations  map[string]risk.Operation
-	verdicts    map[string]json.RawMessage
-	journals    []journalEntry
-	events      []string
-	blackboards map[string]json.RawMessage
-	journalErr  error
-	halted      bool
-	haltReason  string
+	mu            sync.Mutex
+	ledgerLocks   [2]sync.Mutex
+	statuses      map[string]string
+	classes       map[string]string
+	shadows       map[string]bool
+	operations    map[string]risk.Operation
+	operationRows map[string]store.OperationRow
+	verdicts      map[string]json.RawMessage
+	journals      []journalEntry
+	events        []string
+	blackboards   map[string]json.RawMessage
+	journalErr    error
+	halted        bool
+	haltReason    string
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		statuses:    map[string]string{},
-		classes:     map[string]string{},
-		shadows:     map[string]bool{},
-		operations:  map[string]risk.Operation{},
-		verdicts:    map[string]json.RawMessage{},
-		blackboards: map[string]json.RawMessage{},
+		statuses:      map[string]string{},
+		classes:       map[string]string{},
+		shadows:       map[string]bool{},
+		operations:    map[string]risk.Operation{},
+		operationRows: map[string]store.OperationRow{},
+		verdicts:      map[string]json.RawMessage{},
+		blackboards:   map[string]json.RawMessage{},
+	}
+}
+
+func TestProductionQuoteAgeCannotRemainDisabled(t *testing.T) {
+	if err := validateProductionQuoteAge("fake", 0); err != nil {
+		t.Fatalf("sim should retain the disabled-age fixture: %v", err)
+	}
+	if err := validateProductionQuoteAge("robinhood", 0); err == nil {
+		t.Fatal("Robinhood accepted a disabled quote age")
+	}
+	if err := validateProductionQuoteAge("robinhood", 1); err != nil {
+		t.Fatalf("positive production quote age rejected: %v", err)
 	}
 }
 
@@ -91,7 +107,7 @@ func (m *memoryStore) InsertEvent(kind string, payload any) error {
 	return nil
 }
 
-func (m *memoryStore) InsertOperation(id, _, class, status string, payload, _ any) error {
+func (m *memoryStore) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses[id] = status
@@ -99,6 +115,12 @@ func (m *memoryStore) InsertOperation(id, _, class, status string, payload, _ an
 	if op, ok := payload.(risk.Operation); ok {
 		m.shadows[id] = op.Shadow
 		m.operations[id] = op
+	}
+	payloadJSON, _ := json.Marshal(payload)
+	verdictJSON, _ := json.Marshal(verdict)
+	m.operationRows[id] = store.OperationRow{
+		ID: id, TS: time.Now().UTC(), Proposer: proposer, Class: class,
+		Status: status, Payload: payloadJSON, Verdict: verdictJSON,
 	}
 	return nil
 }
@@ -114,6 +136,12 @@ func (m *memoryStore) SetOperationStatus(id, status string, verdict any) error {
 		}
 		m.verdicts[id] = encoded
 	}
+	row := m.operationRows[id]
+	row.Status = status
+	if verdict != nil {
+		row.Verdict = m.verdicts[id]
+	}
+	m.operationRows[id] = row
 	return nil
 }
 
@@ -124,9 +152,34 @@ func (m *memoryStore) GetOperation(id string) (*store.OperationRow, error) {
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return &store.OperationRow{
-		ID: id, Class: m.classes[id], Status: status, Verdict: m.verdicts[id],
-	}, nil
+	row := m.operationRows[id]
+	row.ID, row.Class, row.Status, row.Verdict = id, m.classes[id], status, m.verdicts[id]
+	return &row, nil
+}
+
+func (m *memoryStore) ListOperations(status string, limit int, cursor *store.OperationCursor) ([]store.OperationRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rows := make([]store.OperationRow, 0, len(m.operationRows))
+	for _, row := range m.operationRows {
+		if status != "" && row.Status != status {
+			continue
+		}
+		if cursor != nil && !(row.TS.Before(cursor.TS) || (row.TS.Equal(cursor.TS) && row.ID < cursor.ID)) {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].TS.Equal(rows[j].TS) {
+			return rows[i].ID > rows[j].ID
+		}
+		return rows[i].TS.After(rows[j].TS)
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
 
 func (m *memoryStore) InsertJournal(operationID string, hypothesis, _, _ any, shadow bool) error {
@@ -190,9 +243,9 @@ func setQuote(b *broker.Fake, symbol, bid, ask string, openInterest int) {
 }
 
 func placeOrder(b *broker.Fake, symbol, side, qty, limit, kind string) (broker.OrderResult, error) {
-	return b.PlaceLimitOrder(
-		symbol, side, units.MustQty(qty), units.MustMicros(limit), kind,
-	)
+	return b.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+		Symbol: symbol, Side: side, Qty: units.MustQty(qty), Limit: units.MustMicros(limit), Kind: kind,
+	})
 }
 
 func dualLedgerLimits() config.Limits {
@@ -408,7 +461,7 @@ func TestProposeCloseRequiresAndCannotExceedPosition(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("over-close: status=%d body=%v", w.Code, body)
 	}
-	positions, err := b.GetPositions()
+	positions, err := b.Positions(context.Background())
 	if err != nil || len(positions) != 1 || positions[0].Qty != units.MustQty("1") {
 		t.Fatalf("position changed after rejected close: positions=%v err=%v", positions, err)
 	}
@@ -467,7 +520,7 @@ func TestConcurrentCloseCannotOpenReversePosition(t *testing.T) {
 	if executed != 1 || rejected != 1 {
 		t.Fatalf("executed/rejected=%d/%d, want 1/1", executed, rejected)
 	}
-	positions, err := b.GetPositions()
+	positions, err := b.Positions(context.Background())
 	if err != nil || len(positions) != 0 {
 		t.Fatalf("positions=%v err=%v, want flat", positions, err)
 	}
@@ -479,11 +532,11 @@ func TestExecuteRefusesUnverifiedClose(t *testing.T) {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
-	_, err := s.execute("test-op", risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: units.MustQty("1")}, &broker.Quote{Symbol: "SPY", Bid: units.MustMicros("623.10"), Ask: units.MustMicros("623.14")})
+	_, err := s.execute(context.Background(), "test-op", risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: units.MustQty("1")}, &broker.Quote{Symbol: "SPY", Bid: units.MustMicros("623.10"), Ask: units.MustMicros("623.14")})
 	if err == nil {
 		t.Fatal("unverified direct close execution succeeded")
 	}
-	positions, getErr := b.GetPositions()
+	positions, getErr := b.Positions(context.Background())
 	if getErr != nil || len(positions) != 1 || positions[0].Qty != units.MustQty("1") {
 		t.Fatalf("position changed: positions=%v err=%v", positions, getErr)
 	}
@@ -558,7 +611,7 @@ func TestProposeOpenInfersNakedShortAndRejectsWhitespacePlan(t *testing.T) {
 	if w.Code != http.StatusOK || body["class"] != "C" || body["status"] != "pending_review" {
 		t.Fatalf("whitespace plan: status=%d body=%v", w.Code, body)
 	}
-	positions, err := b.GetPositions()
+	positions, err := b.Positions(context.Background())
 	if err != nil || len(positions) != 0 {
 		t.Fatalf("broker changed after rejected/pending opens: positions=%v err=%v", positions, err)
 	}
@@ -600,7 +653,7 @@ func TestCrossedQuoteFailsClosedAtLiquidityGate(t *testing.T) {
 	if !ok || len(reasons) == 0 || reasons[0] != "market_data_unavailable" {
 		t.Fatalf("crossed quote reasons=%v", body["reasons"])
 	}
-	positions, err := b.GetPositions()
+	positions, err := b.Positions(context.Background())
 	if err != nil || len(positions) != 0 {
 		t.Fatalf("crossed quote reached broker: positions=%v err=%v", positions, err)
 	}
@@ -642,7 +695,7 @@ func TestComputedRiskCannotBeUnderDeclared(t *testing.T) {
 					t.Fatalf("reasons=%v, want %s", body["reasons"], tc.reason)
 				}
 			}
-			positions, err := b.GetPositions()
+			positions, err := b.Positions(context.Background())
 			if err != nil || len(positions) != 0 {
 				t.Fatalf("broker effect: positions=%v err=%v", positions, err)
 			}
@@ -777,7 +830,7 @@ func TestUnknownEquityBlocksOpenButNotQuotedClose(t *testing.T) {
 	if w.Code != http.StatusBadGateway || body["error"] != "market_data_unavailable" {
 		t.Fatalf("unquoted close: status=%d body=%v", w.Code, body)
 	}
-	positions, err := b.GetPositions()
+	positions, err := b.Positions(context.Background())
 	if err != nil || len(positions) != 1 || positions[0].Symbol != "A" {
 		t.Fatalf("positions=%v err=%v, want untouched A", positions, err)
 	}

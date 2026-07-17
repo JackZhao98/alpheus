@@ -1,8 +1,9 @@
-FROM golang:1.22-alpine AS build
+FROM golang:1.23-alpine AS build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN go mod tidy && CGO_ENABLED=0 go build -o /bin/kernel ./cmd/kernel
+RUN CGO_ENABLED=0 go build -mod=readonly -o /bin/kernel ./cmd/kernel
 
 FROM alpine:3.20
 COPY --from=build /bin/kernel /kernel

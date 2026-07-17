@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,14 +18,23 @@ import (
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/marketdata"
+	"alpheus/kernel/internal/rhmcp"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
 )
 
 type server struct {
-	limits      config.Limits
-	mode        config.ModeConfig
+	limits    config.Limits
+	mode      config.ModeConfig
+	account   broker.AccountProvider
+	execution broker.ExecutionProvider
+	market    marketdata.Provider
+	mcpLab    *mcpReadLab
+	simVenue  *broker.Fake
+	// broker is a simulation/test compatibility seam. Production construction
+	// leaves it nil and registers read and execution capabilities separately.
 	broker      broker.Adapter
 	store       storeAPI
 	executionMu sync.Mutex
@@ -41,6 +51,7 @@ type storeAPI interface {
 	Event(kind string, payload any)
 	SetOperationStatus(id, status string, verdict any) error
 	GetOperation(id string) (*store.OperationRow, error)
+	ListOperations(status string, limit int, cursor *store.OperationCursor) ([]store.OperationRow, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
 	TopLessons(limit int) ([]store.Lesson, error)
 	GetBlackboard(day string) (json.RawMessage, error)
@@ -60,15 +71,73 @@ func main() {
 	if err != nil {
 		log.Fatalf("limits: %v", err)
 	}
-	b, err := broker.New()
-	if err != nil {
-		log.Fatalf("broker: %v", err)
+	brokerName := config.Env("BROKER", "fake")
+	if err := validateProductionQuoteAge(brokerName, limits.QuoteMaxAgeSec); err != nil {
+		log.Fatalf("limits: %v", err)
+	}
+	var account broker.AccountProvider
+	var execution broker.ExecutionProvider
+	var market marketdata.Provider
+	var mcpLab *mcpReadLab
+	var simVenue *broker.Fake
+	switch brokerName {
+	case "fake":
+		simVenue = broker.NewFake(units.MustMicros("300"))
+		account, execution = simVenue, simVenue
+		market = marketdata.NewFakeProvider(simVenue)
+	case "robinhood":
+		if mode.TradingMode == config.ModeLive {
+			log.Fatalf("broker: production execution is unavailable before M11")
+		}
+		if mode.LiveAccountID == "" {
+			log.Fatalf("broker: LIVE_ACCOUNT_ID is required for Robinhood reads")
+		}
+		snapshot, err := rhmcp.LoadCapabilitySnapshot(config.Env("RH_MCP_CAPABILITIES_FILE", "../docs/rh_mcp_capabilities.json"))
+		if err != nil {
+			log.Fatalf("broker: %v", err)
+		}
+		client, err := rhmcp.New(rhmcp.Config{
+			TokenFile: config.Env("RH_MCP_TOKEN_FILE", ""), AllowedTools: rhmcp.SafeQueryTools,
+		})
+		if err != nil {
+			log.Fatalf("broker: %v", err)
+		}
+		if err := rhmcp.ValidateSnapshot(context.Background(), client, snapshot, rhmcp.SafeQueryTools); err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: capability snapshot validation failed: %v", err)
+		}
+		account, err = broker.NewRobinhood(client, mode.LiveAccountID)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+		mcpLab, err = newMCPReadLab(client, mode.LiveAccountID, snapshot)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+		market, err = marketdata.NewRobinhoodProvider(client, client, snapshot.Version)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+	default:
+		log.Fatalf("broker: unknown BROKER %q", brokerName)
 	}
 	st, err := store.Open(config.Env("DATABASE_URL", "postgresql://alpheus:alpheus@localhost:5432/alpheus?sslmode=disable"))
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
-	s := &server{limits: limits, mode: mode, broker: b, store: st}
+	if brokerName == "robinhood" {
+		actual, bindingErr := account.AccountID(context.Background())
+		if bindingErr != nil || actual != mode.LiveAccountID {
+			st.Event("account_binding_violation", map[string]string{
+				"reason": "read_provider_binding_failed", "mode": mode.TradingMode,
+			})
+			log.Fatalf("broker: account binding failed")
+		}
+	}
+	s := &server{limits: limits, mode: mode, account: account, execution: execution, market: market, mcpLab: mcpLab, simVenue: simVenue, broker: simVenue, store: st}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
 	}
@@ -82,6 +151,13 @@ func main() {
 
 	log.Printf("alpheus-kernel listening on :8100 mode=%s", mode.TradingMode)
 	log.Fatal(http.ListenAndServe(":8100", s.routes()))
+}
+
+func validateProductionQuoteAge(brokerName string, maxAgeSec int) error {
+	if brokerName == "robinhood" && maxAgeSec <= 0 {
+		return fmt.Errorf("quote_max_age_sec must be set to a positive human-approved value for Robinhood")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -188,24 +264,63 @@ func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, accoun
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
 
-func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
+func (s *server) accountProvider() broker.AccountProvider {
+	if s.account != nil {
+		return s.account
+	}
+	return s.broker
+}
+
+func (s *server) executionProvider() broker.ExecutionProvider {
+	if s.execution != nil {
+		return s.execution
+	}
+	return s.broker
+}
+
+func (s *server) marketProvider() marketdata.Provider {
+	if s.market != nil {
+		return s.market
+	}
+	if fake, ok := s.broker.(*broker.Fake); ok {
+		return marketdata.NewFakeProvider(fake)
+	}
+	return nil
+}
+
+func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	if err := s.refreshGlobalHalt(); err != nil {
 		writeInternalError(w, "refresh global halt", err)
 		return
 	}
-	acct, err := s.broker.GetAccount()
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
+	account := s.accountProvider()
+	if account == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account provider unavailable"})
 		return
 	}
-	pos, err := s.broker.GetPositions()
+	acct, err := account.Account(r.Context())
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		writeJSON(w, 502, map[string]string{"error": "account data unavailable"})
+		return
+	}
+	pos, err := account.Positions(r.Context())
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": "position data unavailable"})
 		return
 	}
 	window, err := currentMarketWindow()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	orders, err := account.OpenOrders(r.Context())
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": "order data unavailable"})
+		return
+	}
+	fills, err := account.RecentFills(r.Context(), window.start)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": "fill data unavailable"})
 		return
 	}
 	halted, haltReason := s.haltSnapshot()
@@ -220,10 +335,14 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"account":   acct,
-		"positions": pos,
-		"day":       map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
-		"mode":      s.tradingMode(),
+		"account":      acct,
+		"positions":    pos,
+		"open_orders":  orders,
+		"recent_fills": fills,
+		"day":          map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+		"mode":         s.tradingMode(),
+		"source":       "kernel",
+		"as_of":        time.Now().UTC(),
 	})
 }
 
@@ -254,7 +373,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if op.Shadow {
 			op.VerifiedReduction = true // no broker effect; no shadow position ledger yet
 		} else {
-			positions, err := s.broker.GetPositions()
+			positions, err := s.accountProvider().Positions(r.Context())
 			if err != nil {
 				writeJSON(w, 502, map[string]string{"error": err.Error()})
 				return
@@ -266,7 +385,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	acct, err := s.broker.GetAccount()
+	acct, err := s.accountProvider().Account(r.Context())
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -282,12 +401,12 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if sym == "" {
 			sym = op.Underlying
 		}
-		if q, err := s.broker.GetQuote(sym); err == nil {
+		if q, err := s.marketProvider().Quote(r.Context(), sym); err == nil {
 			quote = &q
 		}
 	}
 	if op.Action == "open" {
-		op = s.deriveOpenOperation(op, quote)
+		op = s.deriveOpenOperation(r.Context(), op, quote)
 		if err := s.refreshGlobalHalt(); err != nil {
 			writeInternalError(w, "refresh global halt", err)
 			return
@@ -348,9 +467,9 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	addRiskFacts(resp, op)
 	var execution map[string]any
 	if closeLockHeld {
-		execution, err = s.executeLocked(opID, op, quote)
+		execution, err = s.executeLocked(r.Context(), opID, op, quote)
 	} else {
-		execution, err = s.execute(opID, op, quote)
+		execution, err = s.execute(r.Context(), opID, op, quote)
 	}
 	if err != nil {
 		_ = s.store.SetOperationStatus(opID, "failed", nil)
@@ -367,7 +486,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 // after a human approves a Class-C operation. Live broker mutations are
 // serialized here; propose calls executeLocked only while it already holds the
 // lock across live-close position verification.
-func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
+func (s *server) execute(ctx context.Context, opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
 	if !op.Shadow && op.Action == "close" && !op.VerifiedReduction {
 		return nil, fmt.Errorf("refusing unverified close execution")
 	}
@@ -375,10 +494,10 @@ func (s *server) execute(opID string, op risk.Operation, quote *broker.Quote) (m
 		s.executionMu.Lock()
 		defer s.executionMu.Unlock()
 	}
-	return s.executeLocked(opID, op, quote)
+	return s.executeLocked(ctx, opID, op, quote)
 }
 
-func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
+func (s *server) executeLocked(ctx context.Context, opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
 	status := "auto_approved"
 
 	if op.Action == "tighten_stop" {
@@ -398,12 +517,16 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	if op.Shadow {
 		return map[string]any{"status": status}, nil
 	}
+	execution := s.executionProvider()
+	if execution == nil {
+		return nil, fmt.Errorf("execution capability unavailable")
+	}
 
 	if op.Action == "cancel" {
-		if err := s.assertLiveAccountBinding(opID); err != nil {
+		if err := s.assertLiveAccountBinding(ctx, opID); err != nil {
 			return nil, err
 		}
-		res, err := s.broker.CancelOrder(op.BrokerOrderID)
+		res, err := execution.CancelOrder(ctx, op.BrokerOrderID)
 		if err != nil {
 			return nil, err
 		}
@@ -451,10 +574,12 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	if sym == "" {
 		sym = op.Underlying
 	}
-	if err := s.assertLiveAccountBinding(opID); err != nil {
+	if err := s.assertLiveAccountBinding(ctx, opID); err != nil {
 		return nil, err
 	}
-	res, err := s.broker.PlaceLimitOrder(sym, side, op.Qty, limit, op.Kind)
+	res, err := execution.PlaceLimitOrder(ctx, broker.PlaceRequest{
+		ClientOrderID: opID, Symbol: sym, Side: side, Qty: op.Qty, Limit: limit, Kind: op.Kind,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +696,7 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 	return op, nil
 }
 
-func (s *server) deriveOpenOperation(op risk.Operation, quote *broker.Quote) risk.Operation {
+func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quote *broker.Quote) risk.Operation {
 	if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
 		op.RejectReason = "market_data_unavailable"
 		return op
@@ -585,7 +710,7 @@ func (s *server) deriveOpenOperation(op risk.Operation, quote *broker.Quote) ris
 		if symbol == "" {
 			symbol = op.Underlying
 		}
-		instrument, err := s.broker.GetInstrument(symbol)
+		instrument, err := s.marketProvider().Instrument(ctx, symbol)
 		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 {
 			op.RejectReason = "unsupported_contract"
 			return op
@@ -834,8 +959,11 @@ func (s *server) putBlackboard(w http.ResponseWriter, r *http.Request) {
 // simQuote is only meaningful with the fake broker: shadow mode's market feed
 // and the backtest replay surface.
 func (s *server) simQuote(w http.ResponseWriter, r *http.Request) {
-	f, ok := s.broker.(*broker.Fake)
-	if !ok {
+	venue := s.simVenue
+	if venue == nil {
+		venue, _ = s.broker.(*broker.Fake)
+	}
+	if venue == nil {
 		writeJSON(w, 400, map[string]string{"error": "not a sim broker"})
 		return
 	}
@@ -843,7 +971,7 @@ func (s *server) simQuote(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &q) {
 		return
 	}
-	if err := f.SetQuote(q); err != nil {
+	if err := venue.SetQuote(q); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

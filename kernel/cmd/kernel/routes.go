@@ -8,11 +8,25 @@ import (
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", serveCockpitFile("index.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /cockpit", serveCockpitFile("index.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /assets/cockpit.css", serveCockpitFile("style.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /assets/cockpit.js", serveCockpitFile("app.js", "application/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /limits", s.authorize(permissionRead, s.getLimits))
 	mux.HandleFunc("GET /state", s.authorize(permissionRead, s.getState))
+	mux.HandleFunc("GET /operations", s.authorize(permissionRead, s.listOperations))
 	mux.HandleFunc("GET /operations/{id}", s.authorize(permissionRead, s.getOperation))
 	mux.HandleFunc("GET /lessons", s.authorize(permissionRead, s.getLessons))
 	mux.HandleFunc("GET /blackboard/{day}", s.authorize(permissionRead, s.getBlackboard))
+	mux.HandleFunc("GET /market/quote/{symbol}", s.authorize(permissionRead, s.getMarketQuote))
+	mux.HandleFunc("GET /market/chain/{underlying}", s.authorize(permissionRead, s.getMarketChain))
+	mux.HandleFunc("GET /market/expirations/{underlying}", s.authorize(permissionRead, s.getMarketExpirations))
+	mux.HandleFunc("GET /market/bars/{symbol}", s.authorize(permissionRead, s.getMarketBars))
+	mux.HandleFunc("GET /market/movers", s.authorize(permissionRead, s.getMarketMovers))
+	mux.HandleFunc("GET /market/hours", s.authorize(permissionRead, s.getMarketHours))
+	mux.HandleFunc("GET /provider/status", s.authorize(permissionRead, s.getProviderStatus))
+	mux.HandleFunc("GET /mcp/read-tools", s.authorize(permissionRead, s.getMCPReadTools))
+	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))
 
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)

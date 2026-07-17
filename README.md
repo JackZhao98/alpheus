@@ -52,6 +52,100 @@ journal/blackboard，但不能审批自己的 Class-C；reviewer 身份只取自
 所有新开仓，但经过持仓验证的平仓和撤单仍保持 Class-A 快路径。状态和原因
 持久化在事件流中，重启后继续生效。
 
+### Robinhood 只读 Provider（M8A）
+
+生产读取和执行已在 Go 类型边界拆开。Robinhood 的账户 Provider 没有任何
+下单或撤单方法，MCP client 也只接受提交到仓库并经审阅的只读工具 allowlist。
+`read_only` 不挂载写端点；`shadow` 使用相同的生产账户和行情，但所有提案仍
+只进入影子账本。真实执行能力继续留在 M11。
+
+首次连接会把 OAuth 状态写到仓库外的 0600 文件，随后显式生成无敏感信息的
+工具 schema snapshot：
+
+```bash
+cd kernel
+go run ./cmd/rh-mcp -action auth \
+  -token-file "$HOME/.config/alpheus/rh-oauth.json"
+go run ./cmd/rh-mcp -action discover \
+  -token-file "$HOME/.config/alpheus/rh-oauth.json" \
+  -out ../docs/rh_mcp_capabilities.json
+go run ./cmd/rh-mcp -action accounts \
+  -token-file "$HOME/.config/alpheus/rh-oauth.json"
+# After the owner explicitly chooses the masked Agentic account:
+go run ./cmd/rh-mcp -action bind \
+  -token-file "$HOME/.config/alpheus/rh-oauth.json" \
+  -account-last4 0000 \
+  -binding-file "$HOME/.config/alpheus/live-account-id"
+go run ./cmd/rh-mcp -action capture \
+  -token-file "$HOME/.config/alpheus/rh-oauth.json" \
+  -binding-file "$HOME/.config/alpheus/live-account-id" \
+  -private-dir "$HOME/.config/alpheus/discovery"
+```
+
+使用 `BROKER=robinhood` 时，即使是 `read_only` / `shadow` 也必须显式设置
+`LIVE_ACCOUNT_ID` 或指向 0600 文件的 `LIVE_ACCOUNT_ID_FILE`，Alpheus 不会选
+“默认”或“第一个”账户，也不允许两者同时设置。同时设置
+`RH_MCP_TOKEN_FILE` 和 `RH_MCP_CAPABILITIES_FILE`。启动时 kernel 会比较
+线上工具和已提交 snapshot；任何必需工具缺失、改名或 schema 不兼容都拒绝
+启动。token、原始 Provider payload 和账户号不会进入日志、事件、数据库
+payload 或 API 响应。
+
+Docker 运行真实只读 Provider 时使用单独的 secret-volume override；不要把
+宿主机绝对路径原样当作容器路径：
+
+```bash
+export RH_MCP_SECRET_DIR="$HOME/.config/alpheus"
+docker compose -f docker-compose.yml -f docker-compose.robinhood.yml up --build
+```
+
+override 只挂载包含 `rh-oauth.json` 的目录，不会在 sim 启动时制造空 secret
+文件或把 OAuth 状态打进镜像。
+
+新增的只读入口如下；非 sim 模式全部要求读权限 token：
+
+```text
+GET /market/quote/{symbol}
+GET /market/chain/{underlying}?expiry=YYYY-MM-DD&window_pct=15
+GET /market/expirations/{underlying}
+GET /market/bars/{symbol}?days=30
+GET /market/movers?dir=up&n=10
+GET /market/hours
+GET /provider/status
+```
+
+kernel 会在调用 Provider 前把 chain 窗口截到 15 个百分点、bars 截到 30 天、
+movers 截到 10 个。过期、未来时间戳、锁盘、交叉盘、非正数、不完整或匹配
+歧义的报价一律 fail closed。
+
+当前认证后的 Robinhood 工具目录没有 market-hours、movers 或独立的
+expirations 工具，因此生产实现不会猜工具名：前两者明确 fail closed，到期日由
+`get_option_chains` 的已验证字段提供。期权 instrument 只有在链与合约共同证明
+固定 tick、整数数量、标准 multiplier=100 且没有调整现金交付时才可用；股票
+instrument 因缺少跨订单类型的精确 tick/数量增量字段仍然 fail closed。
+已核实事实和仍阻塞 M3D 的问题见
+[`docs/rh_mcp_facts.md`](docs/rh_mcp_facts.md)。
+
+### Trading Cockpit（M8B，开发中）
+
+kernel 已内嵌一个无构建步骤的只读驾驶舱：
+
+```text
+http://127.0.0.1:8100/
+http://127.0.0.1:8100/cockpit
+```
+
+它显示运行模式、Provider/snapshot 状态、脱敏账户、资金、live/shadow
+双账本、持仓、行情、外部订单/成交诊断，以及带 `(ts,id)` 游标的最近操作。
+Live MCP Tool Lab 另外列出 34 个经审阅的无状态变更工具（32 个数据查询和
+2 个订单预检模拟），显示提交快照里的输入 schema，并允许手工填写 JSON
+参数。账户参数由 kernel 固定注入；15 个下单、撤单、watchlist/scanner
+写工具在服务端 allowlist 中不存在。
+非 sim 模式只在当前标签页内存里保存 read-capable token；没有 cookie、URL
+token、localStorage、审批、熔断、下单、撤单或改单按钮。MCP Lab 返回值在
+服务端完成大小限制、JSON 解码、账户/secret 字段脱敏和重新编码，不透传原始
+transport payload。所有外部/存储文本都通过 `textContent` 渲染，页面带不允许
+inline script 的 CSP。
+
 `internal/risk/risk_test.go` 已带五条路径用例（A / B / C / 两种 REJECT），
 `go test ./...` 可跑；这是
 [`Phase 4` 的 Milestone 9](docs/plan/05_PRELIVE_AND_LIVE.md) 风险测试扩展的种子。
@@ -122,10 +216,10 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 
 ## 骨架刻意没做的事
 
-reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、marketdata 门面与 MCP
-只读接入（见 [`Phase 1` 的 M8A](docs/plan/02_SAFETY_FOUNDATION.md)）、inbox/watchlist 注入（assemble 有
+reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、M8A 的已认证
+Robinhood schema snapshot/脱敏 fixtures、inbox/watchlist 注入（assemble 有
 TODO）、C 级批准后的执行路径、订单重挂状态机接线、熔断的实时计算
 （dayState 有 TODO）、watchdog 对 runtime `/wake` 的实际投递（端点和
-Kernel Token 校验已落地，M6 接线）、任何 UI。
+Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。
 这些都有明确的挂载点，但骨架的任务是把边界立住。

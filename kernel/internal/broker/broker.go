@@ -3,8 +3,7 @@
 package broker
 
 import (
-	"fmt"
-	"os"
+	"context"
 	"time"
 
 	"alpheus/kernel/internal/units"
@@ -44,54 +43,107 @@ func (q Quote) Usable(maxAgeSec int, now time.Time) bool {
 }
 
 type Instrument struct {
-	Symbol     string `json:"symbol"`
-	Kind       string `json:"kind"`
-	Multiplier int64  `json:"multiplier"`
+	Symbol       string       `json:"symbol"`
+	InstrumentID string       `json:"instrument_id"`
+	Kind         string       `json:"kind"`
+	Multiplier   int64        `json:"multiplier"`
+	PriceTick    units.Micros `json:"price_tick"`
+	QtyIncrement units.Qty    `json:"qty_increment"`
+	Source       string       `json:"source"`
+	AsOf         time.Time    `json:"as_of"`
 }
 
 type Position struct {
-	Symbol     string       `json:"symbol"`
-	Qty        units.Qty    `json:"qty"`
-	AvgPrice   units.Micros `json:"avg_price"`
-	Kind       string       `json:"kind"`
-	Multiplier int64        `json:"multiplier"`
+	PositionID    string       `json:"position_id"`
+	InstrumentID  string       `json:"instrument_id"`
+	Symbol        string       `json:"symbol"`
+	Qty           units.Qty    `json:"qty"`
+	AvgPrice      units.Micros `json:"avg_price"`
+	AvgPriceKnown bool         `json:"avg_price_known"`
+	Kind          string       `json:"kind"`
+	Multiplier    int64        `json:"multiplier"`
+	Source        string       `json:"source"`
+	AsOf          time.Time    `json:"as_of"`
 }
 
 type AccountState struct {
-	AccountType   string       `json:"account_type"`
-	BuyingPower   units.Micros `json:"buying_power"`
-	Equity        units.Micros `json:"equity"`
-	EquityKnown   bool         `json:"equity_known"`
-	DayTradesUsed int          `json:"day_trades_used"`
-	SettledCash   units.Micros `json:"settled_cash"`
+	ExternalID       string       `json:"-"`
+	AccountType      string       `json:"account_type"`
+	BuyingPower      units.Micros `json:"buying_power"`
+	Equity           units.Micros `json:"equity"`
+	EquityKnown      bool         `json:"equity_known"`
+	DayTradesUsed    int          `json:"day_trades_used"`
+	Cash             units.Micros `json:"cash"`
+	CashKnown        bool         `json:"cash_known"`
+	SettledCash      units.Micros `json:"settled_cash"`
+	SettledCashKnown bool         `json:"settled_cash_known"`
+	Source           string       `json:"source"`
+	AsOf             time.Time    `json:"as_of"`
+}
+
+type ReadOrder struct {
+	BrokerOrderID   string       `json:"broker_order_id"`
+	ClientOrderID   string       `json:"client_order_id,omitempty"`
+	InstrumentID    string       `json:"instrument_id"`
+	Symbol          string       `json:"symbol"`
+	Side            string       `json:"side"`
+	State           string       `json:"state"`
+	Qty             units.Qty    `json:"qty"`
+	FilledQty       units.Qty    `json:"filled_qty"`
+	LimitPrice      units.Micros `json:"limit_price"`
+	LimitPriceKnown bool         `json:"limit_price_known"`
+	Source          string       `json:"source"`
+	AsOf            time.Time    `json:"as_of"`
+}
+
+type ReadFill struct {
+	FillID        string       `json:"fill_id"`
+	BrokerOrderID string       `json:"broker_order_id"`
+	InstrumentID  string       `json:"instrument_id"`
+	Symbol        string       `json:"symbol"`
+	Side          string       `json:"side"`
+	Qty           units.Qty    `json:"qty"`
+	Price         units.Micros `json:"price"`
+	Source        string       `json:"source"`
+	AsOf          time.Time    `json:"as_of"`
+}
+
+type PlaceRequest struct {
+	ClientOrderID string       `json:"client_order_id"`
+	Symbol        string       `json:"symbol"`
+	Side          string       `json:"side"`
+	Qty           units.Qty    `json:"qty"`
+	Limit         units.Micros `json:"limit"`
+	Kind          string       `json:"kind"`
 }
 
 type OrderResult struct {
 	BrokerOrderID string       `json:"broker_order_id"`
+	ClientOrderID string       `json:"client_order_id,omitempty"`
 	State         string       `json:"state"`
 	FilledQty     units.Qty    `json:"filled_qty"`
 	FilledPrice   units.Micros `json:"filled_price"`
 	Reason        string       `json:"reason,omitempty"`
 }
 
-type Adapter interface {
-	AccountID() (string, error)
-	GetAccount() (AccountState, error)
-	GetPositions() ([]Position, error)
-	GetQuote(symbol string) (Quote, error)
-	GetInstrument(symbol string) (Instrument, error)
-	PlaceLimitOrder(symbol, side string, qty units.Qty, limit units.Micros, kind string) (OrderResult, error)
-	CancelOrder(brokerOrderID string) (OrderResult, error)
-	GetOrder(brokerOrderID string) (OrderResult, error)
+type AccountProvider interface {
+	Account(ctx context.Context) (AccountState, error)
+	Positions(ctx context.Context) ([]Position, error)
+	OpenOrders(ctx context.Context) ([]ReadOrder, error)
+	RecentFills(ctx context.Context, since time.Time) ([]ReadFill, error)
+	AccountID(ctx context.Context) (string, error)
 }
 
-func New() (Adapter, error) {
-	switch os.Getenv("BROKER") {
-	case "", "fake":
-		return NewFake(units.MustMicros("300")), nil
-	case "robinhood":
-		return &Robinhood{}, nil
-	default:
-		return nil, fmt.Errorf("unknown BROKER %q", os.Getenv("BROKER"))
-	}
+type ExecutionProvider interface {
+	PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
+	CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
+	GetOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
+	FindOrderByClientID(ctx context.Context, clientOrderID string) (OrderResult, error)
+}
+
+// Adapter is intentionally implemented only by the simulation venue. The
+// production read-only provider must never satisfy this interface before M11.
+type Adapter interface {
+	AccountProvider
+	ExecutionProvider
 }

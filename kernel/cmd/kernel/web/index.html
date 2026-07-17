@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpheus Trading Cockpit</title>
+  <meta name="description" content="Read-only Alpheus trading safety cockpit">
+  <link rel="stylesheet" href="/assets/cockpit.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">ALPHEUS / CONTROL PLANE</p>
+      <h1>Trading cockpit</h1>
+    </div>
+    <div class="top-status">
+      <span id="connection-dot" class="dot"></span>
+      <span id="connection-label">Connecting</span>
+      <span id="mode-badge" class="badge">—</span>
+    </div>
+  </header>
+
+  <main>
+    <section id="auth-panel" class="auth-panel hidden" aria-labelledby="auth-title">
+      <div>
+        <p class="eyebrow">READ ACCESS</p>
+        <h2 id="auth-title">Connect to the kernel</h2>
+        <p>The token stays in this tab's memory. It is never stored in cookies or browser storage.</p>
+      </div>
+      <form id="auth-form">
+        <label for="read-token">Read-capable bearer token</label>
+        <div class="token-row">
+          <input id="read-token" type="password" autocomplete="off" spellcheck="false" required>
+          <button type="submit">Connect</button>
+        </div>
+        <p id="auth-error" class="error" role="alert"></p>
+      </form>
+    </section>
+
+    <section class="hero-grid">
+      <article class="panel account-panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">BOUND ACCOUNT</p><h2 id="account-mask">—</h2></div>
+          <span id="account-source" class="source">—</span>
+        </div>
+        <p id="account-type" class="muted">Waiting for normalized state</p>
+        <div class="metrics">
+          <div><span>Equity</span><strong id="equity">—</strong></div>
+          <div><span>Buying power</span><strong id="buying-power">—</strong></div>
+          <div><span>Settled cash</span><strong id="settled-cash">—</strong></div>
+        </div>
+        <p id="account-asof" class="timestamp">—</p>
+        <p id="account-error" class="panel-error hidden" role="status"></p>
+      </article>
+
+      <article class="panel provider-panel">
+        <div class="panel-head"><div><p class="eyebrow">PROVIDER</p><h2 id="provider-name">—</h2></div><span id="provider-state" class="badge">—</span></div>
+        <dl class="facts">
+          <div><dt>Capability snapshot</dt><dd id="snapshot-version">—</dd></div>
+          <div><dt>Schema parity</dt><dd id="schema-parity">—</dd></div>
+          <div><dt>Last read</dt><dd id="last-read">—</dd></div>
+          <div><dt>Last error</dt><dd id="provider-error">None</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section class="ledger-grid">
+      <article class="panel ledger live"><p class="eyebrow">LIVE LEDGER</p><div class="ledger-value"><strong id="live-count">—</strong><span>trades today</span></div><p id="live-risk" class="muted">Open risk —</p><p id="live-halt" class="breaker">—</p><p id="live-asof" class="timestamp">—</p></article>
+      <article class="panel ledger shadow"><p class="eyebrow">SHADOW LEDGER</p><div class="ledger-value"><strong id="shadow-count">—</strong><span>trades today</span></div><p id="shadow-risk" class="muted">Open risk —</p><p id="shadow-halt" class="breaker">—</p><p id="shadow-asof" class="timestamp">—</p></article>
+      <article class="panel hours"><p class="eyebrow">MARKET CLOCK</p><h2 id="market-state">—</h2><p id="market-hours" class="muted">Waiting for session hours</p><p id="hours-asof" class="timestamp">—</p><p id="hours-error" class="panel-error hidden" role="status"></p></article>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head"><div><p class="eyebrow">NORMALIZED INVENTORY</p><h2>Positions</h2></div><span id="position-count" class="badge">0</span></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Symbol</th><th>Kind</th><th>Quantity</th><th>Multiplier</th><th>Avg price</th><th>Current quote</th><th>Freshness</th></tr></thead><tbody id="positions-body"></tbody></table>
+      </div>
+      <p id="positions-empty" class="empty">No open positions.</p>
+      <p id="positions-error" class="panel-error hidden" role="status"></p>
+    </section>
+
+    <section class="split-grid">
+      <article class="panel table-panel">
+        <div class="panel-head"><div><p class="eyebrow">EXTERNAL READ DATA</p><h2>Open orders</h2></div><span id="order-count" class="badge">0</span></div>
+        <div id="orders-list" class="list"></div><p id="orders-empty" class="empty">No external open orders.</p><p id="orders-error" class="panel-error hidden" role="status"></p>
+      </article>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><p class="eyebrow">EXTERNAL READ DATA</p><h2>Recent fills</h2></div><span id="fill-count" class="badge">0</span></div>
+        <div id="fills-list" class="list"></div><p id="fills-empty" class="empty">No recent external fills.</p><p id="fills-error" class="panel-error hidden" role="status"></p>
+      </article>
+    </section>
+
+    <section class="panel query-lab" aria-labelledby="query-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">READ-ONLY QUERY LAB</p><h2 id="query-title">Test normalized MCP data</h2></div>
+        <span class="source">SAFE GET ONLY</span>
+      </div>
+      <p class="query-intro">Choose a supported query and enter its parameters. Results come through Alpheus Providers, never directly from a raw MCP tool response.</p>
+      <form id="query-form" class="query-form">
+        <label class="query-control query-kind" for="query-type">
+          <span>Query</span>
+          <select id="query-type">
+            <option value="quote">Equity quote</option>
+            <option value="bars">Historical bars</option>
+            <option value="expirations">Option expirations</option>
+            <option value="chain">Option chain</option>
+            <option value="state">Account snapshot</option>
+            <option value="provider">Provider status</option>
+          </select>
+        </label>
+        <label class="query-control" data-query-field="symbol" for="query-symbol">
+          <span>Symbol</span>
+          <input id="query-symbol" value="SPY" maxlength="20" autocomplete="off" spellcheck="false" inputmode="text">
+        </label>
+        <label class="query-control hidden" data-query-field="days" for="query-days">
+          <span>Days</span>
+          <input id="query-days" type="number" value="7" min="1" max="30" step="1">
+        </label>
+        <label class="query-control hidden" data-query-field="expiry" for="query-expiry">
+          <span>Expiry</span>
+          <input id="query-expiry" type="date">
+        </label>
+        <label class="query-control hidden" data-query-field="window" for="query-window">
+          <span>Window %</span>
+          <input id="query-window" type="number" value="5" min="0" max="15" step="0.1">
+        </label>
+        <div class="query-actions">
+          <button id="query-run" type="submit">Run query</button>
+          <button id="query-clear" class="secondary" type="button">Clear</button>
+        </div>
+      </form>
+      <div class="query-request"><span>Request</span><code id="query-request">GET /market/quote/SPY</code><strong id="query-status">READY</strong></div>
+      <pre id="query-result" class="query-result" aria-live="polite">Run a query to inspect normalized provider data.</pre>
+      <p id="query-error" class="panel-error hidden" role="alert"></p>
+    </section>
+
+    <section class="panel mcp-lab" aria-labelledby="mcp-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">LIVE MCP TOOL LAB</p><h2 id="mcp-title">Test the reviewed Robinhood surface</h2></div>
+        <div class="mcp-badges"><span id="mcp-count" class="source">34 SAFE / 15 BLOCKED</span><span id="mcp-state" class="badge">CONNECTING</span></div>
+      </div>
+      <p class="query-intro">Run any reviewed no-state-change tool against the bound Live account. Account identifiers are injected server-side; place, cancel, watchlist mutation, and scanner mutation tools are absent from the allowlist.</p>
+      <div class="mcp-grid">
+        <form id="mcp-form" class="mcp-form">
+          <label class="query-control" for="mcp-tool">
+            <span>Safe MCP tool</span>
+            <select id="mcp-tool" disabled><option>Waiting for Live provider</option></select>
+          </label>
+          <label class="query-control" for="mcp-args">
+            <span>Arguments JSON</span>
+            <textarea id="mcp-args" rows="12" spellcheck="false" autocomplete="off">{}</textarea>
+          </label>
+          <div class="query-actions">
+            <button id="mcp-run" type="submit" disabled>Run Live query</button>
+            <button id="mcp-reset" class="secondary" type="button" disabled>Load example</button>
+          </div>
+          <p class="mcp-safety">Read queries and order-review simulations only. No order can be placed from this panel.</p>
+        </form>
+        <aside class="mcp-contract" aria-label="Selected MCP tool contract">
+          <div class="mcp-contract-head"><span id="mcp-category" class="source">—</span><strong id="mcp-account-rule">BOUND ACCOUNT</strong></div>
+          <p id="mcp-description" class="mcp-description">Connect to the Live Robinhood provider to load the reviewed tool catalog.</p>
+          <span class="schema-label">Input schema</span>
+          <pre id="mcp-schema" class="mcp-schema">{}</pre>
+        </aside>
+      </div>
+      <div class="query-request"><span>Request</span><code id="mcp-request">POST /mcp/read-query</code><strong id="mcp-status">READY</strong></div>
+      <pre id="mcp-result" class="query-result" aria-live="polite">Choose a Live MCP tool and run a query.</pre>
+      <p id="mcp-error" class="panel-error hidden" role="alert"></p>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head"><div><p class="eyebrow">KERNEL AUDIT LOG</p><h2>Recent operations</h2></div><span id="operation-source" class="source">—</span></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Time</th><th>Operation</th><th>Class</th><th>Status</th><th>Intent</th><th>Proposer</th></tr></thead><tbody id="operations-body"></tbody></table>
+      </div>
+      <div class="pagination-row">
+        <p id="operations-empty" class="empty">No operations recorded.</p>
+        <button id="operations-more" class="secondary hidden" type="button">Load older operations</button>
+      </div>
+      <p id="operations-asof" class="timestamp">—</p>
+      <p id="operations-error" class="panel-error hidden" role="status"></p>
+    </section>
+
+    <section class="panel diagnostics">
+      <div class="panel-head"><div><p class="eyebrow">CONTRACT DIAGNOSTICS</p><h2>Normalized boundary</h2></div><span id="contract-state" class="badge">—</span></div>
+      <div class="contract-grid">
+        <p>Account <code>Micros · UTC · source</code></p><p>Position <code>Qty · multiplier · stable id</code></p><p>Quote <code>bid/ask · as_of · sanity</code></p><p>Provider <code>allowlist · snapshot · fail closed</code></p>
+      </div>
+      <p class="notice">Read only. This cockpit exposes reviewed queries and order simulations, but no approve, reject, halt, place, cancel, replace, or account-selection controls.</p>
+    </section>
+  </main>
+
+  <footer><span>Alpheus safety surface</span><span id="refresh-time">Not refreshed</span></footer>
+  <script src="/assets/cockpit.js" defer></script>
+</body>
+</html>

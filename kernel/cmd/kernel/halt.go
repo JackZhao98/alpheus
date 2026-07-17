@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -69,11 +70,11 @@ func (s *server) postHalt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"halted": true, "reason": s.haltReason})
 }
 
-func (s *server) assertLiveAccountBinding(operationID string) error {
+func (s *server) assertLiveAccountBinding(ctx context.Context, operationID string) error {
 	if s.tradingMode() != config.ModeLive {
 		return nil
 	}
-	actual, err := s.broker.AccountID()
+	actual, err := s.accountProvider().AccountID(ctx)
 	reason := "mismatch"
 	if err != nil {
 		reason = "resolution_failed"

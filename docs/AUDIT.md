@@ -107,6 +107,43 @@ violated, and severity.
   every write is 405. In `live`, `/sim/*` is 404. Agent-runtime `/wake` rejects
   every token except `KERNEL_TOKEN`. Confirm no token or account id appears in
   logs, events, operation payloads, or API responses.
+- **I13 Production-read Provider boundary.** Assert the Robinhood account
+  Provider does not satisfy `ExecutionProvider`; `read_only` and `shadow` must
+  construct no production object with place/cancel/replace methods. Start with
+  a missing, renamed, or schema-mutated required MCP tool: startup must fail
+  closed. A missing, duplicate, or different account must fail and emit only a
+  sanitized account-binding event. Move/nest a required money field, remove a
+  stable identifier, add more than six decimal places, or change the option
+  multiplier in golden fixtures; all must fail closed. Feed stale,
+  future-dated, locked, crossed, non-positive and incomplete quotes through
+  `/market/quote` and an open proposal; neither may approve a price. Very large
+  chain/bar/mover requests must reach the Provider only as 15 percentage
+  points, 30 days and 10 items; negative/malformed values are 400. A 0644 OAuth
+  file, trailing JSON value, expired non-refreshable token, stalled call, and
+  dropped transport must respectively fail before connection, respect the
+  deadline, and reconnect only once. Scan logs/API for tokens, account numbers
+  and raw payloads. Run an independent probe in addition to the env-gated
+  loopback reference test.
+- **I14 Read-only Trading Cockpit.** Outside sim, load `/` without a token:
+  the static shell may render but every data request must be 401 until a valid
+  read token is supplied. Inspect storage, cookies, URLs and requests: the
+  token exists only in page memory and never appears in a URL, cookie,
+  local/session storage or embedded asset. CSP must omit `unsafe-inline`; inject
+  `<img src=x onerror=...>` into every displayed stored/provider text field and
+  verify no script executes. Search assets and network traffic for mutation
+  requests and controls: M8B must expose no approve/reject/halt/resume/place/
+  cancel/replace action. Page through `GET /operations?limit=2` while inserting
+  newer rows; `(ts,id)` pagination must produce no duplicate or skipped older
+  row, invalid status/cursor/limit must be 400, and a huge positive limit must
+  be clamped to 100. For the Live MCP Tool Lab, enumerate the server catalog:
+  it must contain exactly the reviewed 34 no-state-change tools and reject all
+  15 mutation tools before provider invocation. Attempt an account override,
+  unknown argument, oversized body and malformed JSON; each must fail before
+  the MCP call. Query results must be bounded, decoded, account/secret-redacted
+  and re-encoded rather than transport-pass-through; full account ids, tokens,
+  raw transport payloads and secret paths must not appear in HTML, API responses
+  or browser diagnostics. Every successful lab query emits only tool name and
+  authenticated subject to the audit log, never arguments or result data.
 
 ## Suppression list — known, tracked, NOT findings
 

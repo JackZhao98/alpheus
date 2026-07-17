@@ -120,6 +120,13 @@ type OperationRow struct {
 	Verdict  json.RawMessage `json:"verdict"`
 }
 
+// OperationCursor is the stable key for descending operation pagination.
+// Both fields are required because operation timestamps are not unique.
+type OperationCursor struct {
+	TS time.Time `json:"ts"`
+	ID string    `json:"id"`
+}
+
 func (s *Store) GetOperation(id string) (*OperationRow, error) {
 	var r OperationRow
 	var verdict sql.NullString
@@ -133,6 +140,44 @@ func (s *Store) GetOperation(id string) (*OperationRow, error) {
 		r.Verdict = json.RawMessage(verdict.String)
 	}
 	return &r, nil
+}
+
+func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor) ([]OperationRow, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("operation list limit must be positive")
+	}
+	query := `SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,'')
+		FROM operations WHERE ($1 = '' OR status = $1)`
+	args := []any{status}
+	if cursor != nil {
+		query += ` AND (ts, id) < ($2, $3::uuid)`
+		args = append(args, cursor.TS, cursor.ID)
+	}
+	query += ` ORDER BY ts DESC, id DESC LIMIT $` + fmt.Sprint(len(args)+1)
+	args = append(args, limit)
+
+	rows, err := s.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]OperationRow, 0, limit)
+	for rows.Next() {
+		var row OperationRow
+		var verdict sql.NullString
+		if err := rows.Scan(&row.ID, &row.TS, &row.Proposer, &row.Class, &row.Status, &row.Payload, &verdict); err != nil {
+			return nil, err
+		}
+		if verdict.Valid && verdict.String != "" {
+			row.Verdict = json.RawMessage(verdict.String)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Store) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {

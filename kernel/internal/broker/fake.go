@@ -4,7 +4,9 @@
 package broker
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -30,6 +32,8 @@ type fakeOrder struct {
 	qty        units.Qty
 	limit      units.Micros
 	multiplier int64
+	updatedAt  time.Time
+	filledAt   time.Time
 }
 
 func NewFake(startingCash units.Micros) *Fake {
@@ -46,7 +50,11 @@ func NewFake(startingCash units.Micros) *Fake {
 			},
 		},
 		instruments: map[string]Instrument{
-			"SPY": {Symbol: "SPY", Kind: "option", Multiplier: 100},
+			"SPY": {
+				Symbol: "SPY", InstrumentID: "fake-instrument-SPY", Kind: "option", Multiplier: 100,
+				PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+				Source: "fake", AsOf: now,
+			},
 		},
 		orders: map[string]*fakeOrder{},
 	}
@@ -58,7 +66,7 @@ func (f *Fake) SetAccountID(accountID string) {
 	f.accountID = accountID
 }
 
-func (f *Fake) AccountID() (string, error) {
+func (f *Fake) AccountID(_ context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.accountID, nil
@@ -98,6 +106,21 @@ func (f *Fake) DeleteQuote(symbol string) {
 func (f *Fake) SetInstrument(instrument Instrument) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if instrument.InstrumentID == "" {
+		instrument.InstrumentID = "fake-instrument-" + instrument.Symbol
+	}
+	if instrument.PriceTick == 0 {
+		instrument.PriceTick = units.MustMicros("0.01")
+	}
+	if instrument.QtyIncrement == 0 {
+		instrument.QtyIncrement = units.MustQty("1")
+	}
+	if instrument.Source == "" {
+		instrument.Source = "fake"
+	}
+	if instrument.AsOf.IsZero() {
+		instrument.AsOf = time.Now().UTC()
+	}
 	f.instruments[instrument.Symbol] = instrument
 }
 
@@ -107,7 +130,7 @@ func (f *Fake) DeleteInstrument(symbol string) {
 	delete(f.instruments, symbol)
 }
 
-func (f *Fake) GetAccount() (AccountState, error) {
+func (f *Fake) Account(_ context.Context) (AccountState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -146,18 +169,26 @@ func (f *Fake) GetAccount() (AccountState, error) {
 	}
 
 	return AccountState{
-		AccountType: "cash", BuyingPower: f.cash, Equity: equity,
-		EquityKnown: known, SettledCash: f.cash,
+		ExternalID: f.accountID, AccountType: "cash", BuyingPower: f.cash,
+		Equity: equity, EquityKnown: known, Cash: f.cash, CashKnown: true,
+		SettledCash: f.cash, SettledCashKnown: true,
+		Source: "fake", AsOf: time.Now().UTC(),
 	}, nil
 }
 
-func (f *Fake) GetPositions() ([]Position, error) {
+func (f *Fake) Positions(_ context.Context) ([]Position, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]Position, 0, len(f.positions))
 	for _, position := range f.positions {
 		out = append(out, *position)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Symbol == out[j].Symbol {
+			return out[i].PositionID < out[j].PositionID
+		}
+		return out[i].Symbol < out[j].Symbol
+	})
 	return out, nil
 }
 
@@ -181,9 +212,10 @@ func (f *Fake) GetInstrument(symbol string) (Instrument, error) {
 	return instrument, nil
 }
 
-func (f *Fake) PlaceLimitOrder(symbol, side string, qty units.Qty, limit units.Micros, kind string) (OrderResult, error) {
+func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	symbol, side, qty, limit, kind := req.Symbol, req.Side, req.Qty, req.Limit, req.Kind
 	if qty <= 0 || limit <= 0 {
 		return OrderResult{}, fmt.Errorf("quantity and limit must be positive")
 	}
@@ -207,9 +239,9 @@ func (f *Fake) PlaceLimitOrder(symbol, side string, qty units.Qty, limit units.M
 	f.seq++
 	id := fmt.Sprintf("fake-%d", f.seq)
 	order := &fakeOrder{
-		result: OrderResult{BrokerOrderID: id, State: "submitted"},
+		result: OrderResult{BrokerOrderID: id, ClientOrderID: req.ClientOrderID, State: "submitted"},
 		symbol: symbol, side: side, kind: kind, qty: qty, limit: limit,
-		multiplier: multiplier,
+		multiplier: multiplier, updatedAt: time.Now().UTC(),
 	}
 	if marketable(side, limit, quote) {
 		if err := f.fillOrder(order, quote); err != nil {
@@ -226,6 +258,7 @@ func marketable(side string, limit units.Micros, quote Quote) bool {
 }
 
 func (f *Fake) fillOrder(order *fakeOrder, quote Quote) error {
+	now := time.Now().UTC()
 	price := quote.Ask
 	roundUp := true
 	if order.side == "sell" {
@@ -267,22 +300,28 @@ func (f *Fake) fillOrder(order *fakeOrder, quote Quote) error {
 	f.cash = nextCash
 	if exists {
 		position.Qty = nextQty
+		position.AsOf = now
 		if nextQty == 0 {
 			delete(f.positions, order.symbol)
 		}
 	} else {
 		f.positions[order.symbol] = &Position{
-			Symbol: order.symbol, Qty: signedQty, AvgPrice: price,
+			PositionID:   "fake-position-" + order.symbol,
+			InstrumentID: "fake-instrument-" + order.symbol,
+			Symbol:       order.symbol, Qty: signedQty, AvgPrice: price, AvgPriceKnown: true,
 			Kind: order.kind, Multiplier: order.multiplier,
+			Source: "fake", AsOf: now,
 		}
 	}
 	order.result.State = "filled"
 	order.result.FilledQty = order.qty
 	order.result.FilledPrice = price
+	order.updatedAt = now
+	order.filledAt = now
 	return nil
 }
 
-func (f *Fake) CancelOrder(id string) (OrderResult, error) {
+func (f *Fake) CancelOrder(_ context.Context, id string) (OrderResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	order, ok := f.orders[id]
@@ -291,15 +330,74 @@ func (f *Fake) CancelOrder(id string) (OrderResult, error) {
 	}
 	if order.result.State == "submitted" {
 		order.result.State = "cancelled"
+		order.updatedAt = time.Now().UTC()
 	}
 	return order.result, nil
 }
 
-func (f *Fake) GetOrder(id string) (OrderResult, error) {
+func (f *Fake) GetOrder(_ context.Context, id string) (OrderResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if order, ok := f.orders[id]; ok {
 		return order.result, nil
 	}
 	return OrderResult{BrokerOrderID: id, State: "rejected", Reason: "unknown order"}, nil
+}
+
+func (f *Fake) FindOrderByClientID(_ context.Context, clientOrderID string) (OrderResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, order := range f.orders {
+		if order.result.ClientOrderID == clientOrderID {
+			return order.result, nil
+		}
+	}
+	return OrderResult{ClientOrderID: clientOrderID, State: "rejected", Reason: "unknown order"}, nil
+}
+
+func (f *Fake) OpenOrders(_ context.Context) ([]ReadOrder, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]ReadOrder, 0, len(f.orders))
+	for _, order := range f.orders {
+		if order.result.State != "submitted" {
+			continue
+		}
+		out = append(out, ReadOrder{
+			BrokerOrderID: order.result.BrokerOrderID,
+			ClientOrderID: order.result.ClientOrderID,
+			InstrumentID:  "fake-instrument-" + order.symbol,
+			Symbol:        order.symbol, Side: order.side, State: order.result.State,
+			Qty: order.qty, FilledQty: order.result.FilledQty, LimitPrice: order.limit, LimitPriceKnown: true,
+			Source: "fake", AsOf: order.updatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].BrokerOrderID < out[j].BrokerOrderID })
+	return out, nil
+}
+
+func (f *Fake) RecentFills(_ context.Context, since time.Time) ([]ReadFill, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]ReadFill, 0, len(f.orders))
+	for _, order := range f.orders {
+		if order.result.State != "filled" || order.filledAt.Before(since) {
+			continue
+		}
+		out = append(out, ReadFill{
+			FillID:        "fake-fill-" + order.result.BrokerOrderID,
+			BrokerOrderID: order.result.BrokerOrderID,
+			InstrumentID:  "fake-instrument-" + order.symbol,
+			Symbol:        order.symbol, Side: order.side,
+			Qty: order.result.FilledQty, Price: order.result.FilledPrice,
+			Source: "fake", AsOf: order.filledAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AsOf.Equal(out[j].AsOf) {
+			return out[i].FillID < out[j].FillID
+		}
+		return out[i].AsOf.After(out[j].AsOf)
+	})
+	return out, nil
 }

@@ -1,0 +1,9 @@
+services:
+  kernel:
+    environment:
+      RH_MCP_TOKEN_FILE: /run/alpheus-secrets/rh-oauth.json
+      LIVE_ACCOUNT_ID_FILE: /run/alpheus-secrets/live-account-id
+    volumes:
+      - type: bind
+        source: ${RH_MCP_SECRET_DIR:?set RH_MCP_SECRET_DIR to the host directory containing rh-oauth.json}
+        target: /run/alpheus-secrets
