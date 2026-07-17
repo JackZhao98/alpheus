@@ -240,7 +240,8 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 ## 骨架刻意没做的事
 
 reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、inbox/watchlist
-注入（assemble 有 TODO）、订单重挂状态机接线、watchdog 对 runtime `/wake` 的实际投递（端点和
-Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
+注入（assemble 有 TODO）、watchdog 对 runtime `/wake` 的实际投递（端点和
+Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI，以及 M11 之前明确禁止的
+Robinhood 生产写能力。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。
 这些都有明确的挂载点，但骨架的任务是把边界立住。

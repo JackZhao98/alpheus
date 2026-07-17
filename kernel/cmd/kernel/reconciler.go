@@ -236,16 +236,22 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 	if err != nil {
 		return err
 	}
+	var op risk.Operation
+	if err := json.Unmarshal(row.Payload, &op); err != nil {
+		_, failErr := s.store.FailPendingAttempt(attempt.ID, "persisted operation is invalid")
+		return errors.Join(err, failErr)
+	}
+	if attempt.Intent == "cancel" && (op.Action == "open" || op.Action == "close") {
+		return s.reconcilePendingRepriceCancel(ctx, attempt, op)
+	}
+	if attempt.Intent == "place" && attempt.Seq > 1 && (op.Action == "open" || op.Action == "close") {
+		return s.reconcilePendingReplacement(ctx, attempt, op)
+	}
 	reviewApproved := row.Class == "C" && row.Status == "approved"
 	if lifetime := s.proposalLifetime(); !reviewApproved &&
 		(lifetime <= 0 || !time.Now().UTC().Before(row.TS.Add(lifetime))) {
 		_, failErr := s.store.FailPendingAttempt(attempt.ID, "proposal expired before recovery")
 		return failErr
-	}
-	var op risk.Operation
-	if err := json.Unmarshal(row.Payload, &op); err != nil {
-		_, failErr := s.store.FailPendingAttempt(attempt.ID, "persisted operation is invalid")
-		return errors.Join(err, failErr)
 	}
 
 	switch op.Action {
@@ -432,6 +438,128 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 	return err
 }
 
+func (s *server) reconcilePendingRepriceCancel(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation) error {
+	order, err := s.store.GetOrderByBrokerID(attempt.TargetBrokerOrderID)
+	if err != nil {
+		return err
+	}
+	policyReason, err := s.repricePolicy(ctx, op, order)
+	if err != nil {
+		return err
+	}
+	if policyReason == "" {
+		if _, err := s.boundedReplacementLimit(ctx, op, order); err != nil {
+			return err
+		}
+	}
+	return s.executePendingRepriceCancel(ctx, attempt, order, op, policyReason)
+}
+
+func (s *server) reconcilePendingReplacement(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation) error {
+	order, err := s.store.GetOrderByAttempt(attempt.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.boundedReplacementLimit(ctx, op, order); err != nil {
+		return err
+	}
+	switch op.Action {
+	case "open":
+		reservation, err := s.store.GetOpenReservation(attempt.OpenReservationID)
+		if err != nil || reservation.OperationID != attempt.OperationID ||
+			reservation.ResourceState != "held" || reservation.RemainingQty != attempt.Qty {
+			_, failErr := s.store.FailPendingAttempt(attempt.ID, "replacement open reservation is not held")
+			return errors.Join(err, failErr)
+		}
+		granted, err := s.store.HasTradeGrant(attempt.OperationID)
+		if err != nil || !granted {
+			_, failErr := s.store.FailPendingAttempt(attempt.ID, "replacement trade grant is missing")
+			return errors.Join(err, failErr)
+		}
+		halted, err := s.repriceLedgerHalted(ctx, op.Shadow)
+		if err != nil {
+			return err
+		}
+		if halted {
+			_, err := s.store.FailPendingAttempt(attempt.ID, "order_expired_policy:ledger_halted_before_replacement")
+			return err
+		}
+	case "close":
+		covered, err := s.replacementCloseStillCovered(ctx, attempt, op)
+		if err != nil {
+			return err
+		}
+		if !covered {
+			_, err := s.store.FailPendingAttempt(attempt.ID, "replacement close is no longer covered")
+			return err
+		}
+	}
+	_, err = s.executePendingAttempt(ctx, attempt.ID)
+	return err
+}
+
+func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation) (bool, error) {
+	reservation, err := s.store.GetCloseReservation(attempt.CloseReservationID)
+	if err != nil || reservation.OperationID != attempt.OperationID ||
+		reservation.State != "held" || reservation.RemainingQty != attempt.Qty {
+		return false, err
+	}
+	covered := false
+	shadow := reservation.Ledger == "shadow"
+	err = s.store.WithProposalLock(nil, shadow, nil, func(gate store.OperationGate) error {
+		if err := gate.LockLedgerSymbol(reservation.Ledger, reservation.Symbol); err != nil {
+			return err
+		}
+		var quantity units.Qty
+		if shadow {
+			positions, err := gate.ShadowPositions()
+			if err != nil {
+				return err
+			}
+			for i := range positions {
+				if positions[i].Symbol == reservation.Symbol && positions[i].Qty > 0 &&
+					positions[i].Kind == op.Kind && positions[i].Multiplier == op.Multiplier {
+					quantity = positions[i].Qty
+					break
+				}
+			}
+		} else {
+			positionCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			positions, err := s.accountProvider().Positions(positionCtx)
+			cancel()
+			if err != nil {
+				return err
+			}
+			quantity, err = closablePositionQuantity(reservation.Symbol, positions)
+			if err != nil {
+				return nil
+			}
+			candidate := op
+			candidate.Qty = reservation.RemainingQty
+			normalized, err := normalizeClose(candidate, positions)
+			if err != nil || normalized.Side != op.Side || normalized.Kind != op.Kind || normalized.Multiplier != op.Multiplier {
+				return nil
+			}
+		}
+		exposure, err := gate.OpenExposureQuantity(reservation.Ledger, reservation.Symbol, op.Kind)
+		if err != nil {
+			return err
+		}
+		held, err := gate.HeldCloseQuantity(reservation.Ledger, reservation.Symbol)
+		if err != nil {
+			return err
+		}
+		closable := minQty(quantity, exposure)
+		if held < reservation.RemainingQty {
+			return fmt.Errorf("held close quantity is smaller than its reservation")
+		}
+		otherHeld := held - reservation.RemainingQty
+		covered = otherHeld <= closable && reservation.RemainingQty <= closable-otherHeld
+		return nil
+	})
+	return covered, err
+}
+
 func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.ExecutionAttempt, now time.Time) error {
 	claimed, err := s.store.ClaimRecoverableAttempt(
 		seen.ID, s.workerID(), seen.State, seen.Attempt, now.Add(-s.attemptClaimTimeout()),
@@ -442,6 +570,19 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 	if claimed.Intent == "paper_place" {
 		_, err := s.executeClaimedPaperAttempt(ctx, claimed)
 		return err
+	}
+	if claimed.Intent == "cancel" {
+		row, readErr := s.store.GetOperation(claimed.OperationID)
+		if readErr != nil {
+			return readErr
+		}
+		var op risk.Operation
+		if decodeErr := json.Unmarshal(row.Payload, &op); decodeErr != nil {
+			return decodeErr
+		}
+		if op.Action == "open" || op.Action == "close" {
+			return s.reconcileUncertainReprice(ctx, claimed, op)
+		}
 	}
 	execution := s.executionProvider()
 	if execution == nil {
@@ -471,6 +612,30 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 		State: "unknown", LastError: "broker query did not prove the effect",
 	})
 	return resolveErr
+}
+
+func (s *server) reconcileUncertainReprice(ctx context.Context, claimed *store.ExecutionAttempt, op risk.Operation) error {
+	execution := s.executionProvider()
+	if execution == nil {
+		_, err := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
+			State: "unknown", LastError: "execution capability unavailable",
+		})
+		return err
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	result, queryErr := execution.GetOrder(queryCtx, claimed.TargetBrokerOrderID)
+	cancel()
+	if queryErr != nil || !isTerminalOrderState(result.State) {
+		_, resolveErr := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
+			State: "unknown", LastError: "cancel target is not proven terminal",
+		})
+		return errors.Join(queryErr, resolveErr)
+	}
+	order, err := s.store.GetOrderByBrokerID(claimed.TargetBrokerOrderID)
+	if err != nil {
+		return s.deferTerminalReprice(claimed, "durable cancel target unavailable", err)
+	}
+	return s.finalizeRepriceResult(ctx, claimed, order, op, result, "")
 }
 
 func firstReason(verdict risk.Verdict) string {

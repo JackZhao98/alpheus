@@ -6,7 +6,7 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M5B — safe repricing**
+> Current implementation target: **M6 — Watchdog → runtime wake channel**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -43,8 +43,8 @@ PR/commit and update this index only after its acceptance criteria pass.
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
 | 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | Landed | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
-| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | **Active: M5B** | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
-| 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
+| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Landed | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
+| 3 — Runtime and review | M6, M7 | **Active: M6** | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
 ## Milestone tracker
@@ -67,8 +67,8 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M3C** | **LANDED** | M3A plus M8A provider evidence | migration 7; durable FIFO cost-basis PnL with fees/partial fills/option multipliers; conservative local/provider reconciliation and divergence latch; exact daily-loss and consecutive-loss breakers; day-scoped Admin override; Cockpit breaker facts; fresh PostgreSQL suite, isolated compose smoke, race/vet; Robinhood read-only upgrade with provider PnL and 0 orders/fills/place attempts | Phase 2 |
 | **M3D** | **LANDED** | M8A account and buying-power evidence; v1.4 amendment | exact provider-field fixture; provider buying power minus durable local reservations; micro-dollar and negative-capacity boundaries; no secondary funds model in types/API/Cockpit; unit/race/vet and isolated compose smoke green; Robinhood read-only upgrade reports authoritative 401.16 buying power with 0 orders/fills/place attempts | Phase 2 |
 | **M4** | **LANDED** | M3D | pending-row `FOR UPDATE` plus stable ledger lock; atomic approval status/grant/open-reservation/attempt/typed-order staging; fresh absolute-gate and TTL handling; approval snapshot event; persisted-cap bound; post-commit/pre-claim recovery preserves the reviewed C entitlement beyond proposal TTL while rechecking absolutes; 20-way memory and PostgreSQL concurrency probes; rollback proof; extended Class-C compose smoke; race/vet; Robinhood read-only upgrade with review 405 and 0 orders/fills/place attempts | Phase 2 |
-| **M5B** | **NEXT** | M4 | — | Phase 2 |
-| M6 | PENDING | M5B | — | Phase 3 |
+| **M5B** | **LANDED** | M4 | bounded half-step/tick repricer; durable cancel/query/place effects with fencing; same-reservation partial-fill transfer and one-grant proof; hard open/close price bounds; max-reprice and halt policy expiry; ambiguous-cancel hold; stale-reconciler fence; pending/uncertain crash recovery beyond original proposal TTL; memory and PostgreSQL acceptance suites; isolated Compose reprice probe and full smoke; race/vet green | Phase 2 |
+| **M6** | **NEXT** | M5B | — | Phase 3 |
 | M7 | PENDING | M6 | — | Phase 3 |
 | M9 | PENDING | M7; full pre-live certification | — | Phase 4 |
 | M10 | PENDING | M9 | — | Phase 4 |

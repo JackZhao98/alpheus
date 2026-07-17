@@ -81,6 +81,10 @@ type storeAPI interface {
 	GetOpenReservation(id string) (*store.OpenReservation, error)
 	HasTradeGrant(operationID string) (bool, error)
 	ListWorkingOrders(limit int) ([]store.Order, error)
+	GetOrderByAttempt(attemptID string) (*store.Order, error)
+	GetOrderByBrokerID(brokerOrderID string) (*store.Order, error)
+	StageRepriceCancel(orderID string) (*store.ExecutionAttempt, error)
+	FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, update store.OrderUpdate, replacement *store.RepriceReplacement, policyReason string) (*store.ExecutionAttempt, error)
 	ApplyOrderUpdate(update store.OrderUpdate) error
 	ListTerminalReservationCandidates(limit int) ([]store.TerminalReservationCandidate, error)
 	ReleaseProvenTerminalReservation(candidate store.TerminalReservationCandidate, provenFilledQty units.Qty, terminalProof bool) (bool, error)
@@ -241,6 +245,9 @@ func main() {
 	}
 	if err := startAttemptReconciler(s); err != nil {
 		log.Fatalf("attempt reconciler startup: %v", err)
+	}
+	if err := startRepricer(s); err != nil {
+		log.Fatalf("repricer startup: %v", err)
 	}
 	st.Event("kernel_start", map[string]string{
 		"broker": os.Getenv("BROKER"), "profile": limits.Profile, "mode": mode.TradingMode,

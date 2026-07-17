@@ -14,6 +14,7 @@ import (
 var (
 	ErrIllegalOrderTransition = errors.New("illegal order transition")
 	ErrFillIntegrity          = errors.New("fill integrity failure")
+	errRepriceManagedOrder    = errors.New("order update is owned by reprice cancellation")
 )
 
 type Order struct {
@@ -54,11 +55,11 @@ type OrderUpdate struct {
 func (t *ledgerTx) InsertOrder(order Order) error {
 	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO orders
 		(id,operation_id,execution_attempt_id,broker_order_id,client_order_id,
-		 ledger,symbol,side,kind,multiplier,qty,limit_micros,state)
-		VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		 ledger,symbol,side,kind,multiplier,qty,limit_micros,state,reprices)
+		VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		order.ID, order.OperationID, order.ExecutionAttemptID, order.ClientOrderID,
 		order.Ledger, order.Symbol, order.Side, order.Kind, order.Multiplier,
-		int64(order.Qty), int64(order.Limit), order.State)
+		int64(order.Qty), int64(order.Limit), order.State, order.Reprices)
 	return normalizeDBError(err)
 }
 
@@ -91,11 +92,25 @@ func (s *Store) GetOrderByAttempt(attemptID string) (*Order, error) {
 	return order, normalizeDBError(err)
 }
 
+func (s *Store) GetOrderByBrokerID(brokerOrderID string) (*Order, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	order, err := scanOrder(s.DB.QueryRowContext(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE broker_order_id=$1`, brokerOrderID))
+	return order, normalizeDBError(err)
+}
+
 func (s *Store) ListWorkingOrders(limit int) ([]Order, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+orderColumns+` FROM orders
 		WHERE state IN ('submitted','partially_filled') AND broker_order_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM execution_attempt cancel_attempt
+			WHERE cancel_attempt.operation_id=orders.operation_id
+			  AND cancel_attempt.intent='cancel'
+			  AND cancel_attempt.target_broker_order_id=orders.broker_order_id
+			  AND cancel_attempt.state IN ('pending','claimed','unknown'))
 		ORDER BY updated_at,id LIMIT $1`, limit)
 	if err != nil {
 		return nil, normalizeDBError(err)
@@ -120,8 +135,11 @@ func (s *Store) ApplyOrderUpdate(update OrderUpdate) error {
 		return normalizeDBError(err)
 	}
 	defer tx.Rollback()
-	order, err := applyOrderUpdate(ctx, tx, update)
+	order, err := applyOrderUpdate(ctx, tx, update, false)
 	if err != nil {
+		if errors.Is(err, errRepriceManagedOrder) {
+			return nil
+		}
 		_ = tx.Rollback()
 		return s.recordOrderUpdateFailure(update, err)
 	}
@@ -151,7 +169,7 @@ func terminalPlacementState(orderState string) (string, string) {
 	}
 }
 
-func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Order, error) {
+func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate, preserveReservation bool) (*Order, error) {
 	if update.ExecutionAttemptID == "" && update.BrokerOrderID == "" {
 		return nil, fmt.Errorf("order update has no durable identity")
 	}
@@ -177,6 +195,23 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 	}
 	if order.BrokerOrderID != "" && update.BrokerOrderID != "" && order.BrokerOrderID != update.BrokerOrderID {
 		return nil, fmt.Errorf("%w: order broker id changed", ErrFillIntegrity)
+	}
+	if !preserveReservation && order.BrokerOrderID != "" {
+		var repriceManaged bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM execution_attempt
+			WHERE operation_id=$1 AND intent='cancel' AND target_broker_order_id=$2
+			  AND state IN ('pending','claimed','unknown','settled'))`,
+			order.OperationID, order.BrokerOrderID).Scan(&repriceManaged); err != nil {
+			return nil, err
+		}
+		if repriceManaged {
+			// FinalizeRepriceCancel is the sole owner of this source order after a
+			// durable reprice cancel exists. A generic reconciler may have listed
+			// the order before staging and must not release the reservation from a
+			// stale terminal snapshot after it has transferred to a replacement.
+			return nil, errRepriceManagedOrder
+		}
 	}
 	if err := validateOrderTransition(order.State, update.State); err != nil {
 		return nil, err
@@ -279,10 +314,12 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 	if reservationID.Valid {
 		switch update.State {
 		case "cancelled", "rejected", "expired":
-			if _, err := tx.ExecContext(ctx, `UPDATE close_reservation SET
+			if !preserveReservation {
+				if _, err := tx.ExecContext(ctx, `UPDATE close_reservation SET
 				state='released',remaining_qty=0,released_at=COALESCE(released_at,now())
 				WHERE id=$1 AND state='held'`, reservationID.String); err != nil {
-				return nil, err
+					return nil, err
+				}
 			}
 		case "filled":
 			var remaining int64
@@ -298,11 +335,13 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 	if openReservationID.Valid {
 		switch update.State {
 		case "cancelled", "rejected", "expired":
-			if _, err := tx.ExecContext(ctx, `UPDATE open_reservation SET
+			if !preserveReservation {
+				if _, err := tx.ExecContext(ctx, `UPDATE open_reservation SET
 				resource_state='released',remaining_risk_micros=0,remaining_cash_micros=0,
 				settled_at=COALESCE(settled_at,now())
 				WHERE id=$1 AND resource_state='held'`, openReservationID.String); err != nil {
-				return nil, err
+					return nil, err
+				}
 			}
 		case "filled":
 			var resourceState string

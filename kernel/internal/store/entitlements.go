@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"alpheus/kernel/internal/units"
@@ -276,14 +277,29 @@ func validateM3AExecutionEntitlement(ctx context.Context, tx *sql.Tx, attempt *E
 	if !active {
 		return nil
 	}
-	var action string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(payload->>'action','')
-		FROM operations WHERE id=$1`, attempt.OperationID).Scan(&action); err != nil {
+	var action, operationSide string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(payload->>'action',''),
+		COALESCE(payload->>'side','') FROM operations WHERE id=$1`, attempt.OperationID).Scan(
+		&action, &operationSide); err != nil {
 		return err
 	}
 	if attempt.Intent == "cancel" {
-		if action != "cancel" || attempt.OpenReservationID != "" || attempt.CloseReservationID != "" {
+		if attempt.OpenReservationID != "" || attempt.CloseReservationID != "" {
 			return fmt.Errorf("%w: cancel attempt has invalid execution entitlement", ErrFillIntegrity)
+		}
+		if action == "cancel" {
+			return nil
+		}
+		if action != "open" && action != "close" {
+			return fmt.Errorf("%w: reprice cancel belongs to action %q", ErrFillIntegrity, action)
+		}
+		var orderOperationID string
+		if err := tx.QueryRowContext(ctx, `SELECT operation_id FROM orders
+			WHERE broker_order_id=$1`, attempt.TargetBrokerOrderID).Scan(&orderOperationID); err != nil {
+			return fmt.Errorf("%w: reprice cancel target is not durable", ErrFillIntegrity)
+		}
+		if orderOperationID != attempt.OperationID {
+			return fmt.Errorf("%w: reprice cancel target belongs to another operation", ErrFillIntegrity)
 		}
 		return nil
 	}
@@ -344,10 +360,16 @@ func validateM3AExecutionEntitlement(ctx context.Context, tx *sql.Tx, attempt *E
 		} else if isTerminalUnfilledOrderState(orderState) {
 			expectedState = "released"
 		}
+		expectedRemaining, err := replacementOrderRemaining(ctx, tx, attempt, orderQty, expectedState)
+		if err != nil {
+			return err
+		}
+		quantityMismatch := (attempt.Seq == 1 && originalQty != orderQty) ||
+			(attempt.Seq > 1 && expectedState == "held" && remainingQty != expectedRemaining)
 		if reservationOperationID != attempt.OperationID || reservationLedger != orderLedger ||
 			grantLedger != orderLedger || reservationState != expectedState ||
 			reservationSymbol != orderSymbol || reservationKind != orderKind ||
-			orderSide != "buy" || orderMultiplier <= 0 || originalQty != orderQty ||
+			orderSide != "buy" || orderMultiplier <= 0 || quantityMismatch ||
 			originalRisk <= 0 || originalCash <= 0 || authorizedRisk != originalRisk ||
 			riskSource != "computed" || !reservationMarketDay.Equal(grantMarketDay) ||
 			(expectedState == "held" && remainingQty <= 0) {
@@ -374,16 +396,39 @@ func validateM3AExecutionEntitlement(ctx context.Context, tx *sql.Tx, attempt *E
 		if isTerminalOrderStateForEntitlement(orderState) {
 			expectedState = "released"
 		}
+		expectedRemaining, err := replacementOrderRemaining(ctx, tx, attempt, orderQty, expectedState)
+		if err != nil {
+			return err
+		}
+		quantityMismatch := (attempt.Seq == 1 && originalQty != orderQty) ||
+			(attempt.Seq > 1 && expectedState == "held" && remainingQty != expectedRemaining)
 		if reservationOperationID != attempt.OperationID || reservationLedger != orderLedger ||
 			reservationState != expectedState || reservationSymbol != orderSymbol ||
-			orderSide != "sell" || orderKind == "" || orderMultiplier <= 0 ||
-			originalQty != orderQty || (expectedState == "held" && remainingQty <= 0) {
+			(orderSide != "sell" && orderSide != "buy") || orderSide != operationSide ||
+			orderKind == "" || orderMultiplier <= 0 ||
+			quantityMismatch || (expectedState == "held" && remainingQty <= 0) {
 			return fmt.Errorf("%w: close attempt entitlement does not match its durable order", ErrFillIntegrity)
 		}
 	default:
 		return fmt.Errorf("%w: placement attempt belongs to action %q", ErrFillIntegrity, action)
 	}
 	return nil
+}
+
+func replacementOrderRemaining(ctx context.Context, tx *sql.Tx, attempt *ExecutionAttempt, orderQty int64, reservationState string) (int64, error) {
+	if attempt.Seq <= 1 || reservationState != "held" {
+		return orderQty, nil
+	}
+	var durableFilled int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(f.qty),0)
+		FROM orders o LEFT JOIN fills f ON f.order_id=o.id
+		WHERE o.execution_attempt_id=$1`, attempt.ID).Scan(&durableFilled); err != nil {
+		return 0, err
+	}
+	if durableFilled < 0 || durableFilled > orderQty {
+		return 0, fmt.Errorf("%w: replacement fills exceed its order quantity", ErrFillIntegrity)
+	}
+	return orderQty - durableFilled, nil
 }
 
 func isTerminalUnfilledOrderState(state string) bool {
@@ -487,7 +532,7 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 		if resolution.OrderUpdate.ExecutionAttemptID == "" {
 			resolution.OrderUpdate.ExecutionAttemptID = id
 		}
-		if _, err := applyOrderUpdate(ctx, tx, *resolution.OrderUpdate); err != nil {
+		if _, err := applyOrderUpdate(ctx, tx, *resolution.OrderUpdate, false); err != nil {
 			_ = tx.Rollback()
 			return false, s.recordOrderUpdateFailure(*resolution.OrderUpdate, err)
 		}
@@ -606,6 +651,14 @@ func (s *Store) FailPendingAttempt(id, reason string) (bool, error) {
 		"attempt_id": id, "operation_id": operationID, "reason": reason,
 	}); err != nil {
 		return false, normalizeDBError(err)
+	}
+	if strings.HasPrefix(reason, "order_expired_policy:") {
+		if err := insertEvent(ctx, tx, "order_expired_policy", map[string]any{
+			"operation_id": operationID, "attempt_id": id,
+			"reason": strings.TrimPrefix(reason, "order_expired_policy:"),
+		}); err != nil {
+			return false, normalizeDBError(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, normalizeDBError(err)

@@ -556,7 +556,7 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 		return false, nil
 	}
 	if resolution.OrderUpdate != nil {
-		if err := m.applyMemoryOrderUpdateLocked(*resolution.OrderUpdate); err != nil {
+		if err := m.applyMemoryOrderUpdateLocked(*resolution.OrderUpdate, false, true); err != nil {
 			return false, err
 		}
 	}
@@ -596,7 +596,17 @@ func (m *memoryStore) ListWorkingOrders(limit int) ([]store.Order, error) {
 	defer m.mu.Unlock()
 	result := make([]store.Order, 0, limit)
 	for _, order := range m.orders {
-		if order.State == "submitted" || order.State == "partially_filled" {
+		unresolvedCancel := false
+		for _, attempt := range m.attempts {
+			if attempt.OperationID == order.OperationID && attempt.Intent == "cancel" &&
+				attempt.TargetBrokerOrderID == order.BrokerOrderID &&
+				(attempt.State == "pending" || attempt.State == "claimed" || attempt.State == "unknown") {
+				unresolvedCancel = true
+				break
+			}
+		}
+		if !unresolvedCancel && order.BrokerOrderID != "" &&
+			(order.State == "submitted" || order.State == "partially_filled") {
 			result = append(result, order)
 			if len(result) == limit {
 				break
@@ -606,10 +616,248 @@ func (m *memoryStore) ListWorkingOrders(limit int) ([]store.Order, error) {
 	return result, nil
 }
 
+func (m *memoryStore) GetOrderByBrokerID(brokerOrderID string) (*store.Order, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, order := range m.orders {
+		if order.BrokerOrderID == brokerOrderID {
+			copy := order
+			return &copy, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+
+func (m *memoryStore) GetOrderByAttempt(attemptID string) (*store.Order, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	order, ok := m.orders[attemptID]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	copy := order
+	return &copy, nil
+}
+
+func (m *memoryStore) StageRepriceCancel(orderID string) (*store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var source store.Order
+	found := false
+	for _, order := range m.orders {
+		if order.ID == orderID {
+			source, found = order, true
+			break
+		}
+	}
+	if !found || source.BrokerOrderID == "" ||
+		(source.State != "submitted" && source.State != "partially_filled") {
+		return nil, nil
+	}
+	seq := 1
+	for _, attempt := range m.attempts {
+		if attempt.OperationID != source.OperationID {
+			continue
+		}
+		if attempt.Seq >= seq {
+			seq = attempt.Seq + 1
+		}
+		if attempt.Intent == "cancel" && attempt.TargetBrokerOrderID == source.BrokerOrderID &&
+			(attempt.State == "pending" || attempt.State == "claimed" || attempt.State == "unknown") {
+			return nil, nil
+		}
+	}
+	attempt := store.ExecutionAttempt{
+		ID: store.NewID(), OperationID: source.OperationID, Seq: seq,
+		Intent: "cancel", TargetBrokerOrderID: source.BrokerOrderID,
+		State: "pending", CreatedAt: time.Now().UTC(),
+	}
+	m.attempts[attempt.ID] = attempt
+	m.events = append(m.events, "reprice_cancel_staged")
+	copy := attempt
+	return &copy, nil
+}
+
+func (m *memoryStore) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, update store.OrderUpdate, replacement *store.RepriceReplacement, policyReason string) (*store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cancelAttempt, ok := m.attempts[cancelAttemptID]
+	if !ok || cancelAttempt.Intent != "cancel" || cancelAttempt.State != "claimed" ||
+		cancelAttempt.Attempt != fencingToken {
+		return nil, nil
+	}
+	var source store.Order
+	found := false
+	for _, order := range m.orders {
+		if order.BrokerOrderID == cancelAttempt.TargetBrokerOrderID {
+			source, found = order, true
+			break
+		}
+	}
+	if !found {
+		return nil, errors.New("reprice source order not found")
+	}
+	if !isTerminalOrderState(update.State) {
+		return nil, errors.New("reprice cancel lacks terminal proof")
+	}
+	update.ExecutionAttemptID = source.ExecutionAttemptID
+	update.BrokerOrderID = source.BrokerOrderID
+	if err := m.applyMemoryOrderUpdateLocked(update, true, false); err != nil {
+		return nil, err
+	}
+	placeAttempt := m.attempts[source.ExecutionAttemptID]
+	placeAttempt.State = "settled"
+	m.attempts[placeAttempt.ID] = placeAttempt
+	cancelAttempt.State = "settled"
+	cancelAttempt.BrokerOrderID = source.BrokerOrderID
+	m.attempts[cancelAttempt.ID] = cancelAttempt
+	m.events = append(m.events, "execution_attempt_resolved")
+
+	durableFilled := units.Qty(0)
+	for _, fill := range m.fills {
+		if fill.orderID == source.ID {
+			durableFilled += fill.fill.Qty
+		}
+	}
+	remaining := source.Qty - durableFilled
+	if remaining < 0 {
+		return nil, store.ErrFillIntegrity
+	}
+	if update.State == "filled" || remaining == 0 {
+		m.setMemoryOperationStatusLocked(source.OperationID, "executed")
+		return nil, nil
+	}
+	if replacement == nil {
+		if policyReason == "" {
+			return nil, errors.New("terminal reprice cancel lacks policy reason")
+		}
+		m.releaseMemoryRepriceReservationLocked(placeAttempt)
+		status := "failed"
+		for _, fill := range m.fills {
+			order := m.orderByIDLocked(fill.orderID)
+			if order != nil && order.OperationID == source.OperationID {
+				status = "executed"
+				break
+			}
+		}
+		m.setMemoryOperationStatusLocked(source.OperationID, status)
+		m.events = append(m.events, "order_expired_policy")
+		return nil, nil
+	}
+	if replacement.AttemptID == "" || replacement.OrderID == "" ||
+		replacement.ClientOrderID == "" || replacement.Limit <= 0 {
+		return nil, errors.New("replacement identity or limit is incomplete")
+	}
+	op := m.operations[source.OperationID]
+	if (op.Action == "open" && (op.Side != "buy" || replacement.Limit > op.ApprovedPriceCap)) ||
+		(op.Action == "close" && (op.Limit == nil ||
+			(op.Side == "buy" && replacement.Limit > *op.Limit) ||
+			(op.Side == "sell" && replacement.Limit < *op.Limit))) {
+		return nil, errors.New("replacement exceeds persisted price bound")
+	}
+	if m.heldMemoryRepriceQuantityLocked(placeAttempt) != remaining {
+		return nil, errors.New("replacement quantity differs from held reservation")
+	}
+	freshSource := m.orders[source.ExecutionAttemptID]
+	freshSource.Reprices++
+	m.orders[source.ExecutionAttemptID] = freshSource
+	next := store.ExecutionAttempt{
+		ID: replacement.AttemptID, OperationID: source.OperationID, Seq: cancelAttempt.Seq + 1,
+		CloseReservationID: placeAttempt.CloseReservationID,
+		OpenReservationID:  placeAttempt.OpenReservationID,
+		Intent:             "place", ClientOrderID: replacement.ClientOrderID,
+		State: "pending", Qty: remaining, Limit: replacement.Limit,
+		CreatedAt: time.Now().UTC(),
+	}
+	m.attempts[next.ID] = next
+	m.orders[next.ID] = store.Order{
+		ID: replacement.OrderID, OperationID: source.OperationID, ExecutionAttemptID: next.ID,
+		ClientOrderID: next.ClientOrderID, Ledger: source.Ledger, Symbol: source.Symbol,
+		Side: source.Side, Kind: source.Kind, Multiplier: source.Multiplier,
+		Qty: remaining, Limit: next.Limit, State: "new", Reprices: freshSource.Reprices,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	m.events = append(m.events, "order_replacement_staged")
+	copy := next
+	return &copy, nil
+}
+
+func (m *memoryStore) orderByIDLocked(id string) *store.Order {
+	for _, order := range m.orders {
+		if order.ID == id {
+			copy := order
+			return &copy
+		}
+	}
+	return nil
+}
+
+func (m *memoryStore) setMemoryOperationStatusLocked(operationID, status string) {
+	m.statuses[operationID] = status
+	row := m.operationRows[operationID]
+	row.Status = status
+	m.operationRows[operationID] = row
+}
+
+func (m *memoryStore) releaseMemoryRepriceReservationLocked(attempt store.ExecutionAttempt) {
+	if attempt.CloseReservationID != "" {
+		reservation := m.reservations[attempt.CloseReservationID]
+		if reservation.State == "held" {
+			reservation.State, reservation.RemainingQty = "released", 0
+			reservation.ReleasedAt = time.Now().UTC()
+			m.reservations[attempt.CloseReservationID] = reservation
+		}
+	}
+	if attempt.OpenReservationID != "" {
+		reservation := m.openReservations[attempt.OpenReservationID]
+		if reservation.ResourceState == "held" {
+			reservation.ResourceState = "released"
+			reservation.RemainingRisk, reservation.RemainingCash = 0, 0
+			reservation.SettledAt = time.Now().UTC()
+			m.openReservations[attempt.OpenReservationID] = reservation
+		}
+	}
+}
+
+func (m *memoryStore) heldMemoryRepriceQuantityLocked(attempt store.ExecutionAttempt) units.Qty {
+	if attempt.CloseReservationID != "" && attempt.OpenReservationID == "" {
+		reservation := m.reservations[attempt.CloseReservationID]
+		if reservation.State == "held" {
+			return reservation.RemainingQty
+		}
+	}
+	if attempt.OpenReservationID != "" && attempt.CloseReservationID == "" {
+		reservation := m.openReservations[attempt.OpenReservationID]
+		if reservation.ResourceState == "held" {
+			return reservation.RemainingQty
+		}
+	}
+	return 0
+}
+
 func (m *memoryStore) ApplyOrderUpdate(update store.OrderUpdate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.applyMemoryOrderUpdateLocked(update)
+	order, ok := m.orders[update.ExecutionAttemptID]
+	if !ok && update.BrokerOrderID != "" {
+		for _, candidate := range m.orders {
+			if candidate.BrokerOrderID == update.BrokerOrderID {
+				order, ok = candidate, true
+				break
+			}
+		}
+	}
+	if ok {
+		for _, attempt := range m.attempts {
+			if attempt.OperationID == order.OperationID && attempt.Intent == "cancel" &&
+				attempt.TargetBrokerOrderID == order.BrokerOrderID &&
+				(attempt.State == "pending" || attempt.State == "claimed" ||
+					attempt.State == "unknown" || attempt.State == "settled") {
+				return nil
+			}
+		}
+	}
+	return m.applyMemoryOrderUpdateLocked(update, false, true)
 }
 
 func (m *memoryStore) ListTerminalReservationCandidates(int) ([]store.TerminalReservationCandidate, error) {
@@ -620,7 +868,7 @@ func (m *memoryStore) ReleaseProvenTerminalReservation(store.TerminalReservation
 	return false, nil
 }
 
-func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) error {
+func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate, preserveReservation, finalizePlacement bool) error {
 	order, ok := m.orders[update.ExecutionAttemptID]
 	if !ok {
 		return nil // Older recovery fixtures predate M2.9 order creation.
@@ -746,7 +994,7 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 		reservation := m.reservations[attempt.CloseReservationID]
 		switch update.State {
 		case "cancelled", "rejected", "expired":
-			if reservation.State == "held" {
+			if !preserveReservation && reservation.State == "held" {
 				reservation.State = "released"
 				reservation.RemainingQty = 0
 				reservation.ReleasedAt = time.Now().UTC()
@@ -762,7 +1010,7 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 		reservation := m.openReservations[attempt.OpenReservationID]
 		switch update.State {
 		case "cancelled", "rejected", "expired":
-			if reservation.ResourceState == "held" {
+			if !preserveReservation && reservation.ResourceState == "held" {
 				reservation.ResourceState = "released"
 				reservation.RemainingRisk, reservation.RemainingCash = 0, 0
 				reservation.SettledAt = time.Now().UTC()
@@ -779,7 +1027,7 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 	order.UpdatedAt = time.Now().UTC()
 	m.orders[order.ExecutionAttemptID] = order
 	m.events = append(m.events, "order_update")
-	if attemptState, operationStatus := memoryTerminalPlacementState(update.State); attemptState != "" {
+	if attemptState, operationStatus := memoryTerminalPlacementState(update.State); finalizePlacement && attemptState != "" {
 		attempt := m.attempts[order.ExecutionAttemptID]
 		if attempt.State == "placed" {
 			attempt.State = attemptState
@@ -835,6 +1083,9 @@ func (m *memoryStore) FailPendingAttempt(id, reason string) (bool, error) {
 		reservation.RemainingRisk, reservation.RemainingCash = 0, 0
 		reservation.SettledAt = time.Now().UTC()
 		m.openReservations[attempt.OpenReservationID] = reservation
+	}
+	if strings.HasPrefix(reason, "order_expired_policy:") {
+		m.events = append(m.events, "order_expired_policy")
 	}
 	return true, nil
 }
