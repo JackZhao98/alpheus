@@ -17,6 +17,29 @@ type Role struct {
 	OutputSchema    string            `yaml:"output_schema"`
 	InjectedContext []string          `yaml:"injected_context"`
 	PromptSlots     map[string]string `yaml:"prompt_slots"`
+	// PromptSlotOrder preserves the role card's authored order. PromptSlots is a
+	// map for convenient lookup, but map iteration must never reorder a prompt.
+	PromptSlotOrder []string `yaml:"-"`
+}
+
+func (r *Role) UnmarshalYAML(node *yaml.Node) error {
+	type plainRole Role
+	var decoded plainRole
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = Role(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != "prompt_slots" {
+			continue
+		}
+		mapping := node.Content[i+1]
+		for j := 0; j+1 < len(mapping.Content); j += 2 {
+			r.PromptSlotOrder = append(r.PromptSlotOrder, mapping.Content[j].Value)
+		}
+		break
+	}
+	return nil
 }
 
 func Load(dir string) ([]Role, error) {

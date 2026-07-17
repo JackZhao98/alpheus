@@ -36,6 +36,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("POST /operations/{id}/review", methodNotAllowed)
 		mux.HandleFunc("POST /journal", methodNotAllowed)
 		mux.HandleFunc("PUT /blackboard/{day}", methodNotAllowed)
+		mux.HandleFunc("POST /telemetry", methodNotAllowed)
 		mux.HandleFunc("POST /halt", methodNotAllowed)
 		mux.HandleFunc("POST /breaker/resume", methodNotAllowed)
 		return mux
@@ -45,6 +46,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /operations/{id}/review", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.review)))
 	mux.HandleFunc("POST /journal", s.authorize(permissionRuntime, s.postJournal))
 	mux.HandleFunc("PUT /blackboard/{day}", s.authorize(permissionRuntime, s.putBlackboard))
+	mux.HandleFunc("POST /telemetry", s.authorize(permissionRuntime, s.postTelemetry))
 	mux.HandleFunc("POST /halt", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postHalt)))
 	mux.HandleFunc("POST /breaker/resume", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postBreakerResume)))
 	if s.tradingMode() == config.ModeSim || s.tradingMode() == config.ModeShadow {

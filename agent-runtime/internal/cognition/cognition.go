@@ -16,12 +16,28 @@ type Cognition interface {
 	Run(role roles.Role, ctx map[string]json.RawMessage) (contracts.Output, error)
 }
 
-func New() (Cognition, error) {
+type Option func(*options)
+
+type options struct {
+	telemetry telemetrySink
+}
+
+// WithTelemetry sends bounded usage metadata to the kernel. Delivery is best
+// effort and never changes a cognition result.
+func WithTelemetry(sink func(Telemetry) error) Option {
+	return func(cfg *options) { cfg.telemetry = sink }
+}
+
+func New(opts ...Option) (Cognition, error) {
+	var cfg options
+	for _, option := range opts {
+		option(&cfg)
+	}
 	switch os.Getenv("COGNITION") {
 	case "", "stub":
 		return Stub{}, nil
 	case "llm":
-		return LLM{}, nil
+		return newLLMFromEnvironment(cfg.telemetry)
 	default:
 		return nil, fmt.Errorf("unknown COGNITION %q", os.Getenv("COGNITION"))
 	}

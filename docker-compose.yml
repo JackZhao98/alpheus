@@ -57,6 +57,10 @@ services:
       COGNITION: ${COGNITION:-stub}      # stub | llm
       DECIDER_MODEL: ${DECIDER_MODEL:-}  # filled when COGNITION=llm
       MONITOR_MODEL: ${MONITOR_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SESSION_TOKEN_BUDGET: ${SESSION_TOKEN_BUDGET:-12000}
+      PROMPT_SLOT_MAX_BYTES: ${PROMPT_SLOT_MAX_BYTES:-8192}
+      CONTEXT_SLOT_MAX_BYTES: ${CONTEXT_SLOT_MAX_BYTES:-1048576}
     depends_on:
       kernel: { condition: service_healthy }
 

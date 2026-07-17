@@ -64,6 +64,7 @@ func TestProtectedRoutesEnforceTokenGrants(t *testing.T) {
 		{"review", http.MethodPost, "/operations/" + id + "/review", `{"verdict":"rejected"}`},
 		{"journal", http.MethodPost, "/journal", `{"operation_id":"` + id + `","hypothesis":{}}`},
 		{"blackboard", http.MethodPut, "/blackboard/2026-07-17", `{}`},
+		{"telemetry", http.MethodPost, "/telemetry", `{"role":"scout","model":"test","input_tokens":1,"output_tokens":1,"latency_ms":1,"attempt":1,"status":"success"}`},
 	} {
 		t.Run(tc.name+"/missing", func(t *testing.T) {
 			w := routeRequest(handler, tc.method, tc.target, tc.body, "")
@@ -125,6 +126,7 @@ func TestReadOnlyRoutesReturn405AndLiveDoesNotMountSim(t *testing.T) {
 		{http.MethodPost, "/operations/11111111-1111-4111-8111-111111111111/review", `{}`},
 		{http.MethodPost, "/journal", `{}`},
 		{http.MethodPut, "/blackboard/2026-07-17", `{}`},
+		{http.MethodPost, "/telemetry", `{}`},
 		{http.MethodPost, "/halt", `{"reason":"test"}`},
 	} {
 		w := routeRequest(readOnly.routes(), request.method, request.path, request.body, "")

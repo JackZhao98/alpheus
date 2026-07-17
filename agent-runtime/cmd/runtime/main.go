@@ -43,11 +43,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("roles: %v", err)
 	}
-	cog, err := cognition.New()
+	client := assemble.New(kernel, runtimeToken)
+	cog, err := cognition.New(cognition.WithTelemetry(func(event cognition.Telemetry) error {
+		_, err := postJSON(client, "/telemetry", event)
+		return err
+	}))
 	if err != nil {
 		log.Fatalf("cognition: %v", err)
 	}
-	client := assemble.New(kernel, runtimeToken)
 
 	names := make([]string, len(rs))
 	for i, r := range rs {

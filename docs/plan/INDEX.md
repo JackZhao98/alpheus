@@ -6,7 +6,7 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M10 — LLM cognition adapter**
+> Current implementation target: **M11 — Robinhood live adapter + canary (always last)**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -45,7 +45,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 | 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | Landed | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Landed | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Landed | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
-| 4 — Pre-live and live | M9, M10, M11 | **Active: M10**; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
+| 4 — Pre-live and live | M9, M10, M11 | **Active: M11 (last)** | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
 ## Milestone tracker
 
@@ -71,7 +71,7 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M6** | **LANDED** | M5B | scheduled-slot occurrence ids; authenticated private `/wake`; concurrent duplicate suppression; disabled-fallback mode; audited delivery failures; health-gated runtime startup; unit/race/vet plus isolated Compose 202/duplicate/401/404 probes and full smoke green | Phase 3 |
 | **M7** | **LANDED** | M6 | exact-origin Admin controls; pending-review risk/cap/quote/check display; two-step Halt and constrained breaker Resume; non-actionable uncertainty warnings; event/operation audit ids; phone-width and inert-XSS browser probes; approval/rejection concurrency state machine; Halt open-block/full-close proof; PostgreSQL race suite and isolated Compose smoke green | Phase 3 |
 | **M9** | **LANDED** | M7; full pre-live certification | 96.6% risk coverage; deterministic claimed/accepted/crash/reprice fault seams; live/shadow daily, open-risk, buying-power and close-reservation barriers plus PostgreSQL advisory-lock proof; six-operation full-day idempotent replay; paused DB 503 in 3.005701s with zero effects; PostgreSQL process replacement recovery; final unknown=0 and unsafe-orphan=0; isolated race/vet/smoke green | Phase 4 |
-| **M10** | **NEXT** | M9 | — | Phase 4 |
+| **M10** | **LANDED** | M9 | official Anthropic Go SDK v1.42.0; role-card-order prompt rendering; forced single-tool handwritten contract schemas; strict local decode/Validate and one retry; exact token-count budget plus per-slot caps; untrusted-context boundary; authenticated bounded telemetry event; mocked transport/startup/injection suites; race/vet, isolated Compose certification and missing-key process probe green | Phase 4 |
 | M11 | LAST | M10 plus every M11 precondition | — | Phase 4 |
 
 Ordering constraints: M8A/M8B land after M2.6 so production reads inherit
