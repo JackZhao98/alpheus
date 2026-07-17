@@ -1,0 +1,5 @@
+services:
+  db:
+    ports: !override ["127.0.0.1:15439:5432"]
+  kernel:
+    ports: !override ["127.0.0.1:19100:8100"]

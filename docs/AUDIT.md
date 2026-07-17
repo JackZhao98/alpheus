@@ -168,18 +168,27 @@ violated, and severity.
   deadline, and reconnect only once. Scan logs/API for tokens, account numbers
   and raw payloads. Run an independent probe in addition to the env-gated
   loopback reference test.
-- **I14 Read-only Trading Cockpit.** Outside sim, load `/` without a token:
+- **I14 Trading Cockpit identity and control boundary.** Outside sim, load `/` without a token:
   the static shell may render but every data request must be 401 until a valid
   read token is supplied. Inspect storage, cookies, URLs and requests: the
   token exists only in page memory and never appears in a URL, cookie,
   local/session storage or embedded asset. CSP must omit `unsafe-inline`; inject
   `<img src=x onerror=...>` into every displayed stored/provider text field and
-  verify no script executes. Search assets and network traffic for mutation
-  requests and controls: M8B must expose no approve/reject/halt/resume/place/
-  cancel/replace action. Page through `GET /operations?limit=2` while inserting
-  newer rows; `(ts,id)` pagination must produce no duplicate or skipped older
-  row, invalid status/cursor/limit must be 400, and a huge positive limit must
-  be clamped to 100. For the Live MCP Tool Lab, enumerate the server catalog:
+  verify no script executes. With only a read/runtime token, M7 mutation
+  controls must remain absent and direct control requests must be 401. An Admin
+  Token may exist only in page memory after an explicit unlock; Approve/Reject,
+  two-step Halt, and reason-scoped Breaker Resume are the complete mutation
+  surface. Every control POST must require the exact configured `Origin`, and
+  `read_only` mode must disable the entire control surface. There must never be
+  direct place/cancel/replace, reservation-release, uncertain-effect retry, or
+  account-selection controls. A pending-review card must show failed checks,
+  declared and derived risk, quantity, multiplier, persisted approved price
+  cap, and a fresh sane quote; action results must show operation/attempt/event
+  ids. Stale/unknown attempts and held reservations must be warning-only.
+  Page through `GET /operations?limit=2` while inserting newer rows; `(ts,id)`
+  pagination must produce no duplicate or skipped older row, invalid
+  status/cursor/limit must be 400, and a huge positive limit must be clamped to
+  100. For the Live MCP Tool Lab, enumerate the server catalog:
   it must contain exactly the reviewed 34 no-state-change tools and reject all
   15 mutation tools before provider invocation. Attempt an account override,
   unknown argument, oversized body and malformed JSON; each must fail before
@@ -194,14 +203,16 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M4 plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M7 plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
 DB deadlines, idempotency, durable orders/fills, open reservations, exposure
 FIFO, the shadow paper book, cost-basis PnL, per-ledger breakers and
 provider-authoritative buying power, atomic expiring Class-C approval plus
-production-read/cockpit boundaries are audit targets, not suppressed findings.
+bounded repricing, the authenticated runtime wake spine, and
+production-read/cockpit control boundaries are audit targets, not suppressed
+findings.
 
-1. Resting orders are not repriced or policy-cancelled yet (PLAN M5B).
+There are currently no suppressed planned safety defects.
 
 Suppression is about the CURRENT build, not the plan: each item above is still
 the live behavior. When its milestone lands, the item leaves this list and

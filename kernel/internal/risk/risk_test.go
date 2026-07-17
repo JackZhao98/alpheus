@@ -55,6 +55,9 @@ func testOpen(riskValue string) Operation {
 }
 
 func TestClassificationPaths(t *testing.T) {
+	if verdict := Classify(Operation{Action: "close", Shadow: true}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
+		t.Fatalf("shadow close=%s, want A", verdict.Class)
+	}
 	if verdict := Classify(Operation{Action: "close", VerifiedReduction: true}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
 		t.Fatalf("verified close=%s, want A", verdict.Class)
 	}
@@ -79,6 +82,15 @@ func TestClassificationPaths(t *testing.T) {
 		verdict.Reasons[0] != "uncovered_short" {
 		t.Fatalf("sell open dependency priority=%+v", verdict)
 	}
+	for _, action := range []string{"cancel", "tighten_stop"} {
+		if verdict := Classify(Operation{Action: action}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
+			t.Fatalf("%s=%+v, want A", action, verdict)
+		}
+	}
+	if verdict := Classify(Operation{Action: "OPEN"}, limitsForTest(), testDay(), nil); verdict.Class != "REJECT" ||
+		!strings.Contains(verdict.Reasons[0], "unknown action") {
+		t.Fatalf("unknown action verdict=%+v", verdict)
+	}
 }
 
 func TestAbsoluteRiskFactsFailClosed(t *testing.T) {
@@ -91,6 +103,10 @@ func TestAbsoluteRiskFactsFailClosed(t *testing.T) {
 		{"zero equity", func(_ *Operation, day *DayState) { day.Equity = 0 }, "nonpositive_equity"},
 		{"buying power", func(_ *Operation, day *DayState) { day.BuyingPower = units.MustMicros("34.999999") }, "insufficient_buying_power"},
 		{"derived failure", func(op *Operation, _ *DayState) { op.RejectReason = "unsupported_contract" }, "unsupported_contract"},
+		{"halted", func(_ *Operation, day *DayState) { day.Halted, day.HaltReason = true, "operator" }, "breaker halted: operator"},
+		{"zero derived risk", func(op *Operation, _ *DayState) { op.DerivedMaxRisk = 0 }, "risk_not_computed"},
+		{"zero required cash", func(op *Operation, _ *DayState) { op.RequiredCash = 0 }, "risk_not_computed"},
+		{"zero multiplier", func(op *Operation, _ *DayState) { op.Multiplier = 0 }, "risk_not_computed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +115,39 @@ func TestAbsoluteRiskFactsFailClosed(t *testing.T) {
 			verdict := Classify(op, limitsForTest(), day, testQuote())
 			if verdict.Class != "REJECT" || verdict.Reasons[0] != tc.reason {
 				t.Fatalf("verdict=%+v, want %s", verdict, tc.reason)
+			}
+		})
+	}
+}
+
+func TestChecklistFailureMatrix(t *testing.T) {
+	limits := limitsForTest()
+	limits.Whitelist.Underlyings = []string{"QQQ", "SPY"}
+	if verdict := Classify(testOpen("35"), limits, testDay(), testQuote()); verdict.Class != "B" || !verdict.Checks["whitelist"] {
+		t.Fatalf("allowlisted verdict=%+v", verdict)
+	}
+
+	tests := []struct {
+		name   string
+		change func(*Operation, *DayState, *broker.Quote, *config.Limits)
+		check  string
+	}{
+		{"whitelist", func(op *Operation, _ *DayState, _ *broker.Quote, _ *config.Limits) { op.Underlying = "IWM" }, "whitelist"},
+		{"open risk", func(_ *Operation, day *DayState, _ *broker.Quote, _ *config.Limits) {
+			day.OpenRisk = units.MustMicros("230")
+		}, "total_open_risk"},
+		{"daily count", func(_ *Operation, day *DayState, _ *broker.Quote, limits *config.Limits) {
+			day.TradesToday = limits.HardLimits.MaxNewTradesPerDay
+		}, "daily_trade_count"},
+		{"open interest", func(_ *Operation, _ *DayState, quote *broker.Quote, _ *config.Limits) { quote.OpenInterest = 299 }, "liquidity_oi"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			op, day, quote, candidateLimits := testOpen("35"), testDay(), testQuote(), limits
+			tc.change(&op, &day, quote, &candidateLimits)
+			verdict := Classify(op, candidateLimits, day, quote)
+			if verdict.Class != "C" || verdict.Checks[tc.check] {
+				t.Fatalf("verdict=%+v, want C with %s=false", verdict, tc.check)
 			}
 		})
 	}
@@ -151,6 +200,10 @@ func TestMalformedOrStaleQuoteRejects(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	limits := limitsForTest()
 	limits.QuoteMaxAgeSec = 5
+	if verdict := ClassifyAt(testOpen("35"), limits, testDay(), nil, now); verdict.Class != "REJECT" ||
+		verdict.Reasons[0] != "market_data_unavailable" {
+		t.Fatalf("nil quote verdict=%+v", verdict)
+	}
 	tests := []broker.Quote{
 		{Bid: units.MustMicros("100"), Ask: units.MustMicros("50")},
 		{Bid: units.MustMicros("100"), Ask: units.MustMicros("100")},

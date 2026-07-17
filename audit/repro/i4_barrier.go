@@ -34,6 +34,9 @@ type stateResult struct {
 
 func main() {
 	baseURLs := flag.String("urls", "http://localhost:8100", "comma-separated kernel base URLs")
+	origin := flag.String("origin", "", "exact console origin; defaults to the first kernel URL")
+	runtimeToken := flag.String("runtime-token", "", "runtime/read bearer token when authentication is enabled")
+	adminToken := flag.String("admin-token", "", "admin bearer token for the fake quote endpoint")
 	shadow := flag.Bool("shadow", false, "probe the shadow ledger")
 	seed := flag.Int("seed", 5, "sequential Class-B operations before the barrier")
 	requests := flag.Int("requests", 20, "simultaneous requests released by the barrier")
@@ -51,6 +54,9 @@ func main() {
 	if len(urls) == 0 {
 		fmt.Fprintln(os.Stderr, "at least one kernel URL is required")
 		os.Exit(2)
+	}
+	if strings.TrimSpace(*origin) == "" {
+		*origin = urls[0]
 	}
 
 	transport := &http.Transport{MaxIdleConns: *requests + 2, MaxIdleConnsPerHost: *requests + 2}
@@ -73,14 +79,14 @@ func main() {
 		panic(err)
 	}
 	for _, url := range urls {
-		if err := postQuote(client, url+"/sim/quote", quote); err != nil {
+		if err := postQuote(client, url+"/sim/quote", quote, *origin, *adminToken); err != nil {
 			fmt.Fprintf(os.Stderr, "seed quote: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	for i := 0; i < *seed; i++ {
-		res := post(client, urls[i%len(urls)]+"/operations", payload)
+		res := post(client, urls[i%len(urls)]+"/operations", payload, *runtimeToken)
 		if res.Error != "" || res.Class != "B" {
 			fmt.Fprintf(os.Stderr, "seed %d failed: %+v\n", i+1, res)
 			os.Exit(1)
@@ -95,7 +101,7 @@ func main() {
 		go func(index int) {
 			ready.Done()
 			<-start
-			results <- post(client, urls[index%len(urls)]+"/operations", payload)
+			results <- post(client, urls[index%len(urls)]+"/operations", payload, *runtimeToken)
 		}(i)
 	}
 	ready.Wait()
@@ -112,7 +118,14 @@ func main() {
 	}
 
 	state := stateResult{}
-	resp, err := client.Get(urls[0] + "/state")
+	stateRequest, err := http.NewRequest(http.MethodGet, urls[0]+"/state", nil)
+	var resp *http.Response
+	if err == nil {
+		if *runtimeToken != "" {
+			stateRequest.Header.Set("Authorization", "Bearer "+*runtimeToken)
+		}
+		resp, err = client.Do(stateRequest)
+	}
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -156,12 +169,16 @@ func main() {
 	fmt.Fprintf(os.Stderr, "PASS: B=%d C=%d trades_today=%d\n", expectedB, expectedC, tradesToday)
 }
 
-func postQuote(client *http.Client, url string, payload []byte) error {
+func postQuote(client *http.Client, url string, payload []byte, origin, token string) error {
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", origin)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -173,12 +190,15 @@ func postQuote(client *http.Client, url string, payload []byte) error {
 	return nil
 }
 
-func post(client *http.Client, url string, payload []byte) result {
+func post(client *http.Client, url string, payload []byte, token string) result {
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return result{Error: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return result{Error: err.Error()}
