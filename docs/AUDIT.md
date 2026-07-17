@@ -46,7 +46,13 @@ violated, and severity.
 
 - **I1 No effect without approval.** After any `rejected` or
   `pending_review` proposal, fake-broker cash and positions are unchanged
-  (verify via /state before/after).
+  (verify via /state before/after). For an over-budget Class-C open, approve
+  with Admin auth and require exactly one `trade_grant`, held open reservation,
+  execution attempt and typed order before the broker effect. A breaker,
+  crossed/stale quote or insufficient buying power during approval must return
+  409 and leave the operation `pending_review`; expiry alone transitions it to
+  terminal `expired`. Release 20 same-operation approvals from a start barrier:
+  exactly one may execute.
 - **I2 Shadow never reaches the broker.** After any `shadow: true`
   operation of any class, broker cash/positions unchanged.
 - **I3 Full audit trail.** Every operation with status
@@ -107,6 +113,9 @@ violated, and severity.
   specified 0/0/1 broker effects. A stale `pending` must re-run the gate and
   obey the 1800-second proposal TTL; `unknown` must query before any retry, and
   a provider without independently verified deduplication must not re-place.
+  For M4, kill the kernel after the atomic approval commit but before attempt
+  claim: the reviewed C entitlement must recover even if the original proposal
+  TTL elapses, while a newly failing absolute must still prevent placement.
   Hold the close symbol advisory key externally (signed big-endian first 64
   bits of SHA-256 over `symbol\0{ledger}\0{symbol}`): a close must block or
   hit `DB_TIMEOUT_MS` with no broker effect. For M2.9, verify every place
@@ -185,14 +194,14 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M3D plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M4 plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
 DB deadlines, idempotency, durable orders/fills, open reservations, exposure
 FIFO, the shadow paper book, cost-basis PnL, per-ledger breakers and
-provider-authoritative buying power plus production-read/cockpit boundaries are
-audit targets, not suppressed findings.
+provider-authoritative buying power, atomic expiring Class-C approval plus
+production-read/cockpit boundaries are audit targets, not suppressed findings.
 
-1. Approved Class-C ops are not executed (PLAN M4).
+1. Resting orders are not repriced or policy-cancelled yet (PLAN M5B).
 
 Suppression is about the CURRENT build, not the plan: each item above is still
 the live behavior. When its milestone lands, the item leaves this list and

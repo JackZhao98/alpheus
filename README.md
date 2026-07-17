@@ -182,14 +182,19 @@ inline script 的 CSP。
   连亏天数与 breaker 状态（进攻档宪法见 `kernel/limits.yaml`）。
 - **C 例外**：清单未过但不违反绝对项 → `pending_review`，
   交 reviewer（不同家族模型）或人一键裁决（`POST /operations/{id}/review`）。
+  Admin 批准时会锁住待审行，再取账本锁和最新账户/行情，重新执行所有绝对项；
+  `approved`、trade grant、open reservation、execution attempt 与 typed order
+  在同一事务提交，随后才执行。熔断、坏行情或购买力不足会 409 且继续保持
+  `pending_review`，只有超过 1800 秒的提案会原子转成终态 `expired`。
 - **REJECT 绝对项**：熔断中、任何单腿 `open + sell`、风险声明不实、
   行情/合约/购买力依赖不可信 → 直接死亡。
 
 95% 的正常交易全自动，审批 LLM 只碰真正的例外。
 
-M2.8 的 `proposal_ttl_sec` 为人工批准的 1800 秒。进程若在 attempt 提交后、
-券商调用前崩溃，reconciler 会重新取行情/仓位并跑完整 gate；超过 30 分钟的
-旧提案永不复活下单，已授予的 trade grant 保留，未触达券商的资源预留释放。
+M2.8 的 `proposal_ttl_sec` 为人工批准的 1800 秒。待审 Class-C 超时后不能再
+批准；进程若在 attempt 提交后、券商调用前崩溃，reconciler 会重新取行情/
+仓位并跑完整 gate。已授予的 trade grant 保留，只有取得终态证明的未成交资源
+预留才释放。
 
 ## 三个 FILL POINT（按顺序填）
 
@@ -235,8 +240,7 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 ## 骨架刻意没做的事
 
 reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、inbox/watchlist
-注入（assemble 有 TODO）、C 级批准后的执行路径、
-订单重挂状态机接线、watchdog 对 runtime `/wake` 的实际投递（端点和
+注入（assemble 有 TODO）、订单重挂状态机接线、watchdog 对 runtime `/wake` 的实际投递（端点和
 Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。
 这些都有明确的挂载点，但骨架的任务是把边界立住。

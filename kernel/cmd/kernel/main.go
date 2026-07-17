@@ -60,6 +60,7 @@ type storeAPI interface {
 	FindOperationByIdempotency(subject, key string) (*store.OperationRow, error)
 	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error
 	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
+	WithReviewLock(id string, fn func(store.OperationGate, *store.OperationRow) error) error
 	Event(kind string, payload any)
 	SetOperationStatus(id, status string, verdict any) error
 	GetOperation(id string) (*store.OperationRow, error)
@@ -1083,6 +1084,7 @@ var (
 	errBrokerResultUnknown          = errors.New("broker result uncertain")
 	errInvalidClose                 = errors.New("invalid close")
 	errPaperExecutionFailed         = errors.New("paper execution failed")
+	errReviewGateRejected           = errors.New("review gate rejected")
 )
 
 func ledgerName(shadow bool) string {
@@ -1705,17 +1707,288 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]string{"error": "not pending review"})
 		return
 	}
-	status := in.Verdict
-	if status == "approved" {
-		// TODO: execute approved C-class ops through the same path as Class B.
-	}
-	if err := s.store.SetOperationStatus(id, status, map[string]string{
-		"reviewer": authenticatedSubject(r), "rationale": in.Rationale,
-	}); err != nil {
-		writeStoreError(w, "review operation", err)
+	reviewer := authenticatedSubject(r)
+	if in.Verdict == "rejected" {
+		err := s.store.WithReviewLock(id, func(gate store.OperationGate, _ *store.OperationRow) error {
+			verdict := map[string]any{"reviewer": reviewer, "rationale": in.Rationale, "decision": "rejected"}
+			if err := gate.SetOperationStatus(id, "rejected", verdict); err != nil {
+				return err
+			}
+			return gate.InsertEvent("operation_reviewed", map[string]any{
+				"operation_id": id, "reviewer": reviewer, "rationale": in.Rationale,
+				"decision": "rejected",
+			})
+		})
+		if errors.Is(err, store.ErrOperationNotPending) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "not pending review"})
+			return
+		}
+		if err != nil {
+			writeStoreError(w, "review operation", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"operation_id": id, "status": "rejected"})
 		return
 	}
-	writeJSON(w, 200, map[string]string{"operation_id": id, "status": status})
+
+	var persisted risk.Operation
+	if err := json.Unmarshal(row.Payload, &persisted); err != nil || persisted.Action != "open" || row.Class != "C" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "operation is not an approvable Class-C open"})
+		return
+	}
+	var quote *broker.Quote
+	quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+	freshQuote, quoteErr := s.marketProvider().Quote(quoteCtx, operationSymbol(persisted))
+	cancel()
+	if quoteErr == nil {
+		quote = &freshQuote
+	}
+	prepared := s.prepareApprovedOpen(r.Context(), persisted, quote)
+	if err := s.refreshGlobalHalt(); err != nil {
+		writeStoreError(w, "refresh global halt", err)
+		return
+	}
+	// Serialize approval with POST /halt exactly as normal open proposals are
+	// serialized. Once the write lock is waiting, no later approval can commit.
+	s.haltMu.RLock()
+	defer s.haltMu.RUnlock()
+	halted, haltReason := s.halted, s.haltReason
+
+	var attempt *store.ExecutionAttempt
+	var approvalVerdict risk.Verdict
+	var approvedOp risk.Operation
+	conflictReason := ""
+	err = s.store.WithReviewLock(id, func(gate store.OperationGate, locked *store.OperationRow) error {
+		if !bytes.Equal(row.Payload, locked.Payload) {
+			conflictReason = "approval_snapshot_mismatch"
+			return errReviewGateRejected
+		}
+		if s.proposalTTL <= 0 {
+			return fmt.Errorf("proposal TTL is not configured")
+		}
+		now, err := gate.DatabaseNow()
+		if err != nil {
+			return err
+		}
+		if locked.TS.Add(s.proposalTTL).Before(now) {
+			conflictReason = "proposal_expired"
+			verdict := map[string]any{
+				"reviewer": reviewer, "rationale": in.Rationale, "decision": "expired",
+				"proposal_ts": locked.TS, "reviewed_at": now,
+			}
+			if err := gate.SetOperationStatus(id, "expired", verdict); err != nil {
+				return err
+			}
+			return gate.InsertEvent("operation_reviewed", map[string]any{
+				"operation_id": id, "reviewer": reviewer, "decision": "expired",
+				"proposal_ts": locked.TS, "reviewed_at": now,
+			})
+		}
+		if err := gate.LockLedger(prepared.Shadow); err != nil {
+			return err
+		}
+		var account broker.AccountState
+		if prepared.Shadow {
+			account, err = s.shadowAccountSnapshot(r.Context(), gate)
+		} else {
+			accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+			account, err = s.accountProvider().Account(accountCtx)
+			cancel()
+		}
+		if err != nil {
+			return fmt.Errorf("%w: account", errBrokerDataUnavailable)
+		}
+		databaseNow, err := gate.DatabaseNow()
+		if err != nil {
+			return err
+		}
+		window, err := marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
+		if err != nil {
+			return err
+		}
+		day, err := s.dayStateAtAccount(r.Context(), gate, prepared.Shadow, account, window, halted, haltReason)
+		if err != nil {
+			return err
+		}
+		approvalVerdict = risk.ClassifyAt(prepared, s.limits, day, quote, time.Now().UTC())
+		if approvalVerdict.Class == "REJECT" {
+			conflictReason = "approval gate rejected"
+			if len(approvalVerdict.Reasons) > 0 {
+				conflictReason = approvalVerdict.Reasons[0]
+			}
+			return errReviewGateRejected
+		}
+		approvedOp = prepared
+		staged, err := s.stageApprovedOpen(gate, id, prepared, window.day)
+		if err != nil {
+			return err
+		}
+		attempt = staged
+		approval := map[string]any{
+			"reviewer": reviewer, "rationale": in.Rationale, "decision": "approved",
+			"proposal_ts": locked.TS, "approved_at": databaseNow, "market_day": window.day,
+			"quote": quote, "verdict": approvalVerdict,
+			"approved_price_cap": prepared.ApprovedPriceCap, "working_price": prepared.WorkingPrice,
+			"derived_max_risk": prepared.DerivedMaxRisk, "required_cash": prepared.RequiredCash,
+			"multiplier": prepared.Multiplier, "attempt_id": staged.ID,
+			"open_reservation_id": staged.OpenReservationID,
+		}
+		if err := gate.SetOperationStatus(id, "approved", approval); err != nil {
+			return err
+		}
+		return gate.InsertEvent("operation_reviewed", map[string]any{
+			"operation_id": id, "approval": approval,
+		})
+	})
+	if errors.Is(err, store.ErrOperationNotPending) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not pending review"})
+		return
+	}
+	if errors.Is(err, errReviewGateRejected) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": conflictReason})
+		return
+	}
+	if errors.Is(err, errBrokerDataUnavailable) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "broker account data unavailable"})
+		return
+	}
+	if err != nil {
+		writeStoreError(w, "approve operation", err)
+		return
+	}
+	if conflictReason == "proposal_expired" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": conflictReason})
+		return
+	}
+	if attempt == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "approval attempt missing"})
+		return
+	}
+	response := map[string]any{
+		"operation_id": id, "status": "approved", "class": "C", "shadow": approvedOp.Shadow,
+		"checks": approvalVerdict.Checks, "reasons": approvalVerdict.Reasons,
+	}
+	addRiskFacts(response, approvedOp)
+	execution, err := s.executePendingAttempt(r.Context(), attempt.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			writeStoreError(w, "execute approved attempt", err)
+			return
+		}
+		if errors.Is(err, errAccountBindingViolation) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"operation_id": id, "status": "failed", "error": "account_binding_violation",
+			})
+			return
+		}
+		if errors.Is(err, errPaperExecutionFailed) {
+			response["status"] = "failed"
+			response["attempt_id"] = attempt.ID
+			response["attempt_state"] = "failed"
+			response["error"] = "paper_execution_failed"
+			writeJSON(w, http.StatusOK, response)
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"operation_id": id, "status": "unknown", "attempt_id": attempt.ID,
+			"error": "broker result uncertain",
+		})
+		return
+	}
+	for key, value := range execution {
+		response[key] = value
+	}
+	if response["status"] == "auto_approved" {
+		response["status"] = "approved"
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) prepareApprovedOpen(ctx context.Context, persisted risk.Operation, quote *broker.Quote) risk.Operation {
+	prepared := persisted
+	cap := persisted.ApprovedPriceCap
+	originalLimit := persisted.Limit
+	prepared.Limit = &cap
+	prepared.RejectReason = ""
+	prepared = s.deriveOpenOperation(ctx, prepared, quote)
+	prepared.Limit = originalLimit
+	if prepared.RejectReason != "" {
+		return prepared
+	}
+	if persisted.Shadow && quote != nil {
+		prepared.WorkingPrice = quote.Ask
+		if prepared.WorkingPrice > persisted.ApprovedPriceCap {
+			prepared.WorkingPrice = persisted.ApprovedPriceCap
+		}
+	}
+	if persisted.ApprovedPriceCap <= 0 || prepared.ApprovedPriceCap != persisted.ApprovedPriceCap ||
+		prepared.Multiplier != persisted.Multiplier || prepared.RequiredCash != persisted.RequiredCash ||
+		prepared.DerivedMaxRisk != persisted.DerivedMaxRisk {
+		prepared.RejectReason = "approval_snapshot_mismatch"
+	}
+	return prepared
+}
+
+func (s *server) stageApprovedOpen(gate store.OperationGate, operationID string, op risk.Operation, marketDay time.Time) (*store.ExecutionAttempt, error) {
+	ledger := ledgerName(op.Shadow)
+	if err := gate.InsertTradeGrant(store.TradeGrant{
+		OperationID: operationID, Ledger: ledger, MarketDay: marketDay,
+		AuthorizedRisk: op.DerivedMaxRisk, RiskSource: "computed",
+	}); err != nil {
+		return nil, err
+	}
+	if err := gate.InsertEvent("trade_grant_created", map[string]any{
+		"operation_id": operationID, "ledger": ledger,
+	}); err != nil {
+		return nil, err
+	}
+	reservation := store.OpenReservation{
+		ID: store.NewID(), OperationID: operationID, Ledger: ledger,
+		MarketDay: marketDay, Symbol: operationSymbol(op), Kind: op.Kind,
+		OriginalQty: op.Qty, RemainingQty: op.Qty,
+		OriginalRisk: op.DerivedMaxRisk, RemainingRisk: op.DerivedMaxRisk,
+		OriginalCash: op.RequiredCash, RemainingCash: op.RequiredCash,
+		ResourceState: "held",
+	}
+	if err := gate.InsertOpenReservation(reservation); err != nil {
+		return nil, err
+	}
+	if err := gate.InsertEvent("open_reservation_created", map[string]any{
+		"operation_id": operationID, "reservation_id": reservation.ID,
+		"ledger": ledger, "symbol": reservation.Symbol,
+	}); err != nil {
+		return nil, err
+	}
+	attempt := store.ExecutionAttempt{
+		ID: store.NewID(), OperationID: operationID, Seq: 1,
+		OpenReservationID: reservation.ID, Intent: "place", ClientOrderID: store.NewID(),
+		State: "pending", Qty: op.Qty, Limit: op.WorkingPrice,
+	}
+	if op.Shadow {
+		attempt.Intent = "paper_place"
+		attempt.ClientOrderID = "shadow:" + attempt.ID
+	}
+	if attempt.Limit <= 0 || attempt.Limit > op.ApprovedPriceCap {
+		return nil, fmt.Errorf("approved working price exceeds its cap")
+	}
+	if err := gate.InsertExecutionAttempt(attempt); err != nil {
+		return nil, err
+	}
+	if err := gate.InsertOrder(store.Order{
+		ID: store.NewID(), OperationID: operationID, ExecutionAttemptID: attempt.ID,
+		ClientOrderID: attempt.ClientOrderID, Ledger: ledger,
+		Symbol: operationSymbol(op), Side: op.Side, Kind: op.Kind,
+		Multiplier: op.Multiplier, Qty: attempt.Qty, Limit: attempt.Limit,
+		State: "new",
+	}); err != nil {
+		return nil, err
+	}
+	if err := gate.InsertEvent("execution_attempt_created", map[string]any{
+		"operation_id": operationID, "attempt_id": attempt.ID, "intent": attempt.Intent,
+	}); err != nil {
+		return nil, err
+	}
+	return &attempt, nil
 }
 
 func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {

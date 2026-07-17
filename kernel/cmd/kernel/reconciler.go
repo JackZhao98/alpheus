@@ -236,7 +236,9 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 	if err != nil {
 		return err
 	}
-	if lifetime := s.proposalLifetime(); lifetime <= 0 || !time.Now().UTC().Before(row.TS.Add(lifetime)) {
+	reviewApproved := row.Class == "C" && row.Status == "approved"
+	if lifetime := s.proposalLifetime(); !reviewApproved &&
+		(lifetime <= 0 || !time.Now().UTC().Before(row.TS.Add(lifetime))) {
 		_, failErr := s.store.FailPendingAttempt(attempt.ID, "proposal expired before recovery")
 		return failErr
 	}
@@ -320,7 +322,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 		if err != nil {
 			return err
 		}
-		if verdict.Class != "B" {
+		if verdict.Class == "REJECT" || (!reviewApproved && verdict.Class != "B") {
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "recovery gate failed: "+firstReason(verdict))
 			return failErr
 		}

@@ -172,9 +172,39 @@ func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shad
 	return fn(gate)
 }
 
+func (m *memoryStore) WithReviewLock(id string, fn func(store.OperationGate, *store.OperationRow) error) error {
+	m.idempotencyMu.Lock()
+	key := "review\x00" + id
+	lock := m.idempotencyLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.idempotencyLocks[key] = lock
+	}
+	m.idempotencyMu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	row, err := m.GetOperation(id)
+	if err != nil || row.Status != "pending_review" {
+		return store.ErrOperationNotPending
+	}
+	gate := &memoryGate{memoryStore: m}
+	defer gate.release()
+	return fn(gate, row)
+}
+
 type memoryGate struct {
 	*memoryStore
 	held []*sync.Mutex
+}
+
+func (g *memoryGate) LockLedger(shadow bool) error {
+	index := 0
+	if shadow {
+		index = 1
+	}
+	g.ledgerLocks[index].Lock()
+	g.held = append(g.held, &g.ledgerLocks[index])
+	return nil
 }
 
 func (g *memoryGate) LockLedgerSymbol(ledger, symbol string) error {

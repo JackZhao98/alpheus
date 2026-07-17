@@ -37,6 +37,7 @@ type Store struct {
 var (
 	ErrInvalidOperationReference = errors.New("invalid operation reference")
 	ErrBreakerNotActive          = errors.New("breaker is not active for that reason")
+	ErrOperationNotPending       = errors.New("operation is not pending review")
 	ErrUnavailable               = errors.New("database unavailable")
 )
 
@@ -55,7 +56,9 @@ type OperationGate interface {
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	InsertEvent(kind string, payload any) error
 	InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error
+	SetOperationStatus(id, status string, verdict any) error
 	FindOperationByIdempotency(subject, key string) (*OperationRow, error)
+	LockLedger(shadow bool) error
 	LockLedgerSymbol(ledger, symbol string) error
 	HeldCloseQuantity(ledger, symbol string) (units.Qty, error)
 	InsertTradeGrant(grant TradeGrant) error
@@ -87,6 +90,11 @@ func (t *ledgerTx) DatabaseNow() (time.Time, error) {
 	// from consuming the previous day's entitlement.
 	err := t.tx.QueryRowContext(t.ctx, `SELECT clock_timestamp()`).Scan(&now)
 	return now, normalizeDBError(err)
+}
+
+func (t *ledgerTx) LockLedger(shadow bool) error {
+	_, err := t.tx.ExecContext(t.ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow))
+	return normalizeDBError(err)
 }
 
 // Open waits for postgres on cold start.
@@ -272,12 +280,20 @@ func insertOperation(ctx context.Context, db execer, id, proposer, class, status
 func (s *Store) SetOperationStatus(id, status string, verdict any) error {
 	ctx, cancel := s.deadline()
 	defer cancel()
+	return normalizeDBError(setOperationStatus(ctx, s.DB, id, status, verdict))
+}
+
+func (t *ledgerTx) SetOperationStatus(id, status string, verdict any) error {
+	return normalizeDBError(setOperationStatus(t.ctx, t.tx, id, status, verdict))
+}
+
+func setOperationStatus(ctx context.Context, db execer, id, status string, verdict any) error {
 	if verdict == nil {
-		_, err := s.DB.ExecContext(ctx, `UPDATE operations SET status=$1 WHERE id=$2`, status, id)
-		return normalizeDBError(err)
+		_, err := db.ExecContext(ctx, `UPDATE operations SET status=$1 WHERE id=$2`, status, id)
+		return err
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE operations SET status=$1, verdict=$2 WHERE id=$3`, status, jstr(verdict), id)
-	return normalizeDBError(err)
+	_, err := db.ExecContext(ctx, `UPDATE operations SET status=$1, verdict=$2 WHERE id=$3`, status, jstr(verdict), id)
+	return err
 }
 
 type OperationRow struct {
@@ -466,6 +482,39 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 
 func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
 	return s.WithProposalLock(nil, shadow, &marketDay, fn)
+}
+
+// WithReviewLock serializes a review against the pending operation row. The
+// callback decides when to acquire the stable ledger lock so TTL evaluation
+// happens before any account read or entitlement lock.
+func (s *Store) WithReviewLock(id string, fn func(OperationGate, *OperationRow) error) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return normalizeDBError(err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	row, err := getOperation(ctx, tx, `WHERE id=$1 AND status='pending_review' FOR UPDATE`, id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return ErrOperationNotPending
+	}
+	if err := fn(&ledgerTx{tx: tx, ctx: ctx, marketTZ: s.marketTZ}, row); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return normalizeDBError(err)
+	}
+	committed = true
+	return nil
 }
 
 func idempotencyLockKey(subject, key string) int64 {

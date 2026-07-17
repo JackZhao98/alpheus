@@ -39,7 +39,13 @@ echo "== move option quote: 1 contract costs 200.00 =="
 quote '{"symbol":"SPY","bid":1.99,"ask":2.00,"open_interest":45000}'
 
 echo "== 2) over-budget open -> expect pending_review (Class C) =="
-curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":200,"shadow":true,"plan":'"$PLAN"'}'; echo; echo
+class_c_response=$(curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":200,"shadow":true,"plan":'"$PLAN"'}')
+echo "$class_c_response"; echo
+class_c_id=$(printf '%s' "$class_c_response" | sed -E 's/.*"operation_id":"([^"]+)".*/\1/')
+test -n "$class_c_id"
+
+echo "== 2b) approve Class C -> expect one atomic entitlement and execution =="
+curl -s -X POST "$K/operations/$class_c_id/review" -H 'Content-Type: application/json' -d '{"verdict":"approved","rationale":"smoke M4"}'; echo; echo
 
 echo "== seed equity quote =="
 quote '{"symbol":"SMOKE","bid":100,"ask":100.1,"open_interest":0}'
@@ -77,15 +83,15 @@ if [ "$SMOKE_DB_CHECK" = "1" ]; then
   live_pnl=$(sql_scalar "select local_realized_pnl_micros from daily_pnl where ledger='live' order by market_day desc limit 1")
   shadow_pnl=$(sql_scalar "select local_realized_pnl_micros from daily_pnl where ledger='shadow' order by market_day desc limit 1")
   halted_breakers=$(sql_scalar "select count(*) from breaker_state where halted")
-  test "$((shadow_orders_after-shadow_orders_before))" -eq 1
-  test "$((shadow_fills_after-shadow_fills_before))" -eq 1
+  test "$((shadow_orders_after-shadow_orders_before))" -eq 2
+  test "$((shadow_fills_after-shadow_fills_before))" -eq 2
   test "$((live_orders_after-live_orders_before))" -eq 2
   test "$((live_fills_after-live_fills_before))" -eq 2
   test "$orphan_attempts" -eq 0
   test "$live_pnl" -eq -10000
   test "$shadow_pnl" -eq 0
   test "$halted_breakers" -eq 0
-  echo "db invariants: +1 shadow order/fill, +2 live orders/fills, 0 orphan attempts, live pnl -0.01, shadow pnl 0, breakers clear"
+  echo "db invariants: +2 shadow orders/fills (including approved Class C), +2 live orders/fills, 0 orphan attempts, live pnl -0.01, shadow pnl 0, breakers clear"
 else
   echo "db invariants skipped (SMOKE_DB_CHECK=0)"
 fi
