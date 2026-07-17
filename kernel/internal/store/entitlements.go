@@ -24,6 +24,7 @@ type TradeGrant struct {
 type TradeGrantUsage struct {
 	AuthorizedRisk   units.Micros
 	HasLegacyUnknown bool
+	GrantCount       int
 }
 
 type CloseReservation struct {
@@ -105,11 +106,12 @@ func (t *ledgerTx) TradeGrantUsage(ledger string, marketDay time.Time, excludeOp
 	var authorizedRisk int64
 	err := t.tx.QueryRowContext(t.ctx, `SELECT
 		COALESCE(sum(authorized_risk_micros) FILTER (WHERE risk_source='computed'),0),
-		COALESCE(bool_or(risk_source='legacy_unknown'),false)
+		COALESCE(bool_or(risk_source='legacy_unknown'),false),
+		count(*)
 		FROM trade_grant
 		WHERE ledger=$1 AND market_day=$2::date
 		  AND (NULLIF($3,'') IS NULL OR operation_id <> NULLIF($3,'')::uuid)`,
-		ledger, marketDay, excludeOperationID).Scan(&authorizedRisk, &usage.HasLegacyUnknown)
+		ledger, marketDay, excludeOperationID).Scan(&authorizedRisk, &usage.HasLegacyUnknown, &usage.GrantCount)
 	usage.AuthorizedRisk = units.Micros(authorizedRisk)
 	return usage, normalizeDBError(err)
 }

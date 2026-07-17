@@ -172,6 +172,40 @@ func TestLiveCanaryDoesNotConsumeOrBlockShadowLedger(t *testing.T) {
 	}
 }
 
+func TestFirstLiveCanaryGrantMustUseOneProviderQuantityIncrement(t *testing.T) {
+	s, st, venue := m11Server("1000")
+	payload := strings.Replace(m11OpenPayload("SPY", "70"), `"qty":1`, `"qty":2`, 1)
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-first-size")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), canaryFirstSizeReason) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	st.mu.Lock()
+	grantCount := len(st.grants)
+	st.mu.Unlock()
+	if grantCount != 0 {
+		t.Fatalf("oversized first canary created %d grants", grantCount)
+	}
+	if _, err := venue.GetOrder(context.Background(), "fake-1"); err == nil {
+		t.Fatal("oversized first canary reached broker")
+	}
+}
+
+func TestLiveEquityFailsBeforeGrantWithoutExactProviderIncrement(t *testing.T) {
+	s, st, venue := m11Server("1000")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-equity-increment")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"class":"REJECT"`) ||
+		!strings.Contains(response.Body.String(), "unsupported_contract") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.grants) != 0 {
+		t.Fatalf("unsupported equity created grants=%d", len(st.grants))
+	}
+}
+
 func TestClassCApprovalRechecksCanaryAndStaysPending(t *testing.T) {
 	s, st, venue := m11Server("35")
 	setQuote(venue, "SPY", "1.99", "2.00", 45_000)

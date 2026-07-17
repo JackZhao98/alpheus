@@ -44,6 +44,10 @@ Canonical input+output schema SHA-256:
   multiplier, price tick and quantity increment before mutation; requires an
   explicit option `position_effect`; validates the provider's order echo; and
   normalizes only reviewed order states and stable execution IDs/fills.
+- The first live grant of each market day must use exactly one provider-reported
+  quantity increment. Missing increment metadata fails before the grant; with
+  today's provider facts, this permits a one-contract option canary and keeps
+  equity live trading closed until its exact increment/tick contract exists.
 - No real-money deduplication experiment is permitted.
 
 ## Provider capability that unblocks M11

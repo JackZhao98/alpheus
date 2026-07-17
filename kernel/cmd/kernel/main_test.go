@@ -369,6 +369,7 @@ func (m *memoryStore) TradeGrantUsage(ledger string, marketDay time.Time, exclud
 		if operationID == excludeOperationID || grant.Ledger != ledger || !sameDate(grant.MarketDay, marketDay) {
 			continue
 		}
+		usage.GrantCount++
 		if grant.RiskSource == "legacy_unknown" {
 			usage.HasLegacyUnknown = true
 		} else {

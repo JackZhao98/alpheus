@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	canaryCapReason    = "live_canary_daily_risk_cap"
-	canaryLegacyReason = "live_canary_legacy_unknown"
+	canaryCapReason       = "live_canary_daily_risk_cap"
+	canaryLegacyReason    = "live_canary_legacy_unknown"
+	canaryFirstSizeReason = "live_canary_first_position_not_minimum_size"
 )
 
-func (s *server) liveCanaryRefusal(gate store.OperationGate, operationID string, marketDay time.Time, proposedRisk units.Micros) (string, store.TradeGrantUsage, error) {
+func (s *server) liveCanaryRefusal(gate store.OperationGate, operationID string, marketDay time.Time, proposedRisk units.Micros, quantity, quantityIncrement units.Qty) (string, store.TradeGrantUsage, error) {
 	if s.tradingMode() != config.ModeLive {
 		return "", store.TradeGrantUsage{}, nil
 	}
@@ -29,6 +30,9 @@ func (s *server) liveCanaryRefusal(gate store.OperationGate, operationID string,
 	if usage.HasLegacyUnknown {
 		return canaryLegacyReason, usage, nil
 	}
+	if usage.GrantCount == 0 && (quantityIncrement <= 0 || quantity != quantityIncrement) {
+		return canaryFirstSizeReason, usage, nil
+	}
 	// Compare by subtraction so a corrupt/oversized stored aggregate cannot
 	// wrap an int64 addition into a permissive result.
 	if proposedRisk <= 0 || proposedRisk > cap || usage.AuthorizedRisk > cap-proposedRisk {
@@ -37,7 +41,7 @@ func (s *server) liveCanaryRefusal(gate store.OperationGate, operationID string,
 	return "", usage, nil
 }
 
-func (s *server) insertCanaryRefusalEvent(gate store.OperationGate, operationID, reason string, marketDay time.Time, proposedRisk units.Micros, usage store.TradeGrantUsage) error {
+func (s *server) insertCanaryRefusalEvent(gate store.OperationGate, operationID, reason string, marketDay time.Time, proposedRisk units.Micros, quantity, quantityIncrement units.Qty, usage store.TradeGrantUsage) error {
 	return gate.InsertEvent("live_canary_refused", map[string]any{
 		"operation_id":  operationID,
 		"reason":        reason,
@@ -45,5 +49,8 @@ func (s *server) insertCanaryRefusalEvent(gate store.OperationGate, operationID,
 		"used_risk":     usage.AuthorizedRisk,
 		"proposed_risk": proposedRisk,
 		"risk_cap":      s.limits.LiveCanary.DailyAuthorizedRiskCapUSD,
+		"grant_count":   usage.GrantCount,
+		"quantity":      quantity,
+		"qty_increment": quantityIncrement,
 	})
 }

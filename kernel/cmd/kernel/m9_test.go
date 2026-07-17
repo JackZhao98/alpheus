@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
@@ -99,6 +100,10 @@ func TestM9FullTradingDayReplayIsIdempotent(t *testing.T) {
 	st := newMemoryStore()
 	venue := newFake("300")
 	setQuote(venue, "DAY", "34.99", "35", 1_000)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "DAY", Kind: "equity", Multiplier: 1,
+		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
 	s := &server{
 		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
 		broker: venue, store: st, providerDedupeVerified: true,

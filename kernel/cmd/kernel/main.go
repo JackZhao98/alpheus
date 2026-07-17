@@ -828,13 +828,13 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			v = risk.Verdict{Class: "REJECT", Reasons: []string{"market_data_unavailable"}}
 		}
 		if v.Class == "B" && op.Action == "open" && !op.Shadow {
-			reason, usage, err := s.liveCanaryRefusal(gate, opID, window.day, op.DerivedMaxRisk)
+			reason, usage, err := s.liveCanaryRefusal(gate, opID, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement)
 			if err != nil {
 				return err
 			}
 			if reason != "" {
 				v = risk.Verdict{Class: "REJECT", Reasons: []string{reason}}
-				if err := s.insertCanaryRefusalEvent(gate, opID, reason, window.day, op.DerivedMaxRisk, usage); err != nil {
+				if err := s.insertCanaryRefusalEvent(gate, opID, reason, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement, usage); err != nil {
 					return err
 				}
 			}
@@ -1577,23 +1577,36 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 		op.RejectReason = "market_data_unavailable"
 		return op
 	}
+	symbol := op.Symbol
+	if symbol == "" {
+		symbol = op.Underlying
+	}
 
 	switch op.Kind {
 	case "equity":
 		op.Multiplier = 1
-	case "option":
-		symbol := op.Symbol
-		if symbol == "" {
-			symbol = op.Underlying
+		if s.tradingMode() == config.ModeLive && !op.Shadow {
+			instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
+			cancel()
+			if err != nil || instrument.Kind != "equity" || instrument.Multiplier != 1 ||
+				instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 {
+				op.RejectReason = "unsupported_contract"
+				return op
+			}
+			op.QtyIncrement = instrument.QtyIncrement
 		}
+	case "option":
 		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
 		cancel()
-		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 {
+		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 ||
+			instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 {
 			op.RejectReason = "unsupported_contract"
 			return op
 		}
 		op.Multiplier = instrument.Multiplier
+		op.QtyIncrement = instrument.QtyIncrement
 	default:
 		op.RejectReason = "unsupported_contract"
 		return op
@@ -1856,13 +1869,13 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			return errReviewGateRejected
 		}
 		if !prepared.Shadow {
-			canaryReason, usage, err := s.liveCanaryRefusal(gate, id, window.day, prepared.DerivedMaxRisk)
+			canaryReason, usage, err := s.liveCanaryRefusal(gate, id, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement)
 			if err != nil {
 				return err
 			}
 			if canaryReason != "" {
 				conflictReason = canaryReason
-				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, usage)
+				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement, usage)
 			}
 		}
 		approvedOp = prepared
@@ -1970,7 +1983,7 @@ func (s *server) prepareApprovedOpen(ctx context.Context, persisted risk.Operati
 	}
 	if persisted.ApprovedPriceCap <= 0 || prepared.ApprovedPriceCap != persisted.ApprovedPriceCap ||
 		prepared.Multiplier != persisted.Multiplier || prepared.RequiredCash != persisted.RequiredCash ||
-		prepared.DerivedMaxRisk != persisted.DerivedMaxRisk {
+		prepared.DerivedMaxRisk != persisted.DerivedMaxRisk || prepared.QtyIncrement != persisted.QtyIncrement {
 		prepared.RejectReason = "approval_snapshot_mismatch"
 	}
 	return prepared
