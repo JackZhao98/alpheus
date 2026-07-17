@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"mime"
 	"net/http"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
+	"alpheus/kernel/internal/units"
 )
 
 type server struct {
@@ -167,14 +167,17 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
-func (s *server) dayStateAtEquity(gate store.OperationGate, shadow bool, equity float64, window marketWindow) (risk.DayState, error) {
+func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, account broker.AccountState, window marketWindow) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
 	}
 	// TODO: OpenRisk from positions+journal; daily pnl vs MaxDailyLossPct;
 	// consecutive-loss breaker evaluation.
-	return risk.DayState{TradesToday: n, OpenRisk: 0, Equity: equity}, nil
+	return risk.DayState{
+		TradesToday: n, OpenRisk: 0, Equity: account.Equity,
+		EquityKnown: account.EquityKnown, BuyingPower: account.BuyingPower,
+	}, nil
 }
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
@@ -195,12 +198,12 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	liveDay, err := s.dayStateAtEquity(s.store, false, acct.Equity, window)
+	liveDay, err := s.dayStateAtAccount(s.store, false, acct, window)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	shadowDay, err := s.dayStateAtEquity(s.store, true, acct.Equity, window)
+	shadowDay, err := s.dayStateAtAccount(s.store, true, acct, window)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -213,11 +216,11 @@ func (s *server) getState(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) propose(w http.ResponseWriter, r *http.Request) {
-	var op risk.Operation
-	if !decodeJSONBody(w, r, &op) {
+	var request proposeRequest
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
-	op, err := validateAndNormalizeOperation(op)
+	op, err := validateAndBuildOperation(request)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -268,11 +271,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			quote = &q
 		}
 	}
+	if op.Action == "open" {
+		op = s.deriveOpenOperation(op, quote)
+	}
 	opID := store.NewID()
 	var v risk.Verdict
 	status := "auto_approved"
 	if err := s.store.WithLedgerLock(op.Shadow, window.day, func(gate store.OperationGate) error {
-		day, err := s.dayStateAtEquity(gate, op.Shadow, acct.Equity, window)
+		day, err := s.dayStateAtAccount(gate, op.Shadow, acct, window)
 		if err != nil {
 			return err
 		}
@@ -295,16 +301,21 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 
 	switch v.Class {
 	case "REJECT":
-		writeJSON(w, 200, map[string]any{"operation_id": opID, "status": "rejected", "class": v.Class, "reasons": v.Reasons})
+		resp := map[string]any{"operation_id": opID, "status": "rejected", "class": v.Class, "reasons": v.Reasons}
+		addRiskFacts(resp, op)
+		writeJSON(w, 200, resp)
 		return
 	case "C":
-		writeJSON(w, 200, map[string]any{"operation_id": opID, "status": "pending_review", "class": v.Class, "checks": v.Checks, "reasons": v.Reasons})
+		resp := map[string]any{"operation_id": opID, "status": "pending_review", "class": v.Class, "checks": v.Checks, "reasons": v.Reasons}
+		addRiskFacts(resp, op)
+		writeJSON(w, 200, resp)
 		return
 	}
 
 	// Class A and B execute now. execute enforces that shadow operations never
 	// reach the broker.
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
+	addRiskFacts(resp, op)
 	var execution map[string]any
 	if closeLockHeld {
 		execution, err = s.executeLocked(opID, op, quote)
@@ -383,16 +394,21 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	// is never trusted to decide whether the broker buys or sells.
 	side := op.Side
 
-	limit := 0.0
-	switch {
-	case op.Limit != nil:
-		limit = *op.Limit
-	case quote != nil && op.Action == "close" && side == "sell":
-		limit = quote.Bid
-	case quote != nil && op.Action == "close" && side == "buy":
-		limit = quote.Ask
-	case quote != nil:
-		limit = quote.Mid()
+	var limit units.Micros
+	if op.Action == "open" {
+		limit = op.WorkingPrice
+	} else {
+		if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+			return nil, fmt.Errorf("market_data_unavailable")
+		}
+		switch {
+		case op.Limit != nil:
+			limit = *op.Limit
+		case side == "sell":
+			limit = quote.Bid
+		case side == "buy":
+			limit = quote.Ask
+		}
 	}
 	if limit <= 0 {
 		return nil, fmt.Errorf("no executable price for %s", op.Action)
@@ -420,8 +436,39 @@ func (s *server) executeLocked(opID string, op risk.Operation, quote *broker.Quo
 	return map[string]any{"status": status, "order": res}, nil
 }
 
-func validateAndNormalizeOperation(op risk.Operation) (risk.Operation, error) {
-	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+// proposeRequest is the complete client-writable operation surface. Derived
+// risk, execution prices, multiplier, resolved close direction, and verified
+// reduction do not exist here, so strict JSON decoding rejects attempts to set
+// them before any gate runs.
+type proposeRequest struct {
+	Proposer          string            `json:"proposer"`
+	Action            string            `json:"action"`
+	Kind              string            `json:"kind"`
+	Underlying        string            `json:"underlying"`
+	Symbol            string            `json:"symbol"`
+	Side              string            `json:"side"`
+	Qty               units.Qty         `json:"qty"`
+	Limit             *units.Micros     `json:"limit"`
+	MaxRiskUSD        *units.Micros     `json:"max_risk_usd"`
+	Short             bool              `json:"short"`
+	Plan              map[string]string `json:"plan"`
+	Thesis            string            `json:"thesis"`
+	Setup             string            `json:"setup"`
+	Shadow            bool              `json:"shadow"`
+	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
+	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
+}
+
+func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
+	op := risk.Operation{
+		Proposer: request.Proposer, Action: request.Action, Kind: request.Kind,
+		Underlying: request.Underlying, Symbol: request.Symbol, Side: request.Side,
+		Qty: request.Qty, Limit: request.Limit, MaxRiskUSD: request.MaxRiskUSD,
+		Short: request.Short, Plan: request.Plan, Thesis: request.Thesis,
+		Setup: request.Setup, Shadow: request.Shadow,
+		BrokerOrderID:     request.BrokerOrderID,
+		ClosesOperationID: request.ClosesOperationID,
+	}
 	symbol := op.Symbol
 	if symbol == "" {
 		symbol = op.Underlying
@@ -441,11 +488,11 @@ func validateAndNormalizeOperation(op risk.Operation) (risk.Operation, error) {
 		if op.Side != "buy" && op.Side != "sell" {
 			return op, fmt.Errorf("bad side %q", op.Side)
 		}
-		if !finite(op.Qty) || op.Qty <= 0 {
-			return op, fmt.Errorf("qty must be finite and greater than zero")
+		if op.Qty <= 0 {
+			return op, fmt.Errorf("qty must be greater than zero")
 		}
-		if !finite(op.MaxRiskUSD) {
-			return op, fmt.Errorf("max_risk_usd must be finite")
+		if op.Kind == "option" && op.Qty%units.Qty(units.Scale) != 0 {
+			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
 	case "close":
 		if strings.TrimSpace(symbol) == "" {
@@ -458,8 +505,11 @@ func validateAndNormalizeOperation(op risk.Operation) (risk.Operation, error) {
 		if op.Side != "" && op.Side != "buy" && op.Side != "sell" {
 			return op, fmt.Errorf("bad side %q", op.Side)
 		}
-		if !finite(op.Qty) || op.Qty <= 0 {
-			return op, fmt.Errorf("qty must be finite and greater than zero")
+		if op.Qty <= 0 {
+			return op, fmt.Errorf("qty must be greater than zero")
+		}
+		if op.Kind == "option" && op.Qty%units.Qty(units.Scale) != 0 {
+			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
 	case "cancel":
 		op.BrokerOrderID = strings.TrimSpace(op.BrokerOrderID)
@@ -479,10 +529,89 @@ func validateAndNormalizeOperation(op risk.Operation) (risk.Operation, error) {
 		return op, fmt.Errorf("bad action %q", op.Action)
 	}
 
-	if op.Limit != nil && (!finite(*op.Limit) || *op.Limit <= 0) {
-		return op, fmt.Errorf("limit must be finite and greater than zero")
+	if op.Limit != nil && *op.Limit <= 0 {
+		return op, fmt.Errorf("limit must be greater than zero")
 	}
 	return op, nil
+}
+
+func (s *server) deriveOpenOperation(op risk.Operation, quote *broker.Quote) risk.Operation {
+	if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+		op.RejectReason = "market_data_unavailable"
+		return op
+	}
+
+	switch op.Kind {
+	case "equity":
+		op.Multiplier = 1
+	case "option":
+		symbol := op.Symbol
+		if symbol == "" {
+			symbol = op.Underlying
+		}
+		instrument, err := s.broker.GetInstrument(symbol)
+		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 {
+			op.RejectReason = "unsupported_contract"
+			return op
+		}
+		op.Multiplier = instrument.Multiplier
+	default:
+		op.RejectReason = "unsupported_contract"
+		return op
+	}
+
+	if op.Limit != nil {
+		op.ApprovedPriceCap = *op.Limit
+	} else {
+		op.ApprovedPriceCap = quote.Ask
+	}
+	op.WorkingPrice = quote.Ask
+	if s.limits.ExecutionPolicy.StartAt == "mid" {
+		op.WorkingPrice = quote.Mid()
+	}
+	if op.WorkingPrice > op.ApprovedPriceCap {
+		op.WorkingPrice = op.ApprovedPriceCap
+	}
+
+	// Required cash rounds up, against the account, so fractional micro-dollars
+	// of premium never become unreserved capacity.
+	required, err := units.MulQtyPrice(op.Qty, op.ApprovedPriceCap, op.Multiplier, true)
+	if err != nil {
+		op.RejectReason = "risk_overflow"
+		return op
+	}
+	feePerUnit := s.limits.ExecutionPolicy.FeePerShare
+	if op.Kind == "option" {
+		feePerUnit = s.limits.ExecutionPolicy.FeePerContract
+	}
+	// Fees also round up because they increase the account's required cash.
+	fees, err := units.MulQtyPrice(op.Qty, feePerUnit, 1, true)
+	if err != nil {
+		op.RejectReason = "risk_overflow"
+		return op
+	}
+	required, err = units.Add(required, fees)
+	if err != nil || required <= 0 {
+		op.RejectReason = "risk_overflow"
+		return op
+	}
+	op.RequiredCash = required
+	// In the single-leg long-only model, premium/cash is the maximum loss. A
+	// planned stop is not a broker guarantee and never reduces this value.
+	op.DerivedMaxRisk = required
+
+	return op
+}
+
+func addRiskFacts(response map[string]any, op risk.Operation) {
+	if op.Action != "open" {
+		return
+	}
+	response["derived_max_risk"] = op.DerivedMaxRisk
+	response["required_cash"] = op.RequiredCash
+	response["approved_price_cap"] = op.ApprovedPriceCap
+	response["working_price"] = op.WorkingPrice
+	response["multiplier"] = op.Multiplier
 }
 
 func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operation, error) {
@@ -500,8 +629,12 @@ func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operat
 	if position == nil {
 		return op, fmt.Errorf("close requires an existing position for %s", symbol)
 	}
-	if op.Qty > math.Abs(position.Qty) {
-		return op, fmt.Errorf("close qty %.8g exceeds position qty %.8g", op.Qty, math.Abs(position.Qty))
+	positionQty, err := units.AbsQty(position.Qty)
+	if err != nil {
+		return op, fmt.Errorf("position quantity is out of range")
+	}
+	if op.Qty > positionQty {
+		return op, fmt.Errorf("close qty %s exceeds position qty %s", op.Qty, positionQty)
 	}
 	if position.Kind != "equity" && position.Kind != "option" {
 		return op, fmt.Errorf("position %s has unsupported kind %q", symbol, position.Kind)
@@ -509,8 +642,12 @@ func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operat
 	if op.Kind != "" && op.Kind != position.Kind {
 		return op, fmt.Errorf("close kind %q does not match position kind %q", op.Kind, position.Kind)
 	}
+	if position.Kind == "option" && op.Qty%units.Qty(units.Scale) != 0 {
+		return op, fmt.Errorf("option qty must be a whole number of contracts")
+	}
 
 	op.Kind = position.Kind
+	op.Multiplier = position.Multiplier
 	if position.Qty > 0 {
 		op.Side = "sell"
 	} else {
@@ -666,6 +803,9 @@ func (s *server) simQuote(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &q) {
 		return
 	}
-	f.SetQuote(q)
+	if err := f.SetQuote(q); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

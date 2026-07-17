@@ -1,85 +1,185 @@
 package risk
 
 import (
-	"math"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/units"
 )
 
-func lims() config.Limits {
-	var l config.Limits
-	l.HardLimits.MaxRiskPerTradePct = 35
-	l.HardLimits.MaxTotalOpenRiskPct = 80
-	l.HardLimits.MaxNewTradesPerDay = 6
-	l.InstrumentRules.MinOpenInterest = 300
-	l.InstrumentRules.MaxRelativeSpread = 0.15
-	l.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
-	return l
+func limitsForTest() config.Limits {
+	var limits config.Limits
+	limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("35")
+	limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("80")
+	limits.HardLimits.MaxNewTradesPerDay = 6
+	limits.InstrumentRules.MinOpenInterest = 300
+	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
+	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
+	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
+	return limits
 }
 
-func TestPaths(t *testing.T) {
-	day := DayState{Equity: 300}
-	q := &broker.Quote{Symbol: "SPY", Bid: 623.10, Ask: 623.14, OpenInterest: 45000}
-	plan := map[string]string{"stop": "-30%", "invalidation": "x", "time_stop": "15:45", "target": "+50%"}
-
-	// Class A only after the kernel verifies that close reduces a position.
-	if v := Classify(Operation{Action: "close", Side: "sell", VerifiedReduction: true}, lims(), day, nil); v.Class != "A" {
-		t.Fatalf("close => %s, want A", v.Class)
-	}
-	if v := Classify(Operation{Action: "close", Side: "sell"}, lims(), day, nil); v.Class != "REJECT" {
-		t.Fatalf("unverified close => %s, want REJECT", v.Class)
-	}
-	// Class B: compliant open, 35 <= 105 (35% of 300)
-	if v := Classify(Operation{Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 35, Plan: plan}, lims(), day, q); v.Class != "B" {
-		t.Fatalf("compliant open => %s (%v), want B", v.Class, v.Reasons)
-	}
-	// Class C: over budget, 200 > 105
-	if v := Classify(Operation{Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 200, Plan: plan}, lims(), day, q); v.Class != "C" {
-		t.Fatalf("over-budget => %s, want C", v.Class)
-	}
-	// REJECT: naked short
-	if v := Classify(Operation{Action: "open", Short: true, Side: "sell", MaxRiskUSD: 10, Plan: plan}, lims(), day, q); v.Class != "REJECT" {
-		t.Fatalf("naked short => %s, want REJECT", v.Class)
-	}
-	if v := Classify(Operation{Action: "open", Kind: "option", Side: "sell", MaxRiskUSD: 10, Plan: plan}, lims(), day, q); v.Class != "REJECT" {
-		t.Fatalf("inferred naked short => %s, want REJECT", v.Class)
-	}
-	// REJECT: halted
-	if v := Classify(Operation{Action: "open", Side: "buy", MaxRiskUSD: 10, Plan: plan}, lims(), DayState{Equity: 300, Halted: true}, q); v.Class != "REJECT" {
-		t.Fatalf("halted => %s, want REJECT", v.Class)
+func testDay() DayState {
+	return DayState{
+		Equity: units.MustMicros("300"), EquityKnown: true,
+		BuyingPower: units.MustMicros("300"),
 	}
 }
 
-func TestWhitespacePlanDoesNotPassChecklist(t *testing.T) {
-	day := DayState{Equity: 300}
-	q := &broker.Quote{Symbol: "SPY", Bid: 4.20, Ask: 4.40, OpenInterest: 45000}
-	plan := map[string]string{"stop": " ", "invalidation": "x", "time_stop": "15:45", "target": "+50%"}
-	v := Classify(Operation{Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 35, Plan: plan}, lims(), day, q)
-	if v.Class != "C" || v.Checks["plan_complete"] {
-		t.Fatalf("whitespace plan => class=%s checks=%v, want C with plan_complete=false", v.Class, v.Checks)
+func testQuote() *broker.Quote {
+	return &broker.Quote{
+		Symbol: "SPY", Bid: units.MustMicros("4.20"),
+		Ask: units.MustMicros("4.40"), OpenInterest: 45_000,
 	}
 }
 
-func TestUnsaneQuotesFailLiquidityChecklist(t *testing.T) {
-	day := DayState{Equity: 300}
-	plan := map[string]string{"stop": "90", "invalidation": "x", "time_stop": "15:45", "target": "120"}
-	op := Operation{Action: "open", Kind: "equity", Underlying: "SPY", Symbol: "SPY", Side: "buy", Qty: 1, MaxRiskUSD: 35, Plan: plan}
-	tests := map[string]broker.Quote{
-		"crossed":      {Symbol: "SPY", Bid: 100, Ask: 50},
-		"locked":       {Symbol: "SPY", Bid: 100, Ask: 100},
-		"zero bid":     {Symbol: "SPY", Bid: 0, Ask: 100},
-		"negative bid": {Symbol: "SPY", Bid: -100, Ask: 50},
-		"nan":          {Symbol: "SPY", Bid: math.NaN(), Ask: 100},
-		"infinite":     {Symbol: "SPY", Bid: 100, Ask: math.Inf(1)},
+func testPlan() map[string]string {
+	return map[string]string{
+		"stop": "-30%", "invalidation": "x", "time_stop": "15:45", "target": "+50%",
 	}
-	for name, quote := range tests {
-		t.Run(name, func(t *testing.T) {
-			v := Classify(op, lims(), day, &quote)
-			if v.Class != "C" || v.Checks["liquidity_spread"] {
-				t.Fatalf("quote=%+v class=%s checks=%v, want C with liquidity_spread=false", quote, v.Class, v.Checks)
+}
+
+func testOpen(riskValue string) Operation {
+	value := units.MustMicros(riskValue)
+	return Operation{
+		Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY",
+		Side: "buy", Qty: units.MustQty("1"), MaxRiskUSD: &value,
+		Plan: testPlan(), DerivedMaxRisk: value, RequiredCash: value,
+		ApprovedPriceCap: units.MustMicros("4.40"), WorkingPrice: units.MustMicros("4.30"),
+		Multiplier: 100,
+	}
+}
+
+func TestClassificationPaths(t *testing.T) {
+	if verdict := Classify(Operation{Action: "close", VerifiedReduction: true}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
+		t.Fatalf("verified close=%s, want A", verdict.Class)
+	}
+	if verdict := Classify(Operation{Action: "close"}, limitsForTest(), testDay(), nil); verdict.Class != "REJECT" {
+		t.Fatalf("unverified close=%s, want REJECT", verdict.Class)
+	}
+	if verdict := Classify(testOpen("35"), limitsForTest(), testDay(), testQuote()); verdict.Class != "B" {
+		t.Fatalf("compliant open=%s reasons=%v", verdict.Class, verdict.Reasons)
+	}
+	if verdict := Classify(testOpen("200"), limitsForTest(), testDay(), testQuote()); verdict.Class != "C" {
+		t.Fatalf("over budget=%s, want C", verdict.Class)
+	}
+
+	sell := testOpen("35")
+	sell.Kind, sell.Side, sell.Short = "equity", "sell", false
+	if verdict := Classify(sell, limitsForTest(), testDay(), testQuote()); verdict.Class != "REJECT" ||
+		verdict.Reasons[0] != "uncovered_short" {
+		t.Fatalf("sell open=%+v", verdict)
+	}
+	sell.RejectReason = "market_data_unavailable"
+	if verdict := Classify(sell, limitsForTest(), testDay(), nil); verdict.Class != "REJECT" ||
+		verdict.Reasons[0] != "uncovered_short" {
+		t.Fatalf("sell open dependency priority=%+v", verdict)
+	}
+}
+
+func TestAbsoluteRiskFactsFailClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*Operation, *DayState)
+		reason string
+	}{
+		{"unknown equity", func(_ *Operation, day *DayState) { day.EquityKnown = false }, "equity_unknown"},
+		{"zero equity", func(_ *Operation, day *DayState) { day.Equity = 0 }, "nonpositive_equity"},
+		{"buying power", func(_ *Operation, day *DayState) { day.BuyingPower = units.MustMicros("34.999999") }, "insufficient_buying_power"},
+		{"derived failure", func(op *Operation, _ *DayState) { op.RejectReason = "unsupported_contract" }, "unsupported_contract"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			op, day := testOpen("35"), testDay()
+			tc.change(&op, &day)
+			verdict := Classify(op, limitsForTest(), day, testQuote())
+			if verdict.Class != "REJECT" || verdict.Reasons[0] != tc.reason {
+				t.Fatalf("verdict=%+v, want %s", verdict, tc.reason)
 			}
 		})
+	}
+}
+
+func TestRiskDeclarationMismatchUsesTolerance(t *testing.T) {
+	op := testOpen("300")
+	declared := units.MustMicros("10")
+	op.MaxRiskUSD = &declared
+	verdict := Classify(op, limitsForTest(), testDay(), testQuote())
+	if verdict.Class != "REJECT" || verdict.Reasons[0] != "risk_declaration_mismatch" {
+		t.Fatalf("verdict=%+v", verdict)
+	}
+
+	zero := units.Micros(0)
+	op.MaxRiskUSD = &zero
+	verdict = Classify(op, limitsForTest(), testDay(), testQuote())
+	if verdict.Class != "REJECT" || verdict.Reasons[0] != "risk_declaration_mismatch" {
+		t.Fatalf("explicit zero verdict=%+v", verdict)
+	}
+}
+
+func TestExactBudgetBoundary(t *testing.T) {
+	day := testDay()
+	atCap := testOpen("105")
+	atCap.MaxRiskUSD = nil
+	if verdict := Classify(atCap, limitsForTest(), day, testQuote()); !verdict.Checks["per_trade_budget"] {
+		t.Fatalf("at cap=%+v", verdict)
+	}
+	above := testOpen("105.000001")
+	above.MaxRiskUSD = nil
+	if verdict := Classify(above, limitsForTest(), day, testQuote()); verdict.Checks["per_trade_budget"] {
+		t.Fatalf("above cap=%+v", verdict)
+	}
+}
+
+func TestWhitespacePlanAndWideSpreadDowngrade(t *testing.T) {
+	op := testOpen("35")
+	op.Plan["stop"] = " "
+	quote := testQuote()
+	quote.Ask = units.MustMicros("6")
+	verdict := Classify(op, limitsForTest(), testDay(), quote)
+	if verdict.Class != "C" || verdict.Checks["plan_complete"] ||
+		verdict.Checks["liquidity_spread"] {
+		t.Fatalf("verdict=%+v", verdict)
+	}
+}
+
+func TestMalformedOrStaleQuoteRejects(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	limits := limitsForTest()
+	limits.QuoteMaxAgeSec = 5
+	tests := []broker.Quote{
+		{Bid: units.MustMicros("100"), Ask: units.MustMicros("50")},
+		{Bid: units.MustMicros("100"), Ask: units.MustMicros("100")},
+		{Bid: 0, Ask: units.MustMicros("100")},
+		{Bid: units.MustMicros("100"), Ask: units.MustMicros("101"), AsOf: now.Add(-6 * time.Second)},
+	}
+	for _, quote := range tests {
+		verdict := ClassifyAt(testOpen("35"), limits, testDay(), &quote, now)
+		if verdict.Class != "REJECT" || verdict.Reasons[0] != "market_data_unavailable" {
+			t.Fatalf("quote=%+v verdict=%+v", quote, verdict)
+		}
+	}
+}
+
+func TestRiskPackageContainsNoFloatingMoneyType(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		body, err := os.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "float"+"64") {
+			t.Fatalf("%s contains a floating money type", entry.Name())
+		}
 	}
 }

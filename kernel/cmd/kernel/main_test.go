@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
+	"alpheus/kernel/internal/units"
 )
 
 type journalEntry struct {
@@ -29,6 +31,7 @@ type memoryStore struct {
 	statuses    map[string]string
 	classes     map[string]string
 	shadows     map[string]bool
+	operations  map[string]risk.Operation
 	journals    []journalEntry
 	events      []string
 	blackboards map[string]json.RawMessage
@@ -40,6 +43,7 @@ func newMemoryStore() *memoryStore {
 		statuses:    map[string]string{},
 		classes:     map[string]string{},
 		shadows:     map[string]bool{},
+		operations:  map[string]risk.Operation{},
 		blackboards: map[string]json.RawMessage{},
 	}
 }
@@ -84,6 +88,7 @@ func (m *memoryStore) InsertOperation(id, _, class, status string, payload, _ an
 	m.classes[id] = class
 	if op, ok := payload.(risk.Operation); ok {
 		m.shadows[id] = op.Shadow
+		m.operations[id] = op
 	}
 	return nil
 }
@@ -146,20 +151,43 @@ func postOperation(t *testing.T, s *server, payload string) (*httptest.ResponseR
 	return w, body
 }
 
+func newFake(cash string) *broker.Fake {
+	return broker.NewFake(units.MustMicros(cash))
+}
+
+func setQuote(b *broker.Fake, symbol, bid, ask string, openInterest int) {
+	if err := b.SetQuote(broker.Quote{
+		Symbol: symbol, Bid: units.MustMicros(bid), Ask: units.MustMicros(ask),
+		OpenInterest: openInterest,
+	}); err != nil {
+		panic(fmt.Sprintf("set quote %s: %v", symbol, err))
+	}
+}
+
+func placeOrder(b *broker.Fake, symbol, side, qty, limit, kind string) (broker.OrderResult, error) {
+	return b.PlaceLimitOrder(
+		symbol, side, units.MustQty(qty), units.MustMicros(limit), kind,
+	)
+}
+
 func dualLedgerLimits() config.Limits {
 	limits := config.Limits{}
-	limits.HardLimits.MaxRiskPerTradePct = 35
-	limits.HardLimits.MaxTotalOpenRiskPct = 80
+	limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("35")
+	limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("80")
 	limits.HardLimits.MaxNewTradesPerDay = 6
 	limits.InstrumentRules.MinOpenInterest = 300
-	limits.InstrumentRules.MaxRelativeSpread = 0.15
+	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
+	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
+	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
 	return limits
 }
 
 func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: dualLedgerLimits(), broker: broker.NewFake(300), store: st}
+	b := newFake("300")
+	setQuote(b, "SPY", "0.34", "0.35", 45_000)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: st}
 	shadowPayload := `{"proposer":"test","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"shadow":true,"plan":{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}}`
 
 	for i := 0; i < 6; i++ {
@@ -207,14 +235,16 @@ func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
 func TestConcurrentOpensCannotExceedEitherLedgerCap(t *testing.T) {
 	for _, shadow := range []bool{false, true} {
 		name := "live"
-		payload := `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":35,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
+		payload := `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":1.001,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
 		if shadow {
 			name = "shadow"
-			payload = `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":35,"shadow":true,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
+			payload = `{"proposer":"barrier","action":"open","kind":"equity","underlying":"I4","symbol":"I4","side":"buy","qty":0.01,"max_risk_usd":1.001,"shadow":true,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`
 		}
 		t.Run(name, func(t *testing.T) {
 			st := newMemoryStore()
-			s := &server{limits: dualLedgerLimits(), broker: broker.NewFake(300), store: st}
+			b := newFake("300")
+			setQuote(b, "I4", "100", "100.1", 1_000)
+			s := &server{limits: dualLedgerLimits(), broker: b, store: st}
 			for i := 0; i < 5; i++ {
 				w, body := postOperation(t, s, payload)
 				if w.Code != http.StatusOK || body["class"] != "B" {
@@ -285,9 +315,9 @@ func TestMarketDayWindowUsesNewYorkBoundaries(t *testing.T) {
 }
 
 func TestProposeCloseUsesBid(t *testing.T) {
-	b := broker.NewFake(100_000)
-	b.SetQuote(broker.Quote{Symbol: "SPY", Bid: 4.20, Ask: 4.40, OpenInterest: 10_000})
-	if seeded, err := b.PlaceLimitOrder("SPY", "buy", 1, 4.40, "option"); err != nil || seeded.State != "filled" {
+	b := newFake("100000")
+	setQuote(b, "SPY", "4.20", "4.40", 10_000)
+	if seeded, err := placeOrder(b, "SPY", "buy", "1", "4.40", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
@@ -310,9 +340,9 @@ func TestProposeCloseUsesBid(t *testing.T) {
 }
 
 func TestProposeCloseShortUsesAsk(t *testing.T) {
-	b := broker.NewFake(100_000)
-	b.SetQuote(broker.Quote{Symbol: "SPY", Bid: 4.20, Ask: 4.40, OpenInterest: 10_000})
-	if seeded, err := b.PlaceLimitOrder("SPY", "sell", 1, 4.20, "option"); err != nil || seeded.State != "filled" {
+	b := newFake("100000")
+	setQuote(b, "SPY", "4.20", "4.40", 10_000)
+	if seeded, err := placeOrder(b, "SPY", "sell", "1", "4.20", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed short position: result=%+v err=%v", seeded, err)
 	}
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
@@ -330,7 +360,7 @@ func TestProposeCloseShortUsesAsk(t *testing.T) {
 }
 
 func TestProposeCancelRequiresBrokerOrderID(t *testing.T) {
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: newMemoryStore()}
 	w, body := postOperation(t, s, `{"proposer":"test","action":"cancel"}`)
 	if w.Code != http.StatusBadRequest || body["error"] != "cancel requires broker_order_id" {
 		t.Fatalf("status=%d body=%v", w.Code, body)
@@ -338,7 +368,7 @@ func TestProposeCancelRequiresBrokerOrderID(t *testing.T) {
 }
 
 func TestProposeCloseRequiresAndCannotExceedPosition(t *testing.T) {
-	b := broker.NewFake(10_000)
+	b := newFake("10000")
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
 
 	w, body := postOperation(t, s, `{"proposer":"test","action":"close","symbol":"SPY","qty":1}`)
@@ -346,7 +376,7 @@ func TestProposeCloseRequiresAndCannotExceedPosition(t *testing.T) {
 		t.Fatalf("missing position: status=%d body=%v", w.Code, body)
 	}
 
-	if seeded, err := b.PlaceLimitOrder("SPY", "buy", 1, 623.14, "option"); err != nil || seeded.State != "filled" {
+	if seeded, err := placeOrder(b, "SPY", "buy", "1", "623.14", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
 	w, body = postOperation(t, s, `{"proposer":"test","action":"close","kind":"option","symbol":"SPY","qty":2}`)
@@ -354,7 +384,7 @@ func TestProposeCloseRequiresAndCannotExceedPosition(t *testing.T) {
 		t.Fatalf("over-close: status=%d body=%v", w.Code, body)
 	}
 	positions, err := b.GetPositions()
-	if err != nil || len(positions) != 1 || positions[0].Qty != 1 {
+	if err != nil || len(positions) != 1 || positions[0].Qty != units.MustQty("1") {
 		t.Fatalf("position changed after rejected close: positions=%v err=%v", positions, err)
 	}
 }
@@ -367,7 +397,7 @@ func TestProposeCloseRejectsMalformedTradingFields(t *testing.T) {
 		`{"proposer":"test","action":"close","symbol":"SPY","qty":1,"limit":0}`,
 	}
 	for _, payload := range tests {
-		s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+		s := &server{limits: config.Limits{}, broker: newFake("300"), store: newMemoryStore()}
 		w, body := postOperation(t, s, payload)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("payload=%s status=%d body=%v, want 400", payload, w.Code, body)
@@ -376,8 +406,8 @@ func TestProposeCloseRejectsMalformedTradingFields(t *testing.T) {
 }
 
 func TestConcurrentCloseCannotOpenReversePosition(t *testing.T) {
-	b := broker.NewFake(10_000)
-	if seeded, err := b.PlaceLimitOrder("SPY", "buy", 1, 623.14, "option"); err != nil || seeded.State != "filled" {
+	b := newFake("10000")
+	if seeded, err := placeOrder(b, "SPY", "buy", "1", "623.14", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
@@ -419,24 +449,24 @@ func TestConcurrentCloseCannotOpenReversePosition(t *testing.T) {
 }
 
 func TestExecuteRefusesUnverifiedClose(t *testing.T) {
-	b := broker.NewFake(10_000)
-	if seeded, err := b.PlaceLimitOrder("SPY", "buy", 1, 623.14, "option"); err != nil || seeded.State != "filled" {
+	b := newFake("10000")
+	if seeded, err := placeOrder(b, "SPY", "buy", "1", "623.14", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
 	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
-	_, err := s.execute("test-op", risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: 1}, &broker.Quote{Symbol: "SPY", Bid: 623.10, Ask: 623.14})
+	_, err := s.execute("test-op", risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: units.MustQty("1")}, &broker.Quote{Symbol: "SPY", Bid: units.MustMicros("623.10"), Ask: units.MustMicros("623.14")})
 	if err == nil {
 		t.Fatal("unverified direct close execution succeeded")
 	}
 	positions, getErr := b.GetPositions()
-	if getErr != nil || len(positions) != 1 || positions[0].Qty != 1 {
+	if getErr != nil || len(positions) != 1 || positions[0].Qty != units.MustQty("1") {
 		t.Fatalf("position changed: positions=%v err=%v", positions, getErr)
 	}
 }
 
 func TestProposeCancelUnknownOrder(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 	w, body := postOperation(t, s, `{"proposer":"test","action":"cancel","broker_order_id":"missing-order"}`)
 	if w.Code != http.StatusOK || body["class"] != "A" {
 		t.Fatalf("status=%d body=%v", w.Code, body)
@@ -452,7 +482,7 @@ func TestProposeCancelUnknownOrder(t *testing.T) {
 
 func TestProposeTightenStopJournalsWithoutBrokerOrder(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 	w, body := postOperation(t, s, `{"proposer":"test","action":"tighten_stop","kind":"option","symbol":"SPY","plan":{"stop":"4.00"}}`)
 	if w.Code != http.StatusOK || body["class"] != "A" || body["stop"] != "4.00" {
 		t.Fatalf("status=%d body=%v", w.Code, body)
@@ -468,7 +498,7 @@ func TestProposeTightenStopJournalsWithoutBrokerOrder(t *testing.T) {
 
 func TestProposeTightenStopRejectsWhitespace(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 	w, body := postOperation(t, s, `{"proposer":"test","action":"tighten_stop","symbol":"SPY","plan":{"stop":"   "}}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%v, want 400", w.Code, body)
@@ -480,17 +510,20 @@ func TestProposeTightenStopRejectsWhitespace(t *testing.T) {
 
 func TestProposeOpenInfersNakedShortAndRejectsWhitespacePlan(t *testing.T) {
 	limits := config.Limits{}
-	limits.HardLimits.MaxRiskPerTradePct = 35
-	limits.HardLimits.MaxTotalOpenRiskPct = 80
+	limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("35")
+	limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("80")
 	limits.HardLimits.MaxNewTradesPerDay = 6
 	limits.InstrumentRules.MinOpenInterest = 300
-	limits.InstrumentRules.MaxRelativeSpread = 0.15
+	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
+	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
+	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
-	b := broker.NewFake(300)
+	b := newFake("300")
+	setQuote(b, "SPY", "0.34", "0.35", 45_000)
 	s := &server{limits: limits, broker: b, store: newMemoryStore()}
 
 	validPlan := `{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}`
-	w, body := postOperation(t, s, `{"proposer":"test","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","qty":1,"limit":623.10,"max_risk_usd":35,"plan":`+validPlan+`}`)
+	w, body := postOperation(t, s, `{"proposer":"test","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"sell","qty":1,"limit":0.35,"max_risk_usd":35,"plan":`+validPlan+`}`)
 	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
 		t.Fatalf("inferred naked short: status=%d body=%v", w.Code, body)
 	}
@@ -507,7 +540,7 @@ func TestProposeOpenInfersNakedShortAndRejectsWhitespacePlan(t *testing.T) {
 }
 
 func TestProposeRequiresJSONAndRejectsUnknownFields(t *testing.T) {
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: newMemoryStore()}
 	req := httptest.NewRequest(http.MethodPost, "/operations", bytes.NewBufferString(`{"action":"cancel","broker_order_id":"x"}`))
 	w := httptest.NewRecorder()
 	s.propose(w, req)
@@ -522,7 +555,7 @@ func TestProposeRequiresJSONAndRejectsUnknownFields(t *testing.T) {
 }
 
 func TestCrossedQuoteFailsClosedAtLiquidityGate(t *testing.T) {
-	b := broker.NewFake(300)
+	b := newFake("300")
 	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
 
 	req := httptest.NewRequest(http.MethodPost, "/sim/quote", bytes.NewBufferString(
@@ -535,16 +568,266 @@ func TestCrossedQuoteFailsClosedAtLiquidityGate(t *testing.T) {
 	}
 
 	w, body := postOperation(t, s, `{"proposer":"test","action":"open","kind":"equity","underlying":"XSD","symbol":"XSD","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"90","invalidation":"x","time_stop":"15:45","target":"120"}}`)
-	if w.Code != http.StatusOK || body["class"] != "C" || body["status"] != "pending_review" {
-		t.Fatalf("crossed quote: status=%d body=%v, want C/pending_review", w.Code, body)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
+		t.Fatalf("crossed quote: status=%d body=%v, want REJECT/rejected", w.Code, body)
 	}
-	checks, ok := body["checks"].(map[string]any)
-	if !ok || checks["liquidity_spread"] != false {
-		t.Fatalf("crossed quote checks=%v, want liquidity_spread=false", body["checks"])
+	reasons, ok := body["reasons"].([]any)
+	if !ok || len(reasons) == 0 || reasons[0] != "market_data_unavailable" {
+		t.Fatalf("crossed quote reasons=%v", body["reasons"])
 	}
 	positions, err := b.GetPositions()
 	if err != nil || len(positions) != 0 {
 		t.Fatalf("crossed quote reached broker: positions=%v err=%v", positions, err)
+	}
+}
+
+func TestComputedRiskCannotBeUnderDeclared(t *testing.T) {
+	plan := `{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}`
+	tests := []struct {
+		name        string
+		declaration string
+		class       string
+		status      string
+		reason      string
+	}{
+		{"under-declared", `,"max_risk_usd":10`, "REJECT", "rejected", "risk_declaration_mismatch"},
+		{"truthful", `,"max_risk_usd":300`, "C", "pending_review", ""},
+		{"explicit zero", `,"max_risk_usd":0`, "REJECT", "rejected", "risk_declaration_mismatch"},
+		{"omitted", "", "C", "pending_review", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newFake("300")
+			setQuote(b, "SPY", "2.99", "3.00", 45_000)
+			limits := dualLedgerLimits()
+			st := newMemoryStore()
+			s := &server{limits: limits, broker: b, store: st}
+			payload := `{"proposer":"m25","action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1` +
+				tc.declaration + `,"plan":` + plan + `}`
+			w, body := postOperation(t, s, payload)
+			if w.Code != http.StatusOK || body["class"] != tc.class || body["status"] != tc.status {
+				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+			if body["derived_max_risk"] != 300.0 || body["required_cash"] != 300.0 {
+				t.Fatalf("risk facts=%v/%v, want 300", body["derived_max_risk"], body["required_cash"])
+			}
+			if tc.reason != "" {
+				reasons, ok := body["reasons"].([]any)
+				if !ok || len(reasons) == 0 || reasons[0] != tc.reason {
+					t.Fatalf("reasons=%v, want %s", body["reasons"], tc.reason)
+				}
+			}
+			positions, err := b.GetPositions()
+			if err != nil || len(positions) != 0 {
+				t.Fatalf("broker effect: positions=%v err=%v", positions, err)
+			}
+			id, _ := body["operation_id"].(string)
+			st.mu.Lock()
+			persisted, ok := st.operations[id]
+			st.mu.Unlock()
+			if !ok || persisted.DerivedMaxRisk != units.MustMicros("300") ||
+				persisted.RequiredCash != units.MustMicros("300") ||
+				persisted.ApprovedPriceCap != units.MustMicros("3") ||
+				persisted.WorkingPrice != units.MustMicros("2.995") ||
+				persisted.Qty != units.MustQty("1") || persisted.Multiplier != 100 {
+				t.Fatalf("persisted=%+v", persisted)
+			}
+		})
+	}
+}
+
+func TestRequiredCashBuyingPowerBoundary(t *testing.T) {
+	plan := `{"stop":"-30%","invalidation":"x","time_stop":"15:45","target":"+50%"}`
+	tests := []struct {
+		cash   string
+		class  string
+		reason string
+	}{
+		{"299.999999", "REJECT", "insufficient_buying_power"},
+		{"300", "C", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.cash, func(t *testing.T) {
+			b := newFake(tc.cash)
+			setQuote(b, "SPY", "2.99", "3.00", 45_000)
+			s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+			w, body := postOperation(t, s,
+				`{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"plan":`+plan+`}`)
+			if w.Code != http.StatusOK || body["class"] != tc.class {
+				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+			if tc.reason != "" {
+				reasons := body["reasons"].([]any)
+				if reasons[0] != tc.reason {
+					t.Fatalf("reasons=%v", reasons)
+				}
+			}
+		})
+	}
+}
+
+func TestDerivedRequestFieldsAreStructurallyRejected(t *testing.T) {
+	s := &server{limits: dualLedgerLimits(), broker: newFake("300"), store: newMemoryStore()}
+	for _, field := range []string{
+		`"derived_max_risk":1`,
+		`"required_cash":1`,
+		`"verified_reduction":true`,
+		`"multiplier":100`,
+	} {
+		payload := `{"action":"open","kind":"equity","underlying":"SPY","symbol":"SPY","side":"buy","qty":0.1,` +
+			field + `}`
+		w, _ := postOperation(t, s, payload)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("field=%s status=%d body=%s", field, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestOpenSellAlwaysRejectsBothKinds(t *testing.T) {
+	for _, kind := range []string{"equity", "option"} {
+		for _, seeded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/seeded=%t", kind, seeded), func(t *testing.T) {
+				b := newFake("1000")
+				setQuote(b, "SELL", "0.34", "0.35", 45_000)
+				if kind == "option" {
+					b.SetInstrument(broker.Instrument{Symbol: "SELL", Kind: "option", Multiplier: 100})
+				}
+				if seeded {
+					if result, err := placeOrder(b, "SELL", "buy", "1", "0.35", kind); err != nil || result.State != "filled" {
+						t.Fatalf("seed: result=%+v err=%v", result, err)
+					}
+				}
+				s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+				w, body := postOperation(t, s,
+					`{"action":"open","kind":"`+kind+`","underlying":"SELL","symbol":"SELL","side":"sell","qty":1,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+				if w.Code != http.StatusOK || body["class"] != "REJECT" {
+					t.Fatalf("status=%d body=%v", w.Code, body)
+				}
+				reasons := body["reasons"].([]any)
+				if reasons[0] != "uncovered_short" {
+					t.Fatalf("reasons=%v", reasons)
+				}
+			})
+		}
+	}
+}
+
+func TestUnknownEquityBlocksOpenButNotQuotedClose(t *testing.T) {
+	b := newFake("1000")
+	setQuote(b, "A", "9.90", "10", 1_000)
+	setQuote(b, "B", "9.90", "10", 1_000)
+	for _, symbol := range []string{"A", "B"} {
+		if result, err := placeOrder(b, symbol, "buy", "1", "10", "equity"); err != nil || result.State != "filled" {
+			t.Fatalf("seed %s: result=%+v err=%v", symbol, result, err)
+		}
+	}
+	b.DeleteQuote("A")
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	stateResponse := httptest.NewRecorder()
+	s.getState(stateResponse, httptest.NewRequest(http.MethodGet, "/state", nil))
+	if stateResponse.Code != http.StatusOK {
+		t.Fatalf("state: status=%d body=%s", stateResponse.Code, stateResponse.Body.String())
+	}
+	var state map[string]any
+	if err := json.Unmarshal(stateResponse.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	account := state["account"].(map[string]any)
+	if account["equity_known"] != false {
+		t.Fatalf("account=%v, want equity_known=false", account)
+	}
+
+	w, body := postOperation(t, s,
+		`{"action":"open","kind":"equity","underlying":"B","symbol":"B","side":"buy","qty":1,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["reasons"].([]any)[0] != "equity_unknown" {
+		t.Fatalf("unknown-equity open: status=%d body=%v", w.Code, body)
+	}
+
+	w, body = postOperation(t, s, `{"action":"close","symbol":"B","qty":1}`)
+	if w.Code != http.StatusOK || body["class"] != "A" || body["status"] != "executed" {
+		t.Fatalf("quoted close: status=%d body=%v", w.Code, body)
+	}
+
+	w, body = postOperation(t, s, `{"action":"close","symbol":"A","qty":1}`)
+	if w.Code != http.StatusBadGateway || body["error"] != "market_data_unavailable" {
+		t.Fatalf("unquoted close: status=%d body=%v", w.Code, body)
+	}
+	positions, err := b.GetPositions()
+	if err != nil || len(positions) != 1 || positions[0].Symbol != "A" {
+		t.Fatalf("positions=%v err=%v, want untouched A", positions, err)
+	}
+}
+
+func TestNonpositiveEquityRejectsOpenAndCloseStillWorks(t *testing.T) {
+	for _, cash := range []string{"0", "-1"} {
+		t.Run("open/"+cash, func(t *testing.T) {
+			b := newFake(cash)
+			setQuote(b, "Z", "1", "1.10", 1_000)
+			s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+			w, body := postOperation(t, s,
+				`{"action":"open","kind":"equity","underlying":"Z","symbol":"Z","side":"buy","qty":0.5,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+			if w.Code != http.StatusOK || body["class"] != "REJECT" ||
+				body["reasons"].([]any)[0] != "nonpositive_equity" {
+				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+		})
+	}
+
+	b := newFake("0")
+	setQuote(b, "Z", "1", "1.10", 1_000)
+	if result, err := placeOrder(b, "Z", "buy", "1", "1.10", "equity"); err != nil || result.State != "filled" {
+		t.Fatalf("seed negative equity: result=%+v err=%v", result, err)
+	}
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	w, body := postOperation(t, s, `{"action":"close","symbol":"Z","qty":1}`)
+	if w.Code != http.StatusOK || body["class"] != "A" || body["status"] != "executed" {
+		t.Fatalf("close: status=%d body=%v", w.Code, body)
+	}
+}
+
+func TestQuantityInstrumentAndOverflowBoundaries(t *testing.T) {
+	b := newFake("1000")
+	setQuote(b, "Q", "1", "1.10", 1_000)
+	b.SetInstrument(broker.Instrument{Symbol: "Q", Kind: "option", Multiplier: 100})
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+
+	w, _ := postOperation(t, s,
+		`{"action":"open","kind":"option","underlying":"Q","symbol":"Q","side":"buy","qty":1.5}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("fractional option status=%d body=%s", w.Code, w.Body.String())
+	}
+	w, body := postOperation(t, s,
+		`{"action":"open","kind":"equity","underlying":"Q","symbol":"Q","side":"buy","qty":0.5,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+	if w.Code != http.StatusOK || body["class"] != "B" {
+		t.Fatalf("fractional equity status=%d body=%v", w.Code, body)
+	}
+
+	b.SetInstrument(broker.Instrument{Symbol: "Q", Kind: "option", Multiplier: 10})
+	w, body = postOperation(t, s,
+		`{"action":"open","kind":"option","underlying":"Q","symbol":"Q","side":"buy","qty":1,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" ||
+		body["reasons"].([]any)[0] != "unsupported_contract" {
+		t.Fatalf("nonstandard multiplier status=%d body=%v", w.Code, body)
+	}
+	b.DeleteInstrument("Q")
+	w, body = postOperation(t, s,
+		`{"action":"open","kind":"option","underlying":"Q","symbol":"Q","side":"buy","qty":1,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" ||
+		body["reasons"].([]any)[0] != "unsupported_contract" {
+		t.Fatalf("missing multiplier status=%d body=%v", w.Code, body)
+	}
+
+	w, body = postOperation(t, s,
+		`{"action":"open","kind":"equity","underlying":"SPY","symbol":"SPY","side":"buy","qty":9223372036854.775807,"limit":9223372036854.775807}`)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" ||
+		body["reasons"].([]any)[0] != "risk_overflow" {
+		t.Fatalf("overflow status=%d body=%v", w.Code, body)
+	}
+
+	w, _ = postOperation(t, s,
+		`{"action":"open","kind":"equity","underlying":"SPY","symbol":"SPY","side":"buy","qty":1e-6}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("exponent qty status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -554,7 +837,7 @@ func TestReviewRejectsGarbageVerdictWithoutMutation(t *testing.T) {
 	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}); err != nil {
 		t.Fatal(err)
 	}
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 	req := httptest.NewRequest(http.MethodPost, "/operations/"+id+"/review", bytes.NewBufferString(`{"verdict":"BANANA"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetPathValue("id", id)
@@ -571,7 +854,7 @@ func TestReviewRejectsGarbageVerdictWithoutMutation(t *testing.T) {
 
 func TestJSONWriteBoundaryAppliesToSmallEndpoints(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: newMemoryStore()}
 	tests := []struct {
 		name    string
 		target  string
@@ -602,7 +885,7 @@ func TestJSONWriteBoundaryAppliesToSmallEndpoints(t *testing.T) {
 
 func TestBlackboardRejectsInvalidDayAndOversizedDocument(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 
 	req := httptest.NewRequest(http.MethodPut, "/blackboard/not-a-date", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -631,7 +914,7 @@ func TestJournalInvalidReferenceIs400WithoutDatabaseDetails(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	st := newMemoryStore()
 	st.journalErr = store.ErrInvalidOperationReference
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: st}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
 	req := httptest.NewRequest(http.MethodPost, "/journal", bytes.NewBufferString(`{"operation_id":"`+id+`","hypothesis":{}}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -645,7 +928,7 @@ func TestJournalInvalidReferenceIs400WithoutDatabaseDetails(t *testing.T) {
 }
 
 func TestLessonsLimitIsStrictlyBounded(t *testing.T) {
-	s := &server{limits: config.Limits{}, broker: broker.NewFake(300), store: newMemoryStore()}
+	s := &server{limits: config.Limits{}, broker: newFake("300"), store: newMemoryStore()}
 	for _, value := range []string{"-1", "1000000000", "banana"} {
 		req := httptest.NewRequest(http.MethodGet, "/lessons?limit="+value, nil)
 		w := httptest.NewRecorder()

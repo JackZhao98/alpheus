@@ -99,10 +99,12 @@ func extractOps(out contracts.Output) []contracts.ProposedOperation {
 }
 
 func submit(client *assemble.Client, op contracts.ProposedOperation, role roles.Role) (map[string]any, error) {
-	body := map[string]any{"proposer": role.Role}
-	b, _ := json.Marshal(op)
-	_ = json.Unmarshal(b, &body) // merge op fields over proposer
-
+	// Marshal the typed decimal fields directly. Routing through map[string]any
+	// would decode JSON numbers as float64 before re-encoding them.
+	body := struct {
+		Proposer string `json:"proposer"`
+		contracts.ProposedOperation
+	}{Proposer: role.Role, ProposedOperation: op}
 	res, err := postJSON(client, "/operations", body)
 	if err != nil {
 		return nil, err

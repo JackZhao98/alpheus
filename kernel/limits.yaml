@@ -36,3 +36,8 @@ execution_policy:
   start_at: mid
   reprice_interval_sec: 20
   max_reprices: 3                  # 然后撤单，永不追价
+  fee_per_contract: 0
+  fee_per_share: 0
+
+risk_declaration_tolerance: 0.01
+quote_max_age_sec: 0               # M8A 行情时间戳接入前禁用年龄检查

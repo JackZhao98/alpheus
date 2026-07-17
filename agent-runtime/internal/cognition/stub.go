@@ -21,7 +21,7 @@ func (Stub) Run(role roles.Role, _ map[string]json.RawMessage) (contracts.Output
 			Reasoning: "stub: exercising Class-B path in shadow",
 			Proposals: []contracts.ProposedOperation{{
 				Action: "open", Kind: "option", Underlying: "SPY", Symbol: "SPY",
-				Side: "buy", Qty: 1, MaxRiskUSD: 35, Shadow: true,
+				Side: "buy", Qty: json.Number("1"), MaxRiskUSD: number("35"), Shadow: true,
 				Thesis: "stub plumbing test", Setup: "stub",
 				Plan: &contracts.ExitPlan{Stop: "-30%", Invalidation: "regime flips", TimeStop: "15:45 ET", Target: "+50%"},
 			}},
@@ -36,4 +36,9 @@ func (Stub) Run(role roles.Role, _ map[string]json.RawMessage) (contracts.Output
 		}, nil
 	}
 	return contracts.JournalReview{}, nil
+}
+
+func number(value string) *json.Number {
+	number := json.Number(value)
+	return &number
 }

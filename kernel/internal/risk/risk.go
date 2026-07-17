@@ -1,127 +1,170 @@
-// Package risk is the gate. Deterministic classification of every proposal.
-//
-//	Class A: reduces risk           -> execute immediately, zero review
-//	Class B: passes full checklist  -> auto-approved by code, no LLM involved
-//	Class C: exception              -> pending_review (LLM reviewer or human)
-//	REJECT : violates an absolute   -> dead on arrival
-//
-// Aggressive profile: sizing caps are PERCENTAGES of live equity, so the
-// agent's absolute headroom grows with its own track record.
+// Package risk is the deterministic gate for every operation.
 package risk
 
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/units"
 )
 
 type Operation struct {
 	Proposer          string            `json:"proposer"`
-	Action            string            `json:"action"` // open | close | cancel | tighten_stop
-	Kind              string            `json:"kind"`   // option | equity
-	Underlying        string            `json:"underlying"`
-	Symbol            string            `json:"symbol"`
-	Side              string            `json:"side"`
-	Qty               float64           `json:"qty"`
-	Limit             *float64          `json:"limit"`
-	MaxRiskUSD        float64           `json:"max_risk_usd"`
-	Short             bool              `json:"short"`
-	Plan              map[string]string `json:"plan"` // stop / invalidation / time_stop / target
-	Thesis            string            `json:"thesis"`
-	Setup             string            `json:"setup"`
+	Action            string            `json:"action"`
+	Kind              string            `json:"kind,omitempty"`
+	Underlying        string            `json:"underlying,omitempty"`
+	Symbol            string            `json:"symbol,omitempty"`
+	Side              string            `json:"side,omitempty"`
+	Qty               units.Qty         `json:"qty,omitempty"`
+	Limit             *units.Micros     `json:"limit,omitempty"`
+	MaxRiskUSD        *units.Micros     `json:"max_risk_usd,omitempty"`
+	Short             bool              `json:"short,omitempty"`
+	Plan              map[string]string `json:"plan,omitempty"`
+	Thesis            string            `json:"thesis,omitempty"`
+	Setup             string            `json:"setup,omitempty"`
 	Shadow            bool              `json:"shadow"`
 	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
 	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
-	// VerifiedReduction is set by the kernel only after it checks the live
-	// position. It is never accepted from JSON.
-	VerifiedReduction bool `json:"-"`
+
+	// Kernel-derived execution and risk facts. None of these fields exist on
+	// the request DTO decoded by the HTTP handler.
+	DerivedMaxRisk   units.Micros `json:"derived_max_risk,omitempty"`
+	RequiredCash     units.Micros `json:"required_cash,omitempty"`
+	ApprovedPriceCap units.Micros `json:"approved_price_cap,omitempty"`
+	WorkingPrice     units.Micros `json:"working_price,omitempty"`
+	Multiplier       int64        `json:"multiplier,omitempty"`
+
+	VerifiedReduction bool   `json:"-"`
+	RejectReason      string `json:"-"`
 }
 
 type DayState struct {
-	TradesToday int     `json:"trades_today"`
-	OpenRisk    float64 `json:"open_risk"`
-	Equity      float64 `json:"equity"`
-	Halted      bool    `json:"halted"`
-	HaltReason  string  `json:"halt_reason,omitempty"`
+	TradesToday int          `json:"trades_today"`
+	OpenRisk    units.Micros `json:"open_risk"`
+	Equity      units.Micros `json:"equity"`
+	EquityKnown bool         `json:"equity_known"`
+	BuyingPower units.Micros `json:"buying_power"`
+	Halted      bool         `json:"halted"`
+	HaltReason  string       `json:"halt_reason,omitempty"`
 }
 
 type Verdict struct {
-	Class   string          `json:"class"` // A | B | C | REJECT
+	Class   string          `json:"class"`
 	Checks  map[string]bool `json:"checks,omitempty"`
 	Reasons []string        `json:"reasons"`
 }
 
 var reducing = map[string]bool{"cancel": true, "tighten_stop": true}
 
-// Classify decides the fate of a proposal. quote may be nil for non-open actions.
-func Classify(op Operation, lim config.Limits, day DayState, quote *broker.Quote) Verdict {
+func reject(reason string) Verdict {
+	return Verdict{Class: "REJECT", Reasons: []string{reason}}
+}
+
+func Classify(op Operation, limits config.Limits, day DayState, quote *broker.Quote) Verdict {
+	return ClassifyAt(op, limits, day, quote, time.Now().UTC())
+}
+
+func ClassifyAt(op Operation, limits config.Limits, day DayState, quote *broker.Quote, now time.Time) Verdict {
 	if op.Action == "close" {
 		if op.Shadow || op.VerifiedReduction {
 			return Verdict{Class: "A", Reasons: []string{"verified risk reduction"}}
 		}
-		return Verdict{Class: "REJECT", Reasons: []string{"close is not verified against a position"}}
+		return reject("close is not verified against a position")
 	}
 	if reducing[op.Action] {
 		return Verdict{Class: "A", Reasons: []string{"risk-reducing"}}
 	}
 	if op.Action != "open" {
-		return Verdict{Class: "REJECT", Reasons: []string{fmt.Sprintf("unknown action %q", op.Action)}}
+		return reject(fmt.Sprintf("unknown action %q", op.Action))
 	}
 
-	// --- absolutes: any failure here is REJECT, not review ---
+	// Absolutes: a human cannot override a missing dependency, invented buying
+	// power, a short leg the model cannot represent, or a lying declaration.
 	if day.Halted {
-		return Verdict{Class: "REJECT", Reasons: []string{"breaker halted: " + day.HaltReason}}
+		return reject("breaker halted: " + day.HaltReason)
 	}
-	// In the current single-leg model, an option sell on an open action is a
-	// short option. Do not trust callers to declare Short correctly.
-	if (op.Short || (op.Kind == "option" && op.Side == "sell")) && !lim.InstrumentRules.AllowNakedShortOptions {
-		return Verdict{Class: "REJECT", Reasons: []string{"naked short options forbidden"}}
+	if op.Side == "sell" {
+		return reject("uncovered_short")
+	}
+	if op.RejectReason != "" {
+		return reject(op.RejectReason)
+	}
+	if !day.EquityKnown {
+		return reject("equity_unknown")
+	}
+	if day.Equity <= 0 {
+		return reject("nonpositive_equity")
+	}
+	if quote == nil || !quote.Usable(limits.QuoteMaxAgeSec, now) {
+		return reject("market_data_unavailable")
+	}
+	if op.DerivedMaxRisk <= 0 || op.RequiredCash <= 0 || op.Multiplier <= 0 {
+		return reject("risk_not_computed")
+	}
+	if op.RequiredCash > day.BuyingPower {
+		return reject("insufficient_buying_power")
+	}
+	if op.MaxRiskUSD != nil &&
+		units.DifferenceExceeds(*op.MaxRiskUSD, op.DerivedMaxRisk, limits.RiskDeclarationTolerance) {
+		return reject("risk_declaration_mismatch")
 	}
 
-	// --- checklist: failures downgrade to Class C (review), not reject ---
+	// Percentage caps round down, against the account: a fractional micro-dollar
+	// of capacity is never granted.
+	perTradeCap, err := units.PercentFloor(day.Equity, limits.HardLimits.MaxRiskPerTradePct)
+	if err != nil {
+		return reject("risk_overflow")
+	}
+	totalCap, err := units.PercentFloor(day.Equity, limits.HardLimits.MaxTotalOpenRiskPct)
+	if err != nil {
+		return reject("risk_overflow")
+	}
+
 	checks := map[string]bool{}
-
-	wl := lim.Whitelist.Underlyings
-	checks["whitelist"] = len(wl) == 0 || contains(wl, op.Underlying)
-
-	perTradeCap := day.Equity * lim.HardLimits.MaxRiskPerTradePct / 100
-	totalCap := day.Equity * lim.HardLimits.MaxTotalOpenRiskPct / 100
-	checks["per_trade_budget"] = op.MaxRiskUSD > 0 && op.MaxRiskUSD <= perTradeCap
-	checks["total_open_risk"] = day.OpenRisk+op.MaxRiskUSD <= totalCap
-	checks["daily_trade_count"] = day.TradesToday < lim.HardLimits.MaxNewTradesPerDay
+	checks["whitelist"] = len(limits.Whitelist.Underlyings) == 0 ||
+		contains(limits.Whitelist.Underlyings, op.Underlying)
+	checks["per_trade_budget"] = op.DerivedMaxRisk <= perTradeCap
+	checks["total_open_risk"] = units.SumLessOrEqual(day.OpenRisk, op.DerivedMaxRisk, totalCap)
+	checks["daily_trade_count"] = day.TradesToday < limits.HardLimits.MaxNewTradesPerDay
 
 	planOK := true
-	for _, k := range lim.PlanRequirements {
-		if strings.TrimSpace(op.Plan[k]) == "" {
+	for _, key := range limits.PlanRequirements {
+		if strings.TrimSpace(op.Plan[key]) == "" {
 			planOK = false
 		}
 	}
 	checks["plan_complete"] = planOK
+	checks["liquidity_spread"] = units.SpreadWithin(
+		quote.Bid, quote.Ask, limits.InstrumentRules.MaxRelativeSpread,
+	)
+	checks["liquidity_oi"] = op.Kind != "option" ||
+		quote.OpenInterest >= limits.InstrumentRules.MinOpenInterest
 
-	if quote != nil {
-		checks["liquidity_spread"] = quote.Sane() && quote.RelativeSpread() <= lim.InstrumentRules.MaxRelativeSpread
-		checks["liquidity_oi"] = op.Kind != "option" || quote.OpenInterest >= lim.InstrumentRules.MinOpenInterest
-	} else {
-		checks["liquidity_spread"], checks["liquidity_oi"] = false, false
+	order := []string{
+		"whitelist", "per_trade_budget", "total_open_risk",
+		"daily_trade_count", "plan_complete", "liquidity_spread", "liquidity_oi",
 	}
-
-	var failed []string
-	for k, ok := range checks {
-		if !ok {
-			failed = append(failed, k)
+	failed := make([]string, 0, len(order))
+	for _, key := range order {
+		if !checks[key] {
+			failed = append(failed, key)
 		}
 	}
 	if len(failed) == 0 {
 		return Verdict{Class: "B", Checks: checks, Reasons: []string{"checklist pass"}}
 	}
-	return Verdict{Class: "C", Checks: checks, Reasons: []string{"needs review: " + strings.Join(failed, ", ")}}
+	return Verdict{
+		Class: "C", Checks: checks,
+		Reasons: []string{"needs review: " + strings.Join(failed, ", ")},
+	}
 }
 
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
+func contains(list []string, value string) bool {
+	for _, candidate := range list {
+		if candidate == value {
 			return true
 		}
 	}

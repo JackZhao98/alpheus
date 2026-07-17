@@ -9,8 +9,9 @@
 package contracts
 
 import (
+	"encoding/json"
 	"fmt"
-	"math"
+	"math/big"
 	"strings"
 )
 
@@ -28,17 +29,17 @@ type ProposedOperation struct {
 	Symbol     string `json:"symbol"`
 	// Side is the order side for open. It is optional for close because the
 	// kernel derives the only safe order side from the signed live position.
-	Side              string    `json:"side"`
-	Qty               float64   `json:"qty"`
-	Limit             *float64  `json:"limit,omitempty"`
-	MaxRiskUSD        float64   `json:"max_risk_usd"`
-	Short             bool      `json:"short"`
-	Plan              *ExitPlan `json:"plan,omitempty"`
-	Thesis            string    `json:"thesis"` // journaled as hypothesis
-	Setup             string    `json:"setup"`  // playbook id, for per-setup stats
-	Shadow            bool      `json:"shadow"`
-	BrokerOrderID     string    `json:"broker_order_id,omitempty"`
-	ClosesOperationID string    `json:"closes_operation_id,omitempty"`
+	Side              string       `json:"side"`
+	Qty               json.Number  `json:"qty,omitempty"`
+	Limit             *json.Number `json:"limit,omitempty"`
+	MaxRiskUSD        *json.Number `json:"max_risk_usd,omitempty"`
+	Short             bool         `json:"short"`
+	Plan              *ExitPlan    `json:"plan,omitempty"`
+	Thesis            string       `json:"thesis"` // journaled as hypothesis
+	Setup             string       `json:"setup"`  // playbook id, for per-setup stats
+	Shadow            bool         `json:"shadow"`
+	BrokerOrderID     string       `json:"broker_order_id,omitempty"`
+	ClosesOperationID string       `json:"closes_operation_id,omitempty"`
 }
 
 func (p ProposedOperation) Validate() error {
@@ -65,11 +66,24 @@ func (p ProposedOperation) Validate() error {
 	if (p.Action == "open" || p.Action == "close") && strings.TrimSpace(p.Symbol) == "" && strings.TrimSpace(p.Underlying) == "" {
 		return fmt.Errorf("%s without symbol or underlying", p.Action)
 	}
-	if (p.Action == "open" || p.Action == "close") && (math.IsNaN(p.Qty) || math.IsInf(p.Qty, 0) || p.Qty <= 0) {
-		return fmt.Errorf("%s qty must be finite and greater than zero", p.Action)
+	if p.Action == "open" || p.Action == "close" {
+		qty, err := exactDecimal(p.Qty, true)
+		if err != nil {
+			return fmt.Errorf("%s qty: %w", p.Action, err)
+		}
+		if p.Kind == "option" && qty%1_000_000 != 0 {
+			return fmt.Errorf("option qty must be a whole number of contracts")
+		}
 	}
-	if p.Limit != nil && (math.IsNaN(*p.Limit) || math.IsInf(*p.Limit, 0) || *p.Limit <= 0) {
-		return fmt.Errorf("limit must be finite and greater than zero")
+	if p.Limit != nil {
+		if _, err := exactDecimal(*p.Limit, true); err != nil {
+			return fmt.Errorf("limit: %w", err)
+		}
+	}
+	if p.MaxRiskUSD != nil {
+		if _, err := exactDecimal(*p.MaxRiskUSD, false); err != nil {
+			return fmt.Errorf("max_risk_usd: %w", err)
+		}
 	}
 	if p.Action == "open" && p.Plan == nil {
 		return fmt.Errorf("open without exit plan")
@@ -84,6 +98,59 @@ func (p ProposedOperation) Validate() error {
 		return fmt.Errorf("tighten_stop without symbol or underlying")
 	}
 	return nil
+}
+
+// exactDecimal validates the same public decimal grammar as the kernel: no
+// exponent, at most six fractional digits, and no floating-point conversion.
+func exactDecimal(number json.Number, positive bool) (int64, error) {
+	value := string(number)
+	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "eE") {
+		return 0, fmt.Errorf("must be an exact decimal without exponent")
+	}
+	negative := false
+	if value[0] == '-' {
+		negative = true
+		value = value[1:]
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || parts[0] == "" ||
+		(len(parts) == 2 && (parts[1] == "" || len(parts[1]) > 6)) {
+		return 0, fmt.Errorf("must have at most 6 fractional digits")
+	}
+	for _, part := range parts {
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return 0, fmt.Errorf("contains a non-decimal character")
+			}
+		}
+	}
+	whole := new(big.Int)
+	if _, ok := whole.SetString(parts[0], 10); !ok {
+		return 0, fmt.Errorf("invalid decimal")
+	}
+	scaled := new(big.Int).Mul(whole, big.NewInt(1_000_000))
+	if len(parts) == 2 {
+		fraction := new(big.Int)
+		text := parts[1] + strings.Repeat("0", 6-len(parts[1]))
+		if _, ok := fraction.SetString(text, 10); !ok {
+			return 0, fmt.Errorf("invalid decimal")
+		}
+		scaled.Add(scaled, fraction)
+	}
+	if negative {
+		scaled.Neg(scaled)
+	}
+	if !scaled.IsInt64() {
+		return 0, fmt.Errorf("is out of range")
+	}
+	result := scaled.Int64()
+	if positive && result <= 0 {
+		return 0, fmt.Errorf("must be greater than zero")
+	}
+	if !positive && result < 0 {
+		return 0, fmt.Errorf("must be non-negative")
+	}
+	return result, nil
 }
 
 // Output is what every cognition run must return.

@@ -58,13 +58,25 @@ func main() {
 	payload, err := json.Marshal(map[string]any{
 		"proposer": "audit-i4", "action": "open", "kind": "equity",
 		"underlying": "I4", "symbol": "I4", "side": "buy", "qty": 0.01,
-		"limit": 100.1, "max_risk_usd": 35, "shadow": *shadow,
+		"limit": 100.1, "max_risk_usd": 1.001, "shadow": *shadow,
 		"plan": map[string]string{
 			"stop": "90", "invalidation": "x", "time_stop": "15:45", "target": "120",
 		},
 	})
 	if err != nil {
 		panic(err)
+	}
+	quote, err := json.Marshal(map[string]any{
+		"symbol": "I4", "bid": 100, "ask": 100.1, "open_interest": 1000,
+	})
+	if err != nil {
+		panic(err)
+	}
+	for _, url := range urls {
+		if err := postQuote(client, url+"/sim/quote", quote); err != nil {
+			fmt.Fprintf(os.Stderr, "seed quote: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	for i := 0; i < *seed; i++ {
@@ -142,6 +154,23 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "PASS: B=%d C=%d trades_today=%d\n", expectedB, expectedC, tradesToday)
+}
+
+func postQuote(client *http.Client, url string, payload []byte) error {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	return nil
 }
 
 func post(client *http.Client, url string, payload []byte) result {
