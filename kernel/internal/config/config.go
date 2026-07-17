@@ -39,6 +39,7 @@ type Limits struct {
 	} `yaml:"execution_policy" json:"execution_policy"`
 	RiskDeclarationTolerance units.Micros `yaml:"risk_declaration_tolerance" json:"risk_declaration_tolerance"`
 	QuoteMaxAgeSec           int          `yaml:"quote_max_age_sec" json:"quote_max_age_sec"`
+	ProposalTTLSec           int          `yaml:"proposal_ttl_sec" json:"proposal_ttl_sec"`
 }
 
 func LoadLimits() (Limits, error) {

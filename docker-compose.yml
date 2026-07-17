@@ -18,6 +18,9 @@ services:
     environment:
       DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
       DB_TIMEOUT_MS: ${DB_TIMEOUT_MS:-3000}
+      BROKER_TIMEOUT_MS: ${BROKER_TIMEOUT_MS:-10000}
+      CLAIM_TIMEOUT_MS: ${CLAIM_TIMEOUT_MS:-30000}
+      ATTEMPT_STALE_MS: ${ATTEMPT_STALE_MS:-3000}
       MIGRATIONS_DIR: /migrations
       BROKER: ${BROKER:-fake}            # fake | robinhood
       TRADING_MODE: ${TRADING_MODE:-sim} # sim | shadow | read_only | live

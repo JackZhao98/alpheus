@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,8 @@ import (
 )
 
 const globalHaltEvent = "global_halt_transition"
+
+var errAccountBindingViolation = errors.New("account binding violation")
 
 func (s *server) loadGlobalHalt() error {
 	halted, reason, err := s.store.LoadGlobalHalt()
@@ -85,7 +88,7 @@ func (s *server) assertLiveAccountBinding(ctx context.Context, operationID strin
 	if eventErr := s.store.InsertEvent("account_binding_violation", map[string]string{
 		"operation_id": operationID, "reason": reason, "mode": s.tradingMode(),
 	}); eventErr != nil {
-		return fmt.Errorf("account_binding_violation: event persistence failed: %w", eventErr)
+		return fmt.Errorf("%w: event persistence failed: %w", errAccountBindingViolation, eventErr)
 	}
-	return fmt.Errorf("account_binding_violation")
+	return fmt.Errorf("%w", errAccountBindingViolation)
 }

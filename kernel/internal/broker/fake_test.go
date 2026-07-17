@@ -104,3 +104,31 @@ func TestRestingLimitFillsWhenQuoteTradesThrough(t *testing.T) {
 		t.Fatalf("positions=%+v err=%v", positions, err)
 	}
 }
+
+func TestPlaceLimitOrderDeduplicatesClientOrderID(t *testing.T) {
+	b := NewFake(units.MustMicros("300"))
+	request := PlaceRequest{
+		ClientOrderID: "stable-client-id", Symbol: "SPY", Side: "buy",
+		Qty: units.MustQty("1"), Limit: units.MustMicros("0.35"), Kind: "option",
+	}
+	first, err := b.PlaceLimitOrder(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := b.PlaceLimitOrder(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BrokerOrderID != second.BrokerOrderID {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	conflict := request
+	conflict.Qty = units.MustQty("2")
+	if _, err := b.PlaceLimitOrder(context.Background(), conflict); err == nil {
+		t.Fatal("conflicting order intent reused the client order id")
+	}
+	fills, err := b.RecentFills(context.Background(), time.Time{})
+	if err != nil || len(fills) != 1 {
+		t.Fatalf("fills=%v err=%v, want one", fills, err)
+	}
+}

@@ -4,10 +4,13 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"alpheus/kernel/internal/units"
 )
+
+var ErrNotFound = errors.New("broker object not found")
 
 type Quote struct {
 	Symbol       string       `json:"symbol"`

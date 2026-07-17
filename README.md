@@ -125,7 +125,7 @@ instrument 因缺少跨订单类型的精确 tick/数量增量字段仍然 fail 
 已核实事实和仍阻塞 M3D 的问题见
 [`docs/rh_mcp_facts.md`](docs/rh_mcp_facts.md)。
 
-### Trading Cockpit（M8B，开发中）
+### Trading Cockpit（M8B，已落地）
 
 kernel 已内嵌一个无构建步骤的只读驾驶舱：
 
@@ -158,20 +158,28 @@ inline script 的 CSP。
 - **A 减风险**（平仓/撤单/收紧止损）：零审批即刻执行——止损路径只有一跳。
   live 平仓进入 A 之前必须匹配真实持仓，数量不得超过持仓；订单方向由
   kernel 根据持仓正负推导（平多卖 bid、平空买 ask），不会采用 payload
-  中的 `side`。同一时刻的 broker 变更串行执行，避免并发双平仓反向开仓。撤单按
-  `broker_order_id` 直达 broker。原生止损单上线前，`tighten_stop`
-  只更新 operation payload 与 journal，不触达 broker。
+  中的 `side`。live 平仓在 PostgreSQL 的 `(ledger,symbol)` 事务锁内扣除
+  已持有的 close reservation，并把 operation、reservation 和带稳定 client id
+  的 execution attempt 一次提交后才触达 broker；不再依赖单进程 mutex。
+  崩溃恢复会重新核对仓位方向和其他 reservation。M2.9 写入 durable fill 前，
+  有成交的 close reservation 保持 held（fail closed）。撤单同样先写 attempt；
+  原生止损单上线前，`tighten_stop` 只更新 operation payload 与 journal。
 - **B 合规新仓**：清单全过（预算/总敞口/日单数/白名单/流动性/计划完整）
   → 代码自动放行，不经过任何 LLM。额度按**净值百分比**计算，
   agent 赚得越多绝对额度自动越大；live 与 shadow 使用相同清单、独立的
-  市场日日内交易计数，`count → classify → insert` 由 PostgreSQL 事务锁
-  串行化（进攻档宪法见 `kernel/limits.yaml`）。
+  市场日日内交易计数。每个获准 open 都先写不可撤销的 `trade_grant`；即使
+  broker 拒绝也消耗当日槽位，避免失败循环绕过上限。PostgreSQL 事务锁会串行化
+  `count → classify → grant → attempt`（进攻档宪法见 `kernel/limits.yaml`）。
 - **C 例外**：清单未过但不违反绝对项 → `pending_review`，
   交 reviewer（不同家族模型）或人一键裁决（`POST /operations/{id}/review`）。
 - **REJECT 绝对项**：熔断中、任何单腿 `open + sell`、风险声明不实、
   行情/合约/购买力依赖不可信 → 直接死亡。
 
 95% 的正常交易全自动，审批 LLM 只碰真正的例外。
+
+M2.8 的 `proposal_ttl_sec` 为人工批准的 1800 秒。进程若在 attempt 提交后、
+券商调用前崩溃，reconciler 会重新取行情/仓位并跑完整 gate；超过 30 分钟的
+旧提案永不复活下单，已授予的 trade grant 保留，未触达券商的资源预留释放。
 
 ## 三个 FILL POINT（按顺序填）
 
@@ -216,9 +224,9 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 
 ## 骨架刻意没做的事
 
-reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、M8A 的已认证
-Robinhood schema snapshot/脱敏 fixtures、inbox/watchlist 注入（assemble 有
-TODO）、C 级批准后的执行路径、订单重挂状态机接线、熔断的实时计算
+reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、inbox/watchlist
+注入（assemble 有 TODO）、C 级批准后的执行路径、M2.9 durable orders/fills、
+订单重挂状态机接线、熔断的实时计算
 （dayState 有 TODO）、watchdog 对 runtime `/wake` 的实际投递（端点和
 Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。

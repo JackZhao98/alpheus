@@ -215,6 +215,15 @@ func (f *Fake) GetInstrument(symbol string) (Instrument, error) {
 func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for _, existing := range f.orders {
+		if req.ClientOrderID != "" && existing.result.ClientOrderID == req.ClientOrderID {
+			if existing.symbol != req.Symbol || existing.side != req.Side || existing.qty != req.Qty ||
+				existing.limit != req.Limit || existing.kind != req.Kind {
+				return OrderResult{}, fmt.Errorf("client order id reused with different order intent")
+			}
+			return existing.result, nil
+		}
+	}
 	symbol, side, qty, limit, kind := req.Symbol, req.Side, req.Qty, req.Limit, req.Kind
 	if qty <= 0 || limit <= 0 {
 		return OrderResult{}, fmt.Errorf("quantity and limit must be positive")
@@ -341,7 +350,7 @@ func (f *Fake) GetOrder(_ context.Context, id string) (OrderResult, error) {
 	if order, ok := f.orders[id]; ok {
 		return order.result, nil
 	}
-	return OrderResult{BrokerOrderID: id, State: "rejected", Reason: "unknown order"}, nil
+	return OrderResult{BrokerOrderID: id, State: "rejected", Reason: "unknown order"}, ErrNotFound
 }
 
 func (f *Fake) FindOrderByClientID(_ context.Context, clientOrderID string) (OrderResult, error) {
@@ -352,7 +361,7 @@ func (f *Fake) FindOrderByClientID(_ context.Context, clientOrderID string) (Ord
 			return order.result, nil
 		}
 	}
-	return OrderResult{ClientOrderID: clientOrderID, State: "rejected", Reason: "unknown order"}, nil
+	return OrderResult{ClientOrderID: clientOrderID, State: "rejected", Reason: "unknown order"}, ErrNotFound
 }
 
 func (f *Fake) OpenOrders(_ context.Context) ([]ReadOrder, error) {

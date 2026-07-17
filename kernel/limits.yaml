@@ -41,3 +41,4 @@ execution_policy:
 
 risk_declaration_tolerance: 0.01
 quote_max_age_sec: 15              # human-approved for the read-only Robinhood MCP session
+proposal_ttl_sec: 1800             # human-approved stale proposal lifetime (30 minutes)

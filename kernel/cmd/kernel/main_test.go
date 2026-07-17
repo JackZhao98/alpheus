@@ -30,13 +30,18 @@ type journalEntry struct {
 type memoryStore struct {
 	mu               sync.Mutex
 	idempotencyMu    sync.Mutex
+	symbolMu         sync.Mutex
 	ledgerLocks      [2]sync.Mutex
 	idempotencyLocks map[string]*sync.Mutex
+	symbolLocks      map[string]*sync.Mutex
 	statuses         map[string]string
 	classes          map[string]string
 	shadows          map[string]bool
 	operations       map[string]risk.Operation
 	operationRows    map[string]store.OperationRow
+	grants           map[string]store.TradeGrant
+	reservations     map[string]store.CloseReservation
+	attempts         map[string]store.ExecutionAttempt
 	verdicts         map[string]json.RawMessage
 	journals         []journalEntry
 	events           []string
@@ -55,6 +60,10 @@ func newMemoryStore() *memoryStore {
 		operations:       map[string]risk.Operation{},
 		operationRows:    map[string]store.OperationRow{},
 		idempotencyLocks: map[string]*sync.Mutex{},
+		symbolLocks:      map[string]*sync.Mutex{},
+		grants:           map[string]store.TradeGrant{},
+		reservations:     map[string]store.CloseReservation{},
+		attempts:         map[string]store.ExecutionAttempt{},
 		verdicts:         map[string]json.RawMessage{},
 		blackboards:      map[string]json.RawMessage{},
 	}
@@ -73,11 +82,19 @@ func TestProductionQuoteAgeCannotRemainDisabled(t *testing.T) {
 }
 
 func (m *memoryStore) CountTradesForDay(shadow bool, _, _ time.Time) (int, error) {
+	return m.CountTradesForDayExcluding(shadow, time.Time{}, time.Time{}, "")
+}
+
+func (m *memoryStore) CountTradesForDayExcluding(shadow bool, _, _ time.Time, operationID string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
-	for id, status := range m.statuses {
-		if m.classes[id] == "B" && m.shadows[id] == shadow && (status == "auto_approved" || status == "executed") {
+	ledger := "live"
+	if shadow {
+		ledger = "shadow"
+	}
+	for id, grant := range m.grants {
+		if id != operationID && grant.Ledger == ledger {
 			n++
 		}
 	}
@@ -85,10 +102,11 @@ func (m *memoryStore) CountTradesForDay(shadow bool, _, _ time.Time) (int, error
 }
 
 func (m *memoryStore) WithLedgerLock(shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
-	return m.WithProposalLock(nil, shadow, time.Time{}, fn)
+	marketDay := time.Time{}
+	return m.WithProposalLock(nil, shadow, &marketDay, fn)
 }
 
-func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
+func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error {
 	if m.proposalLockErr != nil {
 		return m.proposalLockErr
 	}
@@ -104,13 +122,42 @@ func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shad
 		lock.Lock()
 		defer lock.Unlock()
 	}
-	index := 0
-	if shadow {
-		index = 1
+	if marketDay != nil {
+		index := 0
+		if shadow {
+			index = 1
+		}
+		m.ledgerLocks[index].Lock()
+		defer m.ledgerLocks[index].Unlock()
 	}
-	m.ledgerLocks[index].Lock()
-	defer m.ledgerLocks[index].Unlock()
-	return fn(m)
+	gate := &memoryGate{memoryStore: m}
+	defer gate.release()
+	return fn(gate)
+}
+
+type memoryGate struct {
+	*memoryStore
+	held []*sync.Mutex
+}
+
+func (g *memoryGate) LockLedgerSymbol(ledger, symbol string) error {
+	key := ledger + "\x00" + symbol
+	g.symbolMu.Lock()
+	lock := g.symbolLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		g.symbolLocks[key] = lock
+	}
+	g.symbolMu.Unlock()
+	lock.Lock()
+	g.held = append(g.held, lock)
+	return nil
+}
+
+func (g *memoryGate) release() {
+	for i := len(g.held) - 1; i >= 0; i-- {
+		g.held[i].Unlock()
+	}
 }
 
 func (m *memoryStore) Event(kind string, _ any) {
@@ -165,6 +212,176 @@ func (m *memoryStore) FindOperationByIdempotency(subject, key string) (*store.Op
 		}
 	}
 	return nil, nil
+}
+
+func (m *memoryStore) HeldCloseQuantity(ledger, symbol string) (units.Qty, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var quantity units.Qty
+	for _, reservation := range m.reservations {
+		if reservation.Ledger == ledger && reservation.Symbol == symbol && reservation.State == "held" {
+			quantity += reservation.RemainingQty
+		}
+	}
+	return quantity, nil
+}
+
+func (m *memoryStore) InsertTradeGrant(grant store.TradeGrant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.grants[grant.OperationID] = grant
+	return nil
+}
+
+func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reservations[reservation.ID] = reservation
+	return nil
+}
+
+func (m *memoryStore) InsertExecutionAttempt(attempt store.ExecutionAttempt) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attempts[attempt.ID] = attempt
+	return nil
+}
+
+func (m *memoryStore) GetExecutionAttempt(id string) (*store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	copy := attempt
+	return &copy, nil
+}
+
+func (m *memoryStore) UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != "pending" || attempt.Intent != "place" {
+		return false, nil
+	}
+	if limit < attempt.Limit {
+		attempt.Limit = limit
+		m.attempts[id] = attempt
+	}
+	return true, nil
+}
+
+func (m *memoryStore) ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttempt(id, instance, "pending", 0, time.Time{})
+}
+
+func (m *memoryStore) ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttempt(id, instance, expectedState, expectedToken, claimBefore)
+}
+
+func (m *memoryStore) claimMemoryAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != expectedState {
+		return nil, nil
+	}
+	if expectedState != "pending" && attempt.Attempt != expectedToken {
+		return nil, nil
+	}
+	if expectedState == "claimed" && !attempt.ClaimedAt.Before(claimBefore) {
+		return nil, nil
+	}
+	attempt.State = "claimed"
+	attempt.Attempt++
+	attempt.ClaimedBy = instance
+	attempt.ClaimedAt = time.Now().UTC()
+	m.attempts[id] = attempt
+	copy := attempt
+	return &copy, nil
+}
+
+func (m *memoryStore) ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]store.ExecutionAttempt, 0, limit)
+	for _, attempt := range m.attempts {
+		unknownReference := attempt.ClaimedAt
+		if unknownReference.IsZero() {
+			unknownReference = attempt.CreatedAt
+		}
+		if (attempt.State == "pending" && attempt.CreatedAt.Before(pendingBefore)) ||
+			(attempt.State == "claimed" && attempt.ClaimedAt.Before(claimBefore)) ||
+			(attempt.State == "unknown" && unknownReference.Before(pendingBefore)) {
+			result = append(result, attempt)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != "claimed" || attempt.Attempt != fencingToken {
+		return false, nil
+	}
+	attempt.State = resolution.State
+	attempt.BrokerOrderID = resolution.BrokerOrderID
+	attempt.LastError = resolution.LastError
+	m.attempts[id] = attempt
+	if resolution.OperationStatus != "" {
+		m.statuses[attempt.OperationID] = resolution.OperationStatus
+		row := m.operationRows[attempt.OperationID]
+		row.Status = resolution.OperationStatus
+		m.operationRows[attempt.OperationID] = row
+	}
+	if resolution.ReleaseReservation && attempt.CloseReservationID != "" {
+		reservation := m.reservations[attempt.CloseReservationID]
+		reservation.State = "released"
+		reservation.RemainingQty = 0
+		reservation.ReleasedAt = time.Now().UTC()
+		m.reservations[attempt.CloseReservationID] = reservation
+	}
+	if resolution.OrderEvent != nil {
+		m.events = append(m.events, "order_update")
+	}
+	return true, nil
+}
+
+func (m *memoryStore) FailPendingAttempt(id, reason string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != "pending" {
+		return false, nil
+	}
+	attempt.State = "failed"
+	attempt.LastError = reason
+	m.attempts[id] = attempt
+	m.statuses[attempt.OperationID] = "failed"
+	if attempt.CloseReservationID != "" {
+		reservation := m.reservations[attempt.CloseReservationID]
+		reservation.State = "released"
+		reservation.RemainingQty = 0
+		m.reservations[attempt.CloseReservationID] = reservation
+	}
+	return true, nil
+}
+
+func (m *memoryStore) GetCloseReservation(id string) (*store.CloseReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	reservation, ok := m.reservations[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	copy := reservation
+	return &copy, nil
 }
 
 func (m *memoryStore) SetOperationStatus(id, status string, verdict any) error {
@@ -298,6 +515,7 @@ func dualLedgerLimits() config.Limits {
 	limits.InstrumentRules.MinOpenInterest = 300
 	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
 	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
+	limits.ProposalTTLSec = 1800
 	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
 	return limits
@@ -573,8 +791,20 @@ func TestExecuteRefusesUnverifiedClose(t *testing.T) {
 	if seeded, err := placeOrder(b, "SPY", "buy", "1", "623.14", "option"); err != nil || seeded.State != "filled" {
 		t.Fatalf("seed long position: result=%+v err=%v", seeded, err)
 	}
-	s := &server{limits: config.Limits{}, broker: b, store: newMemoryStore()}
-	_, err := s.execute(context.Background(), "test-op", risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: units.MustQty("1")}, &broker.Quote{Symbol: "SPY", Bid: units.MustMicros("623.10"), Ask: units.MustMicros("623.14")})
+	st := newMemoryStore()
+	opID, attemptID := store.NewID(), store.NewID()
+	op := risk.Operation{Action: "close", Symbol: "SPY", Kind: "option", Side: "sell", Qty: units.MustQty("1")}
+	if err := st.InsertOperation(opID, "test", "A", "auto_approved", op, risk.Verdict{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertExecutionAttempt(store.ExecutionAttempt{
+		ID: attemptID, OperationID: opID, Seq: 1, Intent: "place", ClientOrderID: store.NewID(),
+		State: "pending", Qty: op.Qty, Limit: units.MustMicros("623.10"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{limits: config.Limits{}, broker: b, store: st}
+	_, err := s.executePendingAttempt(context.Background(), attemptID)
 	if err == nil {
 		t.Fatal("unverified direct close execution succeeded")
 	}
@@ -869,7 +1099,7 @@ func TestUnknownEquityBlocksOpenButNotQuotedClose(t *testing.T) {
 	}
 
 	w, body = postOperation(t, s, `{"action":"close","symbol":"A","qty":1}`)
-	if w.Code != http.StatusBadGateway || body["error"] != "market_data_unavailable" {
+	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["reasons"].([]any)[0] != "market_data_unavailable" {
 		t.Fatalf("unquoted close: status=%d body=%v", w.Code, body)
 	}
 	positions, err := b.Positions(context.Background())

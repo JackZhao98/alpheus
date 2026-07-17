@@ -1,12 +1,12 @@
 # Alpheus Plan Index
 
-> Plan version: **v1.1 — frozen**
+> Plan version: **v1.3 — frozen**
 >
 > Semantic baseline: commit `fa5a29e` (`docs: harden roadmap execution invariants`)
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M2.8**
+> Current implementation target: **M2.9**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -42,7 +42,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 | Phase | Milestones | Status | File |
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
-| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M2.8** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
+| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M2.9** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Pending; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
@@ -61,8 +61,8 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M8A** | **LANDED** | M2.6; read capabilities only | authenticated 49-tool snapshot, exact Agentic binding, real-shape decoders, 15-second quote age, read-only startup/API and env-gated live contract pass | Phase 1 |
 | **M8B** | **LANDED** | M8A offline provider boundary | embedded Cockpit, Live production display, 34-tool safe MCP Lab, race/vet/browser and independent mutation/account-override probes pass | Phase 1 |
 | **M2.7** | **LANDED** | M8B | fresh/legacy/partial/checksum/concurrent migration probes; 20-way idempotency barrier; runtime response-read retry; 503 in 0.315s under a 300ms paused-DB deadline with zero FakeBroker effects; race/vet green | Phase 1 |
-| **M2.8** | **NEXT** | M2.7 | execution attempts + grants + close reservations + reconciler | Phase 1 |
-| M2.9 | PENDING | M2.8 | — | Phase 1 |
+| **M2.8** | **LANDED** | M2.7 | fresh/legacy migration 3 and exact grant backfill; irreversible live/shadow grant caps; 20-close reservation barrier; lease fencing and three crash-window recovery cases; 1800-second TTL; timeout/unknown no-blind-retry; external symbol-lock deadline with zero broker effects; race/vet/compose smoke and read-only deployment green | Phase 1 |
+| **M2.9** | **NEXT** | M2.8 | orders + idempotent durable fills + atomic close-reservation decrement | Phase 1 |
 | M3A | PENDING | M2.9 | — | Phase 2 |
 | M3C | PENDING | M3A plus M8A provider evidence | — | Phase 2 |
 | M3D | BLOCKED | M8A account/settlement evidence | — | Phase 2 |
@@ -96,3 +96,4 @@ When a milestone lands:
 | 2026-07-16 | v1 | Freeze and file split only | Semantic baseline `fa5a29e`; no milestone behavior changed |
 | 2026-07-16 | v1.1 | Move M8A after M2.6; add M8B | Validate provider shapes and a read-only cockpit early; production writes remain M11 |
 | 2026-07-16 | v1.2 | Add M8B Live MCP Tool Lab | Human-requested inspection surface for all 34 reviewed no-state-change tools; 15 mutations remain structurally absent |
+| 2026-07-17 | v1.3 | M2.8 proposal TTL and fill-dependent close release boundary | Human approved `proposal_ttl_sec: 1800`. M2.8 has no durable fill identity/order linkage because M2.9 introduces it; therefore M2.8 releases only conclusively zero-fill terminal closes, keeps any filled quantity reserved fail-closed, and defers fill decrement plus safe-orphan proof to M2.9. This removes a circular acceptance dependency without weakening the reservation invariant. |

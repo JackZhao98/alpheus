@@ -38,19 +38,27 @@ type server struct {
 	simVenue  *broker.Fake
 	// broker is a simulation/test compatibility seam. Production construction
 	// leaves it nil and registers read and execution capabilities separately.
-	broker      broker.Adapter
-	store       storeAPI
-	executionMu sync.Mutex
-	haltMu      sync.RWMutex
-	halted      bool
-	haltReason  string
+	broker                 broker.Adapter
+	store                  storeAPI
+	instanceID             string
+	brokerTimeout          time.Duration
+	claimTimeout           time.Duration
+	attemptStale           time.Duration
+	providerDedupeVerified bool
+	proposalTTL            time.Duration
+	haltMu                 sync.RWMutex
+	halted                 bool
+	haltReason             string
 }
 
 // storeAPI keeps the HTTP surface testable without adding a database-mocking
 // dependency. The production implementation is *store.Store.
 type storeAPI interface {
-	store.OperationGate
-	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
+	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
+	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
+	InsertEvent(kind string, payload any) error
+	FindOperationByIdempotency(subject, key string) (*store.OperationRow, error)
+	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error
 	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
 	Event(kind string, payload any)
 	SetOperationStatus(id, status string, verdict any) error
@@ -61,6 +69,18 @@ type storeAPI interface {
 	GetBlackboard(day string) (json.RawMessage, error)
 	PutBlackboard(day string, doc json.RawMessage) error
 	LoadGlobalHalt() (bool, string, error)
+	GetExecutionAttempt(id string) (*store.ExecutionAttempt, error)
+	UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error)
+	ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error)
+	ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
+	ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error)
+	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
+	FailPendingAttempt(id, reason string) (bool, error)
+	GetCloseReservation(id string) (*store.CloseReservation, error)
+}
+
+type tradeCounter interface {
+	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 }
 
 func main() {
@@ -74,6 +94,14 @@ func main() {
 	limits, err := config.LoadLimits()
 	if err != nil {
 		log.Fatalf("limits: %v", err)
+	}
+	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
+	if err != nil {
+		log.Fatalf("limits: %v", err)
+	}
+	attemptConfig, err := loadAttemptConfig()
+	if err != nil {
+		log.Fatalf("execution config: %v", err)
 	}
 	brokerName := config.Env("BROKER", "fake")
 	if err := validateProductionQuoteAge(brokerName, limits.QuoteMaxAgeSec); err != nil {
@@ -136,12 +164,15 @@ func main() {
 		URL:           config.Env("DATABASE_URL", "postgresql://alpheus:alpheus@localhost:5432/alpheus?sslmode=disable"),
 		MigrationsDir: config.Env("MIGRATIONS_DIR", "../db/migrations"),
 		Timeout:       dbTimeout,
+		MarketTZ:      config.Env("TZ_MARKET", "America/New_York"),
 	})
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
 	if brokerName == "robinhood" {
-		actual, bindingErr := account.AccountID(context.Background())
+		bindingCtx, cancel := context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
+		actual, bindingErr := account.AccountID(bindingCtx)
+		cancel()
 		if bindingErr != nil || actual != mode.LiveAccountID {
 			st.Event("account_binding_violation", map[string]string{
 				"reason": "read_provider_binding_failed", "mode": mode.TradingMode,
@@ -149,13 +180,23 @@ func main() {
 			log.Fatalf("broker: account binding failed")
 		}
 	}
-	s := &server{limits: limits, mode: mode, account: account, execution: execution, market: market, mcpLab: mcpLab, simVenue: simVenue, broker: simVenue, store: st}
+	s := &server{
+		limits: limits, mode: mode, account: account, execution: execution, market: market,
+		mcpLab: mcpLab, simVenue: simVenue, broker: simVenue, store: st,
+		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
+		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
+		providerDedupeVerified: brokerName == "fake",
+		proposalTTL:            proposalTTL,
+	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
 	}
 
 	if _, err := startWatchdog(s); err != nil {
 		log.Fatalf("watchdog: %v", err)
+	}
+	if err := startAttemptReconciler(s); err != nil {
+		log.Fatalf("attempt reconciler startup: %v", err)
 	}
 	st.Event("kernel_start", map[string]string{
 		"broker": os.Getenv("BROKER"), "profile": limits.Profile, "mode": mode.TradingMode,
@@ -179,6 +220,49 @@ func databaseTimeout() (time.Duration, error) {
 		return 0, fmt.Errorf("DB_TIMEOUT_MS must be a positive integer")
 	}
 	return time.Duration(milliseconds) * time.Millisecond, nil
+}
+
+type attemptTimingConfig struct {
+	brokerTimeout time.Duration
+	claimTimeout  time.Duration
+	attemptStale  time.Duration
+}
+
+func loadAttemptConfig() (attemptTimingConfig, error) {
+	brokerTimeout, err := durationFromMillis("BROKER_TIMEOUT_MS", 10_000)
+	if err != nil {
+		return attemptTimingConfig{}, err
+	}
+	claimTimeout, err := durationFromMillis("CLAIM_TIMEOUT_MS", 30_000)
+	if err != nil {
+		return attemptTimingConfig{}, err
+	}
+	attemptStale, err := durationFromMillis("ATTEMPT_STALE_MS", 3_000)
+	if err != nil {
+		return attemptTimingConfig{}, err
+	}
+	if claimTimeout <= brokerTimeout {
+		return attemptTimingConfig{}, fmt.Errorf("CLAIM_TIMEOUT_MS must exceed BROKER_TIMEOUT_MS")
+	}
+	return attemptTimingConfig{brokerTimeout: brokerTimeout, claimTimeout: claimTimeout, attemptStale: attemptStale}, nil
+}
+
+func durationFromMillis(key string, fallback int) (time.Duration, error) {
+	raw := config.Env(key, strconv.Itoa(fallback))
+	milliseconds, err := strconv.ParseInt(raw, 10, 64)
+	const maxDurationMillis = int64(1<<63-1) / int64(time.Millisecond)
+	if err != nil || milliseconds <= 0 || milliseconds > maxDurationMillis {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return time.Duration(milliseconds) * time.Millisecond, nil
+}
+
+func proposalLifetime(seconds int) (time.Duration, error) {
+	const maxDurationSeconds = int64(1<<63-1) / int64(time.Second)
+	if seconds <= 0 || int64(seconds) > maxDurationSeconds {
+		return 0, fmt.Errorf("proposal_ttl_sec must be a positive integer")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -278,7 +362,7 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
-func (s *server) dayStateAtAccount(gate store.OperationGate, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
+func (s *server) dayStateAtAccount(gate tradeCounter, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
@@ -405,37 +489,6 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	if s.tradingMode() == config.ModeShadow {
 		op.Shadow = true
 	}
-
-	// A live close must keep the position read and order placement in one
-	// critical section; otherwise two simultaneous closes can both observe the
-	// same position and the second can open risk. Other broker mutations acquire
-	// the same lock inside execute.
-	closeLockHeld := !op.Shadow && op.Action == "close"
-	if closeLockHeld {
-		s.executionMu.Lock()
-		defer s.executionMu.Unlock()
-	}
-	if op.Action == "close" {
-		if op.Shadow {
-			op.VerifiedReduction = true // no broker effect; no shadow position ledger yet
-		} else {
-			positions, err := s.accountProvider().Positions(r.Context())
-			if err != nil {
-				writeJSON(w, 502, map[string]string{"error": err.Error()})
-				return
-			}
-			op, err = normalizeClose(op, positions)
-			if err != nil {
-				writeJSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-		}
-	}
-	acct, err := s.accountProvider().Account(r.Context())
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
 	window, err := currentMarketWindow()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -447,7 +500,10 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if sym == "" {
 			sym = op.Underlying
 		}
-		if q, err := s.marketProvider().Quote(r.Context(), sym); err == nil {
+		quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+		q, quoteErr := s.marketProvider().Quote(quoteCtx, sym)
+		cancel()
+		if quoteErr == nil {
 			quote = &q
 		}
 	}
@@ -455,6 +511,16 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		op = s.deriveOpenOperation(r.Context(), op, quote)
 		if err := s.refreshGlobalHalt(); err != nil {
 			writeStoreError(w, "refresh global halt", err)
+			return
+		}
+	}
+	var acct broker.AccountState
+	if op.Action == "open" {
+		accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+		acct, err = s.accountProvider().Account(accountCtx)
+		cancel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "account data unavailable"})
 			return
 		}
 	}
@@ -473,7 +539,12 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	var v risk.Verdict
 	status := "auto_approved"
 	var replay *store.OperationRow
-	if err := s.store.WithProposalLock(identity, op.Shadow, window.day, func(gate store.OperationGate) error {
+	var executionAttempt *store.ExecutionAttempt
+	var marketDayLock *time.Time
+	if op.Action == "open" {
+		marketDayLock = &window.day
+	}
+	if err := s.store.WithProposalLock(identity, op.Shadow, marketDayLock, func(gate store.OperationGate) error {
 		if identity != nil {
 			existing, err := gate.FindOperationByIdempotency(identity.Subject, identity.Key)
 			if err != nil {
@@ -487,11 +558,49 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 		}
-		day, err := s.dayStateAtAccount(gate, op.Shadow, acct, window, halted, haltReason)
-		if err != nil {
-			return err
+		if op.Action == "close" {
+			if op.Shadow {
+				op.VerifiedReduction = true
+			} else {
+				ledger, symbol := ledgerName(op.Shadow), operationSymbol(op)
+				if err := gate.LockLedgerSymbol(ledger, symbol); err != nil {
+					return err
+				}
+				brokerCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+				positions, err := s.accountProvider().Positions(brokerCtx)
+				cancel()
+				if err != nil {
+					return fmt.Errorf("%w: positions", errBrokerDataUnavailable)
+				}
+				positionQty, err := closablePositionQuantity(symbol, positions)
+				if err != nil {
+					return fmt.Errorf("%w: %v", errInvalidClose, err)
+				}
+				held, err := gate.HeldCloseQuantity(ledger, symbol)
+				if err != nil {
+					return err
+				}
+				if held > positionQty || op.Qty > positionQty-held {
+					return errInsufficientClosableQuantity
+				}
+				op, err = normalizeClose(op, positions)
+				if err != nil {
+					return fmt.Errorf("%w: %v", errInvalidClose, err)
+				}
+			}
+		}
+		day := risk.DayState{}
+		if op.Action == "open" {
+			var err error
+			day, err = s.dayStateAtAccount(gate, op.Shadow, acct, window, halted, haltReason)
+			if err != nil {
+				return err
+			}
 		}
 		v = risk.Classify(op, s.limits, day, quote)
+		if op.Action == "close" && !op.Shadow && (quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC())) {
+			v = risk.Verdict{Class: "REJECT", Reasons: []string{"market_data_unavailable"}}
+		}
 		if err := gate.InsertEvent("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v}); err != nil {
 			return err
 		}
@@ -502,10 +611,85 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		case "C":
 			status = "pending_review"
 		}
-		return gate.InsertOperation(opID, op.Proposer, class, status, op, v, identity)
+		if err := gate.InsertOperation(opID, op.Proposer, class, status, op, v, identity); err != nil {
+			return err
+		}
+		if v.Class == "B" && op.Action == "open" {
+			if err := gate.InsertTradeGrant(store.TradeGrant{
+				OperationID: opID, Ledger: ledgerName(op.Shadow), MarketDay: window.day,
+				AuthorizedRisk: op.DerivedMaxRisk, RiskSource: "computed",
+			}); err != nil {
+				return err
+			}
+			if err := gate.InsertEvent("trade_grant_created", map[string]any{
+				"operation_id": opID, "ledger": ledgerName(op.Shadow),
+			}); err != nil {
+				return err
+			}
+		}
+		if (v.Class != "A" && v.Class != "B") || op.Shadow || op.Action == "tighten_stop" {
+			return nil
+		}
+		attempt := store.ExecutionAttempt{
+			ID: store.NewID(), OperationID: opID, Seq: 1, State: "pending",
+		}
+		switch op.Action {
+		case "open", "close":
+			limit, err := executionLimit(op, quote, s.limits.QuoteMaxAgeSec)
+			if err != nil {
+				return err
+			}
+			attempt.Intent = "place"
+			attempt.ClientOrderID = store.NewID()
+			attempt.Qty, attempt.Limit = op.Qty, limit
+			if op.Action == "close" {
+				reservation := store.CloseReservation{
+					ID: store.NewID(), OperationID: opID, Ledger: ledgerName(false),
+					Symbol: operationSymbol(op), OriginalQty: op.Qty,
+					RemainingQty: op.Qty, State: "held",
+				}
+				if err := gate.InsertCloseReservation(reservation); err != nil {
+					return err
+				}
+				attempt.CloseReservationID = reservation.ID
+				if err := gate.InsertEvent("close_reservation_created", map[string]any{
+					"operation_id": opID, "reservation_id": reservation.ID,
+					"symbol": reservation.Symbol,
+				}); err != nil {
+					return err
+				}
+			}
+		case "cancel":
+			attempt.Intent = "cancel"
+			attempt.TargetBrokerOrderID = op.BrokerOrderID
+		default:
+			return nil
+		}
+		if err := gate.InsertExecutionAttempt(attempt); err != nil {
+			return err
+		}
+		if err := gate.InsertEvent("execution_attempt_created", map[string]any{
+			"operation_id": opID, "attempt_id": attempt.ID, "intent": attempt.Intent,
+		}); err != nil {
+			return err
+		}
+		executionAttempt = &attempt
+		return nil
 	}); err != nil {
 		if errors.Is(err, errIdempotencyKeyReused) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "idempotency_key_reused"})
+			return
+		}
+		if errors.Is(err, errInsufficientClosableQuantity) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "insufficient closable quantity"})
+			return
+		}
+		if errors.Is(err, errBrokerDataUnavailable) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "position data unavailable"})
+			return
+		}
+		if errors.Is(err, errInvalidClose) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": strings.TrimPrefix(err.Error(), errInvalidClose.Error()+": ")})
 			return
 		}
 		writeStoreError(w, "propose transaction", err)
@@ -532,27 +716,46 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Class A and B execute now. execute enforces that shadow operations never
-	// reach the broker.
+	// Class A and B execute only through a durable execution attempt. Shadow
+	// retains classification/journaling only until M3A's paper executor.
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
 	addRiskFacts(resp, op)
-	var execution map[string]any
-	if closeLockHeld {
-		execution, err = s.executeLocked(r.Context(), opID, op, quote)
-	} else {
-		execution, err = s.execute(r.Context(), opID, op, quote)
+	if op.Action == "tighten_stop" {
+		execution, err := s.executeNonBroker(opID, op)
+		if err != nil {
+			if errors.Is(err, store.ErrUnavailable) {
+				writeStoreError(w, "execute operation", err)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
+			return
+		}
+		for key, value := range execution {
+			resp[key] = value
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
 	}
+	if executionAttempt == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	execution, err := s.executePendingAttempt(r.Context(), executionAttempt.ID)
 	if err != nil {
-		statusErr := s.store.SetOperationStatus(opID, "failed", nil)
-		if errors.Is(statusErr, store.ErrUnavailable) {
-			writeStoreError(w, "mark operation failed", statusErr)
-			return
-		}
 		if errors.Is(err, store.ErrUnavailable) {
-			writeStoreError(w, "execute operation", err)
+			writeStoreError(w, "execute attempt", err)
 			return
 		}
-		writeJSON(w, 502, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
+		if errors.Is(err, errAccountBindingViolation) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"operation_id": opID, "status": "failed", "error": "account_binding_violation",
+			})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"operation_id": opID, "status": "unknown", "attempt_id": executionAttempt.ID,
+			"error": "broker result uncertain",
+		})
 		return
 	}
 	for k, value := range execution {
@@ -561,24 +764,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, resp)
 }
 
-// execute is the single Class-A/Class-B execution path. Milestone 4 reuses it
-// after a human approves a Class-C operation. Live broker mutations are
-// serialized here; propose calls executeLocked only while it already holds the
-// lock across live-close position verification.
-func (s *server) execute(ctx context.Context, opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
-	if !op.Shadow && op.Action == "close" && !op.VerifiedReduction {
-		return nil, fmt.Errorf("refusing unverified close execution")
-	}
-	if !op.Shadow && (op.Action == "open" || op.Action == "close" || op.Action == "cancel") {
-		s.executionMu.Lock()
-		defer s.executionMu.Unlock()
-	}
-	return s.executeLocked(ctx, opID, op, quote)
-}
-
-func (s *server) executeLocked(ctx context.Context, opID string, op risk.Operation, quote *broker.Quote) (map[string]any, error) {
-	status := "auto_approved"
-
+func (s *server) executeNonBroker(opID string, op risk.Operation) (map[string]any, error) {
 	if op.Action == "tighten_stop" {
 		sym := op.Symbol
 		if sym == "" {
@@ -589,91 +775,217 @@ func (s *server) executeLocked(ctx context.Context, opID string, op risk.Operati
 			return nil, err
 		}
 		s.store.Event("stop_tightened", map[string]any{"operation_id": opID, "symbol": sym, "stop": op.Plan["stop"], "shadow": op.Shadow})
-		return map[string]any{"status": status, "stop": op.Plan["stop"]}, nil
+		return map[string]any{"status": "auto_approved", "stop": op.Plan["stop"]}, nil
 	}
+	return map[string]any{"status": "auto_approved"}, nil
+}
 
-	// Shadow operations exercise classification and journaling only.
-	if op.Shadow {
-		return map[string]any{"status": status}, nil
-	}
-	execution := s.executionProvider()
-	if execution == nil {
-		return nil, fmt.Errorf("execution capability unavailable")
-	}
+var (
+	errInsufficientClosableQuantity = errors.New("insufficient closable quantity")
+	errBrokerDataUnavailable        = errors.New("broker data unavailable")
+	errBrokerResultUnknown          = errors.New("broker result uncertain")
+	errInvalidClose                 = errors.New("invalid close")
+)
 
-	if op.Action == "cancel" {
-		if err := s.assertLiveAccountBinding(ctx, opID); err != nil {
-			return nil, err
+func ledgerName(shadow bool) string {
+	if shadow {
+		return "shadow"
+	}
+	return "live"
+}
+
+func operationSymbol(op risk.Operation) string {
+	if op.Symbol != "" {
+		return op.Symbol
+	}
+	return op.Underlying
+}
+
+func closablePositionQuantity(symbol string, positions []broker.Position) (units.Qty, error) {
+	for _, position := range positions {
+		if position.Symbol != symbol || position.Qty == 0 {
+			continue
 		}
-		res, err := execution.CancelOrder(ctx, op.BrokerOrderID)
+		quantity, err := units.AbsQty(position.Qty)
 		if err != nil {
-			return nil, err
+			return 0, fmt.Errorf("position quantity is out of range")
 		}
-		s.store.Event("order_update", map[string]any{"operation_id": opID, "order": res})
-		status = "executed"
-		if res.State == "rejected" {
-			status = "failed"
-		}
-		if err := s.store.SetOperationStatus(opID, status, nil); err != nil {
-			return nil, err
-		}
-		return map[string]any{"status": status, "order": res}, nil
+		return quantity, nil
 	}
+	return 0, fmt.Errorf("close requires an existing position for %s", symbol)
+}
 
-	if op.Action != "open" && op.Action != "close" {
-		return map[string]any{"status": status}, nil
-	}
-
-	// For open, Side is the requested order side. For a live close it was
-	// derived from the signed broker position by normalizeClose; payload side
-	// is never trusted to decide whether the broker buys or sells.
-	side := op.Side
-
-	var limit units.Micros
+func executionLimit(op risk.Operation, quote *broker.Quote, maxAgeSec int) (units.Micros, error) {
 	if op.Action == "open" {
-		limit = op.WorkingPrice
-	} else {
-		if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
-			return nil, fmt.Errorf("market_data_unavailable")
+		if op.WorkingPrice <= 0 {
+			return 0, fmt.Errorf("no executable price for open")
 		}
-		switch {
-		case op.Limit != nil:
-			limit = *op.Limit
-		case side == "sell":
-			limit = quote.Bid
-		case side == "buy":
-			limit = quote.Ask
-		}
+		return op.WorkingPrice, nil
 	}
-	if limit <= 0 {
-		return nil, fmt.Errorf("no executable price for %s", op.Action)
+	if quote == nil || !quote.Usable(maxAgeSec, time.Now().UTC()) {
+		return 0, fmt.Errorf("market_data_unavailable")
 	}
+	if op.Limit != nil {
+		return *op.Limit, nil
+	}
+	if op.Side == "sell" {
+		return quote.Bid, nil
+	}
+	if op.Side == "buy" {
+		return quote.Ask, nil
+	}
+	return 0, fmt.Errorf("no executable price for close")
+}
 
-	sym := op.Symbol
-	if sym == "" {
-		sym = op.Underlying
+func (s *server) brokerCallTimeout() time.Duration {
+	if s.brokerTimeout > 0 {
+		return s.brokerTimeout
 	}
-	if err := s.assertLiveAccountBinding(ctx, opID); err != nil {
-		return nil, err
+	return 10 * time.Second
+}
+
+func (s *server) workerID() string {
+	if s.instanceID != "" {
+		return s.instanceID
 	}
-	res, err := execution.PlaceLimitOrder(ctx, broker.PlaceRequest{
-		ClientOrderID: opID, Symbol: sym, Side: side, Qty: op.Qty, Limit: limit, Kind: op.Kind,
-	})
+	return "kernel-test"
+}
+
+func (s *server) executePendingAttempt(ctx context.Context, attemptID string) (map[string]any, error) {
+	attempt, err := s.store.ClaimPendingAttempt(attemptID, s.workerID())
 	if err != nil {
 		return nil, err
 	}
-	s.store.Event("order_update", map[string]any{"operation_id": opID, "order": res})
-	if res.State == "filled" {
-		status = "executed"
-	} else if res.State == "rejected" {
-		status = "failed"
-	}
-	if status != "auto_approved" {
-		if err := s.store.SetOperationStatus(opID, status, nil); err != nil {
+	if attempt == nil {
+		current, err := s.store.GetExecutionAttempt(attemptID)
+		if err != nil {
 			return nil, err
 		}
+		operation, err := s.store.GetOperation(current.OperationID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"attempt_id": current.ID, "attempt_state": current.State, "status": operation.Status}, nil
 	}
-	return map[string]any{"status": status, "order": res}, nil
+	return s.executeClaimedAttempt(ctx, attempt)
+}
+
+func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
+	execution := s.executionProvider()
+	if execution == nil {
+		_, err := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "failed", LastError: "execution capability unavailable",
+			OperationStatus: "failed", ReleaseReservation: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("execution capability unavailable")
+	}
+	row, err := s.store.GetOperation(attempt.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	var op risk.Operation
+	if err := json.Unmarshal(row.Payload, &op); err != nil {
+		return nil, fmt.Errorf("decode persisted operation: %w", err)
+	}
+	if op.Action == "close" && attempt.CloseReservationID == "" {
+		return nil, fmt.Errorf("refusing close without reservation")
+	}
+	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
+	cancel()
+	if bindingErr != nil {
+		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "failed", LastError: "account binding failed",
+			OperationStatus: "failed", ReleaseReservation: true,
+		})
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		return nil, bindingErr
+	}
+
+	brokerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	var result broker.OrderResult
+	if attempt.Intent == "cancel" {
+		result, err = execution.CancelOrder(brokerCtx, attempt.TargetBrokerOrderID)
+	} else {
+		result, err = execution.PlaceLimitOrder(brokerCtx, broker.PlaceRequest{
+			ClientOrderID: attempt.ClientOrderID, Symbol: operationSymbol(op), Side: op.Side,
+			Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
+		})
+	}
+	cancel()
+	if err != nil {
+		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "unknown", LastError: "broker call failed",
+		})
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		return nil, fmt.Errorf("%w", errBrokerResultUnknown)
+	}
+	resolution := resolutionForOrder(attempt, result)
+	resolution.OrderEvent = map[string]any{"operation_id": attempt.OperationID, "order": result}
+	updated, err := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, resolution)
+	if err != nil {
+		return nil, err
+	}
+	if !updated {
+		current, readErr := s.store.GetExecutionAttempt(attempt.ID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		operation, readErr := s.store.GetOperation(current.OperationID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		return map[string]any{"attempt_id": current.ID, "attempt_state": current.State, "status": operation.Status}, nil
+	}
+	status := resolution.OperationStatus
+	if status == "" {
+		status = "auto_approved"
+	}
+	return map[string]any{
+		"status": status, "order": result, "attempt_id": attempt.ID,
+		"attempt_state": resolution.State,
+	}, nil
+}
+
+func resolutionForOrder(attempt *store.ExecutionAttempt, result broker.OrderResult) store.AttemptResolution {
+	resolution := store.AttemptResolution{State: "unknown", BrokerOrderID: result.BrokerOrderID}
+	switch result.State {
+	case "filled":
+		resolution.State, resolution.OperationStatus = "settled", "executed"
+	case "rejected":
+		resolution.State, resolution.OperationStatus = "failed", "failed"
+		// A conclusively zero-fill terminal result may release immediately.
+		// Any filled quantity stays reserved until M2.9 persists the fill and
+		// decrements the reservation in the same transaction.
+		resolution.ReleaseReservation = attempt.CloseReservationID != "" && result.FilledQty == 0
+	case "cancelled", "expired":
+		resolution.State = "settled"
+		if attempt.Intent == "cancel" {
+			resolution.OperationStatus = "executed"
+		} else {
+			resolution.OperationStatus = "failed"
+		}
+		resolution.ReleaseReservation = attempt.CloseReservationID != "" && result.FilledQty == 0
+	case "submitted", "partially_filled":
+		if attempt.Intent == "cancel" {
+			// Querying a cancel target that is still working does not prove the
+			// cancel effect happened. Keep reconciling instead of stranding the
+			// attempt in placed, which only M2.9 order/fill ingestion advances.
+			resolution.LastError = "cancel not confirmed by broker"
+		} else {
+			resolution.State = "placed"
+		}
+	default:
+		resolution.LastError = "unknown broker order state"
+	}
+	return resolution
 }
 
 // proposeRequest is the complete client-writable operation surface. Derived
@@ -824,7 +1136,9 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 		if symbol == "" {
 			symbol = op.Underlying
 		}
-		instrument, err := s.marketProvider().Instrument(ctx, symbol)
+		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
+		cancel()
 		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 {
 			op.RejectReason = "unsupported_contract"
 			return op

@@ -16,6 +16,8 @@ import (
 	"net"
 	"time"
 
+	"alpheus/kernel/internal/units"
+
 	"github.com/lib/pq"
 )
 
@@ -23,6 +25,7 @@ type Config struct {
 	URL           string
 	MigrationsDir string
 	Timeout       time.Duration
+	MarketTZ      string
 }
 
 type Store struct {
@@ -46,9 +49,15 @@ type IdempotencyIdentity struct {
 // insert must use the same implementation passed to WithLedgerLock.
 type OperationGate interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
+	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	InsertEvent(kind string, payload any) error
 	InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error
 	FindOperationByIdempotency(subject, key string) (*OperationRow, error)
+	LockLedgerSymbol(ledger, symbol string) error
+	HeldCloseQuantity(ledger, symbol string) (units.Qty, error)
+	InsertTradeGrant(grant TradeGrant) error
+	InsertCloseReservation(reservation CloseReservation) error
+	InsertExecutionAttempt(attempt ExecutionAttempt) error
 }
 
 type ledgerTx struct {
@@ -58,7 +67,7 @@ type ledgerTx struct {
 
 // Open waits for postgres on cold start.
 func Open(cfg Config) (*Store, error) {
-	if cfg.URL == "" || cfg.MigrationsDir == "" || cfg.Timeout <= 0 {
+	if cfg.URL == "" || cfg.MigrationsDir == "" || cfg.Timeout <= 0 || cfg.MarketTZ == "" {
 		return nil, fmt.Errorf("store config is incomplete")
 	}
 	migrations, err := LoadMigrations(cfg.MigrationsDir)
@@ -87,7 +96,7 @@ func Open(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("postgres unreachable: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	err = Migrate(ctx, db, migrations)
+	err = Migrate(ctx, db, migrations, cfg.MarketTZ)
 	cancel()
 	if err != nil {
 		_ = db.Close()
@@ -359,32 +368,40 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 func (s *Store) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
-	return countTradesForDay(ctx, s.DB, shadow, start, end)
+	return countTradesForDay(ctx, s.DB, shadow, start, end, "")
 }
 
 func (t *ledgerTx) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
-	return countTradesForDay(t.ctx, t.tx, shadow, start, end)
+	return countTradesForDay(t.ctx, t.tx, shadow, start, end, "")
+}
+
+func (s *Store) CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	return countTradesForDay(ctx, s.DB, shadow, start, end, operationID)
+}
+
+func (t *ledgerTx) CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error) {
+	return countTradesForDay(t.ctx, t.tx, shadow, start, end, operationID)
 }
 
 type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, end time.Time) (int, error) {
+func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, end time.Time, operationID string) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM operations
-		 WHERE class='B'
-		   AND ts >= $2
-		   AND ts < $3
-		   AND status IN ('auto_approved','executed')
-		   AND COALESCE((payload->>'shadow')::bool, false) = $1`, shadow, start, end).Scan(&n)
+		`SELECT count(*) FROM trade_grant
+		 WHERE ledger = $1 AND market_day = $2::date
+		   AND (NULLIF($3,'') IS NULL OR operation_id <> NULLIF($3,'')::uuid)`,
+		ledgerName(shadow), start, operationID).Scan(&n)
 	return n, normalizeDBError(err)
 }
 
 // WithProposalLock takes the idempotency lock before the ledger lock. Both are
 // transaction-scoped, so a crashed process cannot strand either gate.
-func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
+func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(OperationGate) error) error {
 	ctx, cancel := s.deadline()
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -402,8 +419,10 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 			return normalizeDBError(err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, marketDay)); err != nil {
-		return normalizeDBError(err)
+	if marketDay != nil {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, *marketDay)); err != nil {
+			return normalizeDBError(err)
+		}
 	}
 	if err := fn(&ledgerTx{tx: tx, ctx: ctx}); err != nil {
 		return err
@@ -416,7 +435,7 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 }
 
 func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
-	return s.WithProposalLock(nil, shadow, marketDay, fn)
+	return s.WithProposalLock(nil, shadow, &marketDay, fn)
 }
 
 func idempotencyLockKey(subject, key string) int64 {

@@ -63,8 +63,8 @@ func LoadMigrations(dir string) ([]Migration, error) {
 	return migrations, nil
 }
 
-func Migrate(ctx context.Context, db *sql.DB, migrations []Migration) error {
-	if db == nil || len(migrations) == 0 {
+func Migrate(ctx context.Context, db *sql.DB, migrations []Migration, marketTZ string) error {
+	if db == nil || len(migrations) == 0 || marketTZ == "" {
 		return fmt.Errorf("migration input is incomplete")
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -79,6 +79,9 @@ func Migrate(ctx context.Context, db *sql.DB, migrations []Migration) error {
 	}()
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockKey); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('alpheus.tz_market', $1, true)`, marketTZ); err != nil {
+		return fmt.Errorf("configure migration market timezone: %w", err)
 	}
 
 	exists, err := migrationTableExists(ctx, tx)

@@ -90,6 +90,16 @@ violated, and severity.
   its retry sends the identical body and key. Separately exercise migrations:
   fresh DB, exact legacy-M2 baseline with retained sentinel data, partial schema
   rejection, applied-checksum mismatch and two concurrent kernel starts.
+  For M2.8, independently inject all three crash windows around attempt
+  commit/claim/broker acceptance and verify the stable client id produces the
+  specified 0/0/1 broker effects. A stale `pending` must re-run the gate and
+  obey the 1800-second proposal TTL; `unknown` must query before any retry, and
+  a provider without independently verified deduplication must not re-place.
+  Hold the close symbol advisory key externally (signed big-endian first 64
+  bits of SHA-256 over `symbol\0{ledger}\0{symbol}`): a close must block or
+  hit `DB_TIMEOUT_MS` with no broker effect. Through M2.8 a filled close remains
+  reserved fail-closed; M2.9 must prove the durable fill before decrementing or
+  releasing it.
 - **I8 Dependency-failure honesty.** `docker compose pause db`, then
   propose: the kernel must return 503 within `DB_TIMEOUT_MS` (allowing only
   small scheduler/network jitter) and make no broker call. This probe must
