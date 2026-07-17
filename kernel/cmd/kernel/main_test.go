@@ -28,31 +28,35 @@ type journalEntry struct {
 }
 
 type memoryStore struct {
-	mu            sync.Mutex
-	ledgerLocks   [2]sync.Mutex
-	statuses      map[string]string
-	classes       map[string]string
-	shadows       map[string]bool
-	operations    map[string]risk.Operation
-	operationRows map[string]store.OperationRow
-	verdicts      map[string]json.RawMessage
-	journals      []journalEntry
-	events        []string
-	blackboards   map[string]json.RawMessage
-	journalErr    error
-	halted        bool
-	haltReason    string
+	mu               sync.Mutex
+	idempotencyMu    sync.Mutex
+	ledgerLocks      [2]sync.Mutex
+	idempotencyLocks map[string]*sync.Mutex
+	statuses         map[string]string
+	classes          map[string]string
+	shadows          map[string]bool
+	operations       map[string]risk.Operation
+	operationRows    map[string]store.OperationRow
+	verdicts         map[string]json.RawMessage
+	journals         []journalEntry
+	events           []string
+	blackboards      map[string]json.RawMessage
+	journalErr       error
+	halted           bool
+	haltReason       string
+	proposalLockErr  error
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		statuses:      map[string]string{},
-		classes:       map[string]string{},
-		shadows:       map[string]bool{},
-		operations:    map[string]risk.Operation{},
-		operationRows: map[string]store.OperationRow{},
-		verdicts:      map[string]json.RawMessage{},
-		blackboards:   map[string]json.RawMessage{},
+		statuses:         map[string]string{},
+		classes:          map[string]string{},
+		shadows:          map[string]bool{},
+		operations:       map[string]risk.Operation{},
+		operationRows:    map[string]store.OperationRow{},
+		idempotencyLocks: map[string]*sync.Mutex{},
+		verdicts:         map[string]json.RawMessage{},
+		blackboards:      map[string]json.RawMessage{},
 	}
 }
 
@@ -81,6 +85,25 @@ func (m *memoryStore) CountTradesForDay(shadow bool, _, _ time.Time) (int, error
 }
 
 func (m *memoryStore) WithLedgerLock(shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
+	return m.WithProposalLock(nil, shadow, time.Time{}, fn)
+}
+
+func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
+	if m.proposalLockErr != nil {
+		return m.proposalLockErr
+	}
+	if identity != nil {
+		key := identity.Subject + "\x00" + identity.Key
+		m.idempotencyMu.Lock()
+		lock := m.idempotencyLocks[key]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			m.idempotencyLocks[key] = lock
+		}
+		m.idempotencyMu.Unlock()
+		lock.Lock()
+		defer lock.Unlock()
+	}
 	index := 0
 	if shadow {
 		index = 1
@@ -107,7 +130,7 @@ func (m *memoryStore) InsertEvent(kind string, payload any) error {
 	return nil
 }
 
-func (m *memoryStore) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
+func (m *memoryStore) InsertOperation(id, proposer, class, status string, payload, verdict any, identity *store.IdempotencyIdentity) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.statuses[id] = status
@@ -118,11 +141,30 @@ func (m *memoryStore) InsertOperation(id, proposer, class, status string, payloa
 	}
 	payloadJSON, _ := json.Marshal(payload)
 	verdictJSON, _ := json.Marshal(verdict)
-	m.operationRows[id] = store.OperationRow{
+	row := store.OperationRow{
 		ID: id, TS: time.Now().UTC(), Proposer: proposer, Class: class,
 		Status: status, Payload: payloadJSON, Verdict: verdictJSON,
 	}
+	if identity != nil {
+		row.AuthenticatedSubject = identity.Subject
+		row.IdempotencyKey = identity.Key
+		row.RequestHash = append([]byte(nil), identity.RequestHash[:]...)
+	}
+	m.operationRows[id] = row
 	return nil
+}
+
+func (m *memoryStore) FindOperationByIdempotency(subject, key string) (*store.OperationRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, row := range m.operationRows {
+		if row.AuthenticatedSubject == subject && row.IdempotencyKey == key {
+			copy := row
+			copy.RequestHash = append([]byte(nil), row.RequestHash...)
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *memoryStore) SetOperationStatus(id, status string, verdict any) error {
@@ -912,7 +954,7 @@ func TestQuantityInstrumentAndOverflowBoundaries(t *testing.T) {
 func TestReviewRejectsGarbageVerdictWithoutMutation(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	st := newMemoryStore()
-	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}); err != nil {
+	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}

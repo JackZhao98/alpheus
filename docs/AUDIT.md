@@ -79,13 +79,23 @@ violated, and severity.
   `POST /halt`; after it commits, `close` and `cancel` still execute.
   Conversely `open` while halted must REJECT.
 - **I7 Restart safety & idempotency.** Restart kernel mid-traffic; verify
-  no state corruption. Then: submit the same proposal twice (simulating a
-  client timeout-retry) — today this creates two operations and two orders.
-  Assess and report: is double-execution on retry reachable? (Likely S1;
-  there is no idempotency key yet.)
+  no state corruption. In live mode, omit `Idempotency-Key`, use whitespace,
+  control bytes and 201 characters: each must be 400 before classification.
+  Submit the same normalized intent twice with one key: the second response
+  must return the original operation id/current status and produce no second
+  classification or broker effect. Change every client-writable field in turn
+  under the same key: each must return 409 `idempotency_key_reused`. Release 20
+  same-key requests from a same-process barrier: exactly one operation and one
+  broker effect. Force agent-runtime's first response read to fail and verify
+  its retry sends the identical body and key. Separately exercise migrations:
+  fresh DB, exact legacy-M2 baseline with retained sentinel data, partial schema
+  rejection, applied-checksum mismatch and two concurrent kernel starts.
 - **I8 Dependency-failure honesty.** `docker compose pause db`, then
-  propose: the kernel must fail closed (no broker call) and return an
-  error, not 200. Unpause and verify recovery without restart. Attempt to
+  propose: the kernel must return 503 within `DB_TIMEOUT_MS` (allowing only
+  small scheduler/network jitter) and make no broker call. This probe must
+  pause the server process, not merely inject `pg_sleep`, because lib/pq's
+  cancellation transport is part of the acceptance boundary. Unpause and
+  verify recovery without restart. Attempt to
   time a db failure between approval and execution; if you cannot hit the
   window black-box, record it under Untested concerns (suspected ignored
   write errors on the money path).
@@ -150,9 +160,10 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M2.6 have landed: Class-A behavior, dual-ledger counters, exact
-risk, mode/auth, account binding and the kill switch are audit targets, not
-suppressed findings.
+M1 through M2.7 plus M8A/M8B have landed: Class-A behavior, dual-ledger
+counters, exact risk, mode/auth, account binding, the kill switch, migrations,
+DB deadlines, idempotency and production-read/cockpit boundaries are audit
+targets, not suppressed findings.
 
 1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3A/M3C).
 2. `orders`/`fills` tables are never written (PLAN M2.9).

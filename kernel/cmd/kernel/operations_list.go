@@ -101,7 +101,7 @@ func (s *server) listOperations(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.store.ListOperations(status, limit+1, cursor)
 	if err != nil {
-		writeInternalError(w, "list operations", err)
+		writeStoreError(w, "list operations", err)
 		return
 	}
 	nextCursor := ""

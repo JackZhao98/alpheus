@@ -62,7 +62,7 @@ func (s *server) postHalt(w http.ResponseWriter, r *http.Request) {
 			"subject": authenticatedSubject(r), "mode": s.tradingMode(),
 		}
 		if err := s.store.InsertEvent(globalHaltEvent, payload); err != nil {
-			writeInternalError(w, "persist global halt", err)
+			writeStoreError(w, "persist global halt", err)
 			return
 		}
 		s.halted, s.haltReason = true, in.Reason
@@ -85,7 +85,7 @@ func (s *server) assertLiveAccountBinding(ctx context.Context, operationID strin
 	if eventErr := s.store.InsertEvent("account_binding_violation", map[string]string{
 		"operation_id": operationID, "reason": reason, "mode": s.tradingMode(),
 	}); eventErr != nil {
-		return fmt.Errorf("account_binding_violation: event persistence failed")
+		return fmt.Errorf("account_binding_violation: event persistence failed: %w", eventErr)
 	}
 	return fmt.Errorf("account_binding_violation")
 }

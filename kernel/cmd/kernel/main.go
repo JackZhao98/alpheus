@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +50,7 @@ type server struct {
 // dependency. The production implementation is *store.Store.
 type storeAPI interface {
 	store.OperationGate
+	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
 	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
 	Event(kind string, payload any)
 	SetOperationStatus(id, status string, verdict any) error
@@ -124,7 +128,15 @@ func main() {
 	default:
 		log.Fatalf("broker: unknown BROKER %q", brokerName)
 	}
-	st, err := store.Open(config.Env("DATABASE_URL", "postgresql://alpheus:alpheus@localhost:5432/alpheus?sslmode=disable"))
+	dbTimeout, err := databaseTimeout()
+	if err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	st, err := store.Open(store.Config{
+		URL:           config.Env("DATABASE_URL", "postgresql://alpheus:alpheus@localhost:5432/alpheus?sslmode=disable"),
+		MigrationsDir: config.Env("MIGRATIONS_DIR", "../db/migrations"),
+		Timeout:       dbTimeout,
+	})
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -158,6 +170,15 @@ func validateProductionQuoteAge(brokerName string, maxAgeSec int) error {
 		return fmt.Errorf("quote_max_age_sec must be set to a positive human-approved value for Robinhood")
 	}
 	return nil
+}
+
+func databaseTimeout() (time.Duration, error) {
+	raw := config.Env("DB_TIMEOUT_MS", "3000")
+	milliseconds, err := strconv.Atoi(raw)
+	if err != nil || milliseconds <= 0 {
+		return 0, fmt.Errorf("DB_TIMEOUT_MS must be a positive integer")
+	}
+	return time.Duration(milliseconds) * time.Millisecond, nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -206,6 +227,15 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 func writeInternalError(w http.ResponseWriter, context string, err error) {
 	log.Printf("%s: %v", context, err)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+}
+
+func writeStoreError(w http.ResponseWriter, context string, err error) {
+	if errors.Is(err, store.ErrUnavailable) {
+		log.Printf("%s: %v", context, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "database unavailable"})
+		return
+	}
+	writeInternalError(w, context, err)
 }
 
 func validDate(day string) bool {
@@ -290,7 +320,7 @@ func (s *server) marketProvider() marketdata.Provider {
 
 func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	if err := s.refreshGlobalHalt(); err != nil {
-		writeInternalError(w, "refresh global halt", err)
+		writeStoreError(w, "refresh global halt", err)
 		return
 	}
 	account := s.accountProvider()
@@ -326,12 +356,12 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	halted, haltReason := s.haltSnapshot()
 	liveDay, err := s.dayStateAtAccount(s.store, false, acct, window, halted, haltReason)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeStoreError(w, "get live day state", err)
 		return
 	}
 	shadowDay, err := s.dayStateAtAccount(s.store, true, acct, window, halted, haltReason)
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeStoreError(w, "get shadow day state", err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{
@@ -347,6 +377,15 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) propose(w http.ResponseWriter, r *http.Request) {
+	var identity *store.IdempotencyIdentity
+	if s.tradingMode() == config.ModeLive {
+		key := r.Header.Get("Idempotency-Key")
+		if err := validateIdempotencyKey(key); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		identity = &store.IdempotencyIdentity{Subject: authenticatedSubject(r), Key: key}
+	}
 	var request proposeRequest
 	if !decodeJSONBody(w, r, &request) {
 		return
@@ -355,6 +394,13 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
+	}
+	if identity != nil {
+		identity.RequestHash, err = hashClientIntent(op)
+		if err != nil {
+			writeInternalError(w, "hash client intent", err)
+			return
+		}
 	}
 	if s.tradingMode() == config.ModeShadow {
 		op.Shadow = true
@@ -408,7 +454,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	if op.Action == "open" {
 		op = s.deriveOpenOperation(r.Context(), op, quote)
 		if err := s.refreshGlobalHalt(); err != nil {
-			writeInternalError(w, "refresh global halt", err)
+			writeStoreError(w, "refresh global halt", err)
 			return
 		}
 	}
@@ -426,7 +472,21 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	var v risk.Verdict
 	status := "auto_approved"
-	if err := s.store.WithLedgerLock(op.Shadow, window.day, func(gate store.OperationGate) error {
+	var replay *store.OperationRow
+	if err := s.store.WithProposalLock(identity, op.Shadow, window.day, func(gate store.OperationGate) error {
+		if identity != nil {
+			existing, err := gate.FindOperationByIdempotency(identity.Subject, identity.Key)
+			if err != nil {
+				return err
+			}
+			if existing != nil {
+				if !bytes.Equal(existing.RequestHash, identity.RequestHash[:]) {
+					return errIdempotencyKeyReused
+				}
+				replay = existing
+				return nil
+			}
+		}
 		day, err := s.dayStateAtAccount(gate, op.Shadow, acct, window, halted, haltReason)
 		if err != nil {
 			return err
@@ -442,9 +502,20 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		case "C":
 			status = "pending_review"
 		}
-		return gate.InsertOperation(opID, op.Proposer, class, status, op, v)
+		return gate.InsertOperation(opID, op.Proposer, class, status, op, v, identity)
 	}); err != nil {
-		writeInternalError(w, "propose transaction", err)
+		if errors.Is(err, errIdempotencyKeyReused) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "idempotency_key_reused"})
+			return
+		}
+		writeStoreError(w, "propose transaction", err)
+		return
+	}
+	if replay != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"operation_id": replay.ID, "status": replay.Status, "class": replay.Class,
+			"idempotent_replay": true,
+		})
 		return
 	}
 
@@ -472,7 +543,15 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		execution, err = s.execute(r.Context(), opID, op, quote)
 	}
 	if err != nil {
-		_ = s.store.SetOperationStatus(opID, "failed", nil)
+		statusErr := s.store.SetOperationStatus(opID, "failed", nil)
+		if errors.Is(statusErr, store.ErrUnavailable) {
+			writeStoreError(w, "mark operation failed", statusErr)
+			return
+		}
+		if errors.Is(err, store.ErrUnavailable) {
+			writeStoreError(w, "execute operation", err)
+			return
+		}
 		writeJSON(w, 502, map[string]any{"operation_id": opID, "status": "failed", "error": err.Error()})
 		return
 	}
@@ -618,6 +697,41 @@ type proposeRequest struct {
 	Shadow            bool              `json:"shadow"`
 	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
 	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
+}
+
+var errIdempotencyKeyReused = errors.New("idempotency key reused with a different request")
+
+func validateIdempotencyKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("idempotency_key_required")
+	}
+	if len(key) > 200 {
+		return fmt.Errorf("invalid_idempotency_key")
+	}
+	for i := range key {
+		if key[i] < 0x21 || key[i] > 0x7e {
+			return fmt.Errorf("invalid_idempotency_key")
+		}
+	}
+	return nil
+}
+
+// hashClientIntent excludes every value derived from market data, account
+// state, risk classification, or close-position normalization.
+func hashClientIntent(op risk.Operation) ([sha256.Size]byte, error) {
+	intent := proposeRequest{
+		Proposer: op.Proposer, Action: op.Action, Kind: op.Kind,
+		Underlying: op.Underlying, Symbol: op.Symbol, Side: op.Side,
+		Qty: op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
+		Short: op.Short, Plan: op.Plan, Thesis: op.Thesis, Setup: op.Setup,
+		Shadow: op.Shadow, BrokerOrderID: op.BrokerOrderID,
+		ClosesOperationID: op.ClosesOperationID,
+	}
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(encoded), nil
 }
 
 func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
@@ -826,6 +940,10 @@ func (s *server) getOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := s.store.GetOperation(id)
 	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			writeStoreError(w, "get operation", err)
+			return
+		}
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
@@ -850,7 +968,15 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := s.store.GetOperation(id)
-	if err != nil || row.Status != "pending_review" {
+	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			writeStoreError(w, "get operation for review", err)
+			return
+		}
+		writeJSON(w, 409, map[string]string{"error": "not pending review"})
+		return
+	}
+	if row.Status != "pending_review" {
 		writeJSON(w, 409, map[string]string{"error": "not pending review"})
 		return
 	}
@@ -861,7 +987,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SetOperationStatus(id, status, map[string]string{
 		"reviewer": authenticatedSubject(r), "rationale": in.Rationale,
 	}); err != nil {
-		writeInternalError(w, "review operation", err)
+		writeStoreError(w, "review operation", err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"operation_id": id, "status": status})
@@ -894,7 +1020,7 @@ func (s *server) postJournal(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrInvalidOperationReference) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "operation_id does not reference an existing operation"})
 		} else {
-			writeInternalError(w, "insert journal", err)
+			writeStoreError(w, "insert journal", err)
 		}
 		return
 	}
@@ -913,7 +1039,7 @@ func (s *server) getLessons(w http.ResponseWriter, r *http.Request) {
 	}
 	ls, err := s.store.TopLessons(limit)
 	if err != nil {
-		writeInternalError(w, "get lessons", err)
+		writeStoreError(w, "get lessons", err)
 		return
 	}
 	writeJSON(w, 200, ls)
@@ -933,7 +1059,7 @@ func (s *server) getBlackboard(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := s.store.GetBlackboard(day)
 	if err != nil {
-		writeInternalError(w, "get blackboard", err)
+		writeStoreError(w, "get blackboard", err)
 		return
 	}
 	writeJSON(w, 200, doc)
@@ -950,7 +1076,7 @@ func (s *server) putBlackboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.PutBlackboard(day, doc); err != nil {
-		writeInternalError(w, "put blackboard", err)
+		writeStoreError(w, "put blackboard", err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

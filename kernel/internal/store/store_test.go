@@ -2,7 +2,9 @@ package store
 
 import (
 	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -14,6 +16,22 @@ func TestNormalizeJournalErrorHidesForeignKeyDetails(t *testing.T) {
 	}
 	if err.Error() != ErrInvalidOperationReference.Error() {
 		t.Fatalf("foreign-key details leaked through normalized error: %v", err)
+	}
+}
+
+func TestDeadlineConnBoundsBlockedRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	conn := &deadlineConn{Conn: client, timeout: 25 * time.Millisecond}
+	started := time.Now()
+	_, err := conn.Read(make([]byte, 1))
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("err=%v, want network timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("blocked read took %s", elapsed)
 	}
 }
 

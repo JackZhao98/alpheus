@@ -6,7 +6,6 @@ services:
       POSTGRES_PASSWORD: alpheus
       POSTGRES_DB: alpheus
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U alpheus"]
@@ -18,6 +17,8 @@ services:
     build: ./kernel
     environment:
       DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      DB_TIMEOUT_MS: ${DB_TIMEOUT_MS:-3000}
+      MIGRATIONS_DIR: /migrations
       BROKER: ${BROKER:-fake}            # fake | robinhood
       TRADING_MODE: ${TRADING_MODE:-sim} # sim | shadow | read_only | live
       RUNTIME_TOKEN: ${RUNTIME_TOKEN:-}
@@ -31,6 +32,7 @@ services:
     ports: ["8100:8100"]
     volumes:
       - ./docs:/docs:ro
+      - ./db/migrations:/migrations:ro
     depends_on:
       db: { condition: service_healthy }
 

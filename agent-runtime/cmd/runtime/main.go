@@ -6,6 +6,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -127,7 +129,7 @@ func submit(client *assemble.Client, op contracts.ProposedOperation, role roles.
 		Proposer string `json:"proposer"`
 		contracts.ProposedOperation
 	}{Proposer: role.Role, ProposedOperation: op}
-	res, err := postJSON(client, "/operations", body)
+	res, err := postOperationJSON(client, body)
 	if err != nil {
 		return nil, err
 	}
@@ -159,25 +161,70 @@ func postJSON(client *assemble.Client, path string, v any) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, client.Kernel+path, bytes.NewReader(b))
+	out, status, err := doJSONRequest(client, path, b, "")
 	if err != nil {
 		return nil, err
 	}
+	if status >= http.StatusBadRequest {
+		return out, fmt.Errorf("%s: HTTP %d: %v", path, status, out["error"])
+	}
+	return out, nil
+}
+
+func postOperationJSON(client *assemble.Client, v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	key, err := newIdempotencyKey()
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	var status int
+	for attempt := 0; attempt < 2; attempt++ {
+		out, status, err = doJSONRequest(client, "/operations", b, key)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status >= http.StatusBadRequest {
+		return out, fmt.Errorf("/operations: HTTP %d: %v", status, out["error"])
+	}
+	return out, nil
+}
+
+func newIdempotencyKey() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate idempotency key: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+func doJSONRequest(client *assemble.Client, path string, body []byte, idempotencyKey string) (map[string]any, int, error) {
+	req, err := http.NewRequest(http.MethodPost, client.Kernel+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
 	req.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	client.Authorize(req)
 	resp, err := client.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
-	if resp.StatusCode >= 400 {
-		return out, fmt.Errorf("%s: HTTP %d: %v", path, resp.StatusCode, out["error"])
-	}
-	return out, nil
+	return out, resp.StatusCode, nil
 }
 
 func env(k, fallback string) string {

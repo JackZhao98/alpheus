@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/risk"
+	"alpheus/kernel/internal/store"
 )
 
 func protectedMode(mode string) config.ModeConfig {
@@ -22,12 +26,19 @@ func protectedMode(mode string) config.ModeConfig {
 }
 
 func routeRequest(handler http.Handler, method, target, body, token string) *httptest.ResponseRecorder {
+	return routeRequestWithKey(handler, method, target, body, token, "")
+}
+
+func routeRequestWithKey(handler http.Handler, method, target, body, token, key string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
 	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -37,7 +48,7 @@ func routeRequest(handler http.Handler, method, target, body, token string) *htt
 func TestProtectedRoutesEnforceTokenGrants(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	st := newMemoryStore()
-	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}); err != nil {
+	if err := st.InsertOperation(id, "test", "C", "pending_review", risk.Operation{}, risk.Verdict{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	s := &server{
@@ -191,13 +202,13 @@ func TestGlobalHaltRejectsOpenButAllowsVerifiedClose(t *testing.T) {
 	}
 
 	open := `{"action":"open","kind":"equity","underlying":"HALT","symbol":"HALT","side":"buy","qty":1,"max_risk_usd":10,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
-	w = routeRequest(handler, http.MethodPost, "/operations", open, "runtime-secret")
+	w = routeRequestWithKey(handler, http.MethodPost, "/operations", open, "runtime-secret", "halt-open")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"class":"REJECT"`) ||
 		!strings.Contains(w.Body.String(), "breaker halted: operator stop") {
 		t.Fatalf("halted open status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	w = routeRequest(handler, http.MethodPost, "/operations", `{"action":"close","symbol":"HALT","qty":1}`, "runtime-secret")
+	w = routeRequestWithKey(handler, http.MethodPost, "/operations", `{"action":"close","symbol":"HALT","qty":1}`, "runtime-secret", "halt-close")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"class":"A"`) ||
 		!strings.Contains(w.Body.String(), `"status":"executed"`) {
 		t.Fatalf("halted close status=%d body=%s", w.Code, w.Body.String())
@@ -224,7 +235,7 @@ func TestLiveAccountBindingFailurePrecedesBrokerMutation(t *testing.T) {
 		broker: b, store: st,
 	}
 	payload := `{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
-	w := routeRequest(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret")
+	w := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "binding-open")
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "account_binding_violation") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -233,6 +244,141 @@ func TestLiveAccountBindingFailurePrecedesBrokerMutation(t *testing.T) {
 	}
 	if !containsString(st.events, "account_binding_violation") {
 		t.Fatalf("binding event missing: %v", st.events)
+	}
+}
+
+func TestLiveProposalRequiresValidIdempotencyKey(t *testing.T) {
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
+		broker: newFake("300"), store: newMemoryStore(),
+	}
+	payload := `{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
+	for _, tc := range []struct {
+		name, key, want string
+	}{
+		{name: "missing", want: "idempotency_key_required"},
+		{name: "space", key: "bad key", want: "invalid_idempotency_key"},
+		{name: "control", key: "bad\nkey", want: "invalid_idempotency_key"},
+		{name: "too long", key: strings.Repeat("x", 201), want: "invalid_idempotency_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", tc.key)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestLiveProposalIdempotencyReplayAndConflict(t *testing.T) {
+	st := newMemoryStore()
+	b := newFake("300")
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
+		broker: b, store: st,
+	}
+	handler := s.routes()
+	payload := `{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
+	first := routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "retry-1")
+	second := routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "retry-1")
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("first=%d %s second=%d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+	var firstBody, secondBody map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondBody); err != nil {
+		t.Fatal(err)
+	}
+	if firstBody["operation_id"] != secondBody["operation_id"] || secondBody["idempotent_replay"] != true {
+		t.Fatalf("first=%v second=%v", firstBody, secondBody)
+	}
+
+	changed := strings.Replace(payload, `"qty":1`, `"qty":2`, 1)
+	conflict := routeRequestWithKey(handler, http.MethodPost, "/operations", changed, "runtime-secret", "retry-1")
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_key_reused") {
+		t.Fatalf("conflict=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	st.mu.Lock()
+	operationCount := len(st.operationRows)
+	st.mu.Unlock()
+	orders, err := b.OpenOrders(context.Background())
+	if err != nil || operationCount != 1 || len(orders) != 1 {
+		t.Fatalf("operations=%d orders=%d err=%v", operationCount, len(orders), err)
+	}
+}
+
+func TestConcurrentLiveIdempotencyCreatesOneOperationAndOrder(t *testing.T) {
+	st := newMemoryStore()
+	b := newFake("300")
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
+		broker: b, store: st,
+	}
+	payload := `{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
+	handler := s.routes()
+	const requests = 20
+	start := make(chan struct{})
+	results := make(chan *httptest.ResponseRecorder, requests)
+	var ready sync.WaitGroup
+	ready.Add(requests)
+	for i := 0; i < requests; i++ {
+		go func() {
+			ready.Done()
+			<-start
+			results <- routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "concurrent-retry")
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for i := 0; i < requests; i++ {
+		if result := <-results; result.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
+		}
+	}
+	st.mu.Lock()
+	operationCount := len(st.operationRows)
+	st.mu.Unlock()
+	orders, err := b.OpenOrders(context.Background())
+	if err != nil || operationCount != 1 || len(orders) != 1 {
+		t.Fatalf("operations=%d orders=%d err=%v", operationCount, len(orders), err)
+	}
+}
+
+func TestDatabaseUnavailableReturns503BeforeBrokerMutation(t *testing.T) {
+	st := newMemoryStore()
+	st.proposalLockErr = fmt.Errorf("deadline: %w", store.ErrUnavailable)
+	b := newFake("300")
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
+		broker: b, store: st,
+	}
+	payload := `{"action":"open","kind":"option","underlying":"SPY","symbol":"SPY","side":"buy","qty":1,"max_risk_usd":35,"plan":{"stop":"x","invalidation":"x","time_stop":"x","target":"x"}}`
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "db-timeout")
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "database unavailable") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	fills, err := b.RecentFills(context.Background(), time.Time{})
+	if err != nil || len(fills) != 0 {
+		t.Fatalf("fills=%d err=%v", len(fills), err)
+	}
+}
+
+func TestDatabaseTimeoutConfig(t *testing.T) {
+	t.Setenv("DB_TIMEOUT_MS", "")
+	if got, err := databaseTimeout(); err != nil || got != 3*time.Second {
+		t.Fatalf("default=%s err=%v", got, err)
+	}
+	t.Setenv("DB_TIMEOUT_MS", "125")
+	if got, err := databaseTimeout(); err != nil || got != 125*time.Millisecond {
+		t.Fatalf("configured=%s err=%v", got, err)
+	}
+	for _, value := range []string{"0", "-1", "oops"} {
+		t.Setenv("DB_TIMEOUT_MS", value)
+		if _, err := databaseTimeout(); err == nil {
+			t.Fatalf("DB_TIMEOUT_MS=%q accepted", value)
+		}
 	}
 }
 

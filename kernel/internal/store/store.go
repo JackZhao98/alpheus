@@ -3,20 +3,43 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/lib/pq"
 )
 
-type Store struct{ DB *sql.DB }
+type Config struct {
+	URL           string
+	MigrationsDir string
+	Timeout       time.Duration
+}
 
-var ErrInvalidOperationReference = errors.New("invalid operation reference")
+type Store struct {
+	DB      *sql.DB
+	timeout time.Duration
+}
+
+var (
+	ErrInvalidOperationReference = errors.New("invalid operation reference")
+	ErrUnavailable               = errors.New("database unavailable")
+)
+
+type IdempotencyIdentity struct {
+	Subject     string
+	Key         string
+	RequestHash [sha256.Size]byte
+}
 
 // OperationGate is the minimum store surface used while the kernel holds a
 // per-ledger, per-market-day advisory transaction lock. Count, event, and
@@ -24,25 +47,122 @@ var ErrInvalidOperationReference = errors.New("invalid operation reference")
 type OperationGate interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 	InsertEvent(kind string, payload any) error
-	InsertOperation(id, proposer, class, status string, payload, verdict any) error
+	InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error
+	FindOperationByIdempotency(subject, key string) (*OperationRow, error)
 }
 
-type ledgerTx struct{ tx *sql.Tx }
+type ledgerTx struct {
+	tx  *sql.Tx
+	ctx context.Context
+}
 
 // Open waits for postgres on cold start.
-func Open(url string) (*Store, error) {
-	var db *sql.DB
-	var err error
+func Open(cfg Config) (*Store, error) {
+	if cfg.URL == "" || cfg.MigrationsDir == "" || cfg.Timeout <= 0 {
+		return nil, fmt.Errorf("store config is incomplete")
+	}
+	migrations, err := LoadMigrations(cfg.MigrationsDir)
+	if err != nil {
+		return nil, err
+	}
+	connector, err := pq.NewConnector(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("configure postgres: %w", err)
+	}
+	connector.Dialer(&deadlineDialer{timeout: cfg.Timeout})
+	db := sql.OpenDB(connector)
+	connected := false
 	for i := 0; i < 30; i++ {
-		db, err = sql.Open("postgres", url)
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+		err = db.PingContext(ctx)
+		cancel()
 		if err == nil {
-			if err = db.Ping(); err == nil {
-				return &Store{DB: db}, nil
-			}
+			connected = true
+			break
 		}
 		time.Sleep(time.Second)
 	}
-	return nil, fmt.Errorf("postgres unreachable: %w", err)
+	if !connected {
+		_ = db.Close()
+		return nil, fmt.Errorf("postgres unreachable: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	err = Migrate(ctx, db, migrations)
+	cancel()
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrations: %w", err)
+	}
+	return &Store{DB: db, timeout: cfg.Timeout}, nil
+}
+
+// deadlineDialer adds a hard socket deadline to lib/pq's context deadline.
+// lib/pq otherwise gives its cancellation connection a fixed 10-second
+// timeout, so a SIGSTOP/docker-pause database can outlive DB_TIMEOUT_MS.
+type deadlineDialer struct {
+	dialer  net.Dialer
+	timeout time.Duration
+}
+
+func (d *deadlineDialer) Dial(network, address string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, address)
+}
+
+func (d *deadlineDialer) DialTimeout(network, address string, timeout time.Duration) (net.Conn, error) {
+	if timeout <= 0 || timeout > d.timeout {
+		timeout = d.timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return d.DialContext(ctx, network, address)
+}
+
+func (d *deadlineDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	bounded, cancel := context.WithTimeout(ctx, d.timeout)
+	defer cancel()
+	conn, err := d.dialer.DialContext(bounded, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return &deadlineConn{Conn: conn, timeout: d.timeout}, nil
+}
+
+type deadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *deadlineConn) Read(buffer []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(buffer)
+}
+
+func (c *deadlineConn) Write(buffer []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(buffer)
+}
+
+func (s *Store) deadline() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), s.timeout)
+}
+
+func normalizeDBError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pqErr *pq.Error
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) ||
+		(errors.As(err, &pqErr) && (pqErr.Code == "57014" || pqErr.Code.Class() == "08")) ||
+		errors.As(err, &netErr) {
+		return fmt.Errorf("%w", ErrUnavailable)
+	}
+	return err
 }
 
 // NewID returns a random UUIDv4 without an external dependency.
@@ -70,54 +190,71 @@ func (s *Store) Event(kind string, payload any) {
 }
 
 func (s *Store) InsertEvent(kind string, payload any) error {
-	return insertEvent(s.DB, kind, payload)
+	ctx, cancel := s.deadline()
+	defer cancel()
+	return normalizeDBError(insertEvent(ctx, s.DB, kind, payload))
 }
 
 func (t *ledgerTx) InsertEvent(kind string, payload any) error {
-	return insertEvent(t.tx, kind, payload)
+	return normalizeDBError(insertEvent(t.ctx, t.tx, kind, payload))
 }
 
-func insertEvent(db execer, kind string, payload any) error {
-	_, err := db.Exec(`INSERT INTO events (kind, payload) VALUES ($1, $2)`, kind, jstr(payload))
+func insertEvent(ctx context.Context, db execer, kind string, payload any) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO events (kind, payload) VALUES ($1, $2)`, kind, jstr(payload))
 	return err
 }
 
-func (s *Store) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
-	return insertOperation(s.DB, id, proposer, class, status, payload, verdict)
+func (s *Store) InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	return normalizeDBError(insertOperation(ctx, s.DB, id, proposer, class, status, payload, verdict, identity))
 }
 
-func (t *ledgerTx) InsertOperation(id, proposer, class, status string, payload, verdict any) error {
-	return insertOperation(t.tx, id, proposer, class, status, payload, verdict)
+func (t *ledgerTx) InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error {
+	return normalizeDBError(insertOperation(t.ctx, t.tx, id, proposer, class, status, payload, verdict, identity))
 }
 
 type execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func insertOperation(db execer, id, proposer, class, status string, payload, verdict any) error {
-	_, err := db.Exec(
-		`INSERT INTO operations (id, proposer, class, status, payload, verdict) VALUES ($1,$2,$3,$4,$5,$6)`,
-		id, proposer, class, status, jstr(payload), jstr(verdict))
+func insertOperation(ctx context.Context, db execer, id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error {
+	var subject, key any
+	var requestHash any
+	if identity != nil {
+		subject, key, requestHash = identity.Subject, identity.Key, identity.RequestHash[:]
+	}
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO operations (
+			id, proposer, class, status, payload, verdict,
+			authenticated_subject, idempotency_key, request_hash
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		id, proposer, class, status, jstr(payload), jstr(verdict), subject, key, requestHash)
 	return err
 }
 
 func (s *Store) SetOperationStatus(id, status string, verdict any) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
 	if verdict == nil {
-		_, err := s.DB.Exec(`UPDATE operations SET status=$1 WHERE id=$2`, status, id)
-		return err
+		_, err := s.DB.ExecContext(ctx, `UPDATE operations SET status=$1 WHERE id=$2`, status, id)
+		return normalizeDBError(err)
 	}
-	_, err := s.DB.Exec(`UPDATE operations SET status=$1, verdict=$2 WHERE id=$3`, status, jstr(verdict), id)
-	return err
+	_, err := s.DB.ExecContext(ctx, `UPDATE operations SET status=$1, verdict=$2 WHERE id=$3`, status, jstr(verdict), id)
+	return normalizeDBError(err)
 }
 
 type OperationRow struct {
-	ID       string          `json:"id"`
-	TS       time.Time       `json:"ts"`
-	Proposer string          `json:"proposer"`
-	Class    string          `json:"class"`
-	Status   string          `json:"status"`
-	Payload  json.RawMessage `json:"payload"`
-	Verdict  json.RawMessage `json:"verdict"`
+	ID                   string          `json:"id"`
+	TS                   time.Time       `json:"ts"`
+	Proposer             string          `json:"proposer"`
+	Class                string          `json:"class"`
+	Status               string          `json:"status"`
+	Payload              json.RawMessage `json:"payload"`
+	Verdict              json.RawMessage `json:"verdict"`
+	AuthenticatedSubject string          `json:"-"`
+	IdempotencyKey       string          `json:"-"`
+	RequestHash          []byte          `json:"-"`
 }
 
 // OperationCursor is the stable key for descending operation pagination.
@@ -128,17 +265,54 @@ type OperationCursor struct {
 }
 
 func (s *Store) GetOperation(id string) (*OperationRow, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	row, err := getOperation(ctx, s.DB, `WHERE id=$1`, id)
+	if err == nil && row == nil {
+		return nil, sql.ErrNoRows
+	}
+	return row, err
+}
+
+func (s *Store) FindOperationByIdempotency(subject, key string) (*OperationRow, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	return getOperation(ctx, s.DB, `WHERE authenticated_subject=$1 AND idempotency_key=$2`, subject, key)
+}
+
+func (t *ledgerTx) FindOperationByIdempotency(subject, key string) (*OperationRow, error) {
+	return getOperation(t.ctx, t.tx, `WHERE authenticated_subject=$1 AND idempotency_key=$2`, subject, key)
+}
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func getOperation(ctx context.Context, db rowQueryer, where string, args ...any) (*OperationRow, error) {
 	var r OperationRow
-	var verdict sql.NullString
-	err := s.DB.QueryRow(
-		`SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,'') FROM operations WHERE id=$1`, id).
-		Scan(&r.ID, &r.TS, &r.Proposer, &r.Class, &r.Status, &r.Payload, &verdict)
+	var verdict, subject, key sql.NullString
+	var requestHash []byte
+	err := db.QueryRowContext(ctx,
+		`SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,''),
+			authenticated_subject, idempotency_key, request_hash
+		 FROM operations `+where, args...).
+		Scan(&r.ID, &r.TS, &r.Proposer, &r.Class, &r.Status, &r.Payload, &verdict, &subject, &key, &requestHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, err
+		return nil, normalizeDBError(err)
 	}
 	if verdict.Valid && verdict.String != "" {
 		r.Verdict = json.RawMessage(verdict.String)
 	}
+	if subject.Valid {
+		r.AuthenticatedSubject = subject.String
+	}
+	if key.Valid {
+		r.IdempotencyKey = key.String
+	}
+	r.RequestHash = append([]byte(nil), requestHash...)
 	return &r, nil
 }
 
@@ -156,9 +330,11 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 	query += ` ORDER BY ts DESC, id DESC LIMIT $` + fmt.Sprint(len(args)+1)
 	args = append(args, limit)
 
-	rows, err := s.DB.Query(query, args...)
+	ctx, cancel := s.deadline()
+	defer cancel()
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, normalizeDBError(err)
 	}
 	defer rows.Close()
 
@@ -167,7 +343,7 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 		var row OperationRow
 		var verdict sql.NullString
 		if err := rows.Scan(&row.ID, &row.TS, &row.Proposer, &row.Class, &row.Status, &row.Payload, &verdict); err != nil {
-			return nil, err
+			return nil, normalizeDBError(err)
 		}
 		if verdict.Valid && verdict.String != "" {
 			row.Verdict = json.RawMessage(verdict.String)
@@ -175,42 +351,45 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, normalizeDBError(err)
 	}
 	return result, nil
 }
 
 func (s *Store) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
-	return countTradesForDay(s.DB, shadow, start, end)
+	ctx, cancel := s.deadline()
+	defer cancel()
+	return countTradesForDay(ctx, s.DB, shadow, start, end)
 }
 
 func (t *ledgerTx) CountTradesForDay(shadow bool, start, end time.Time) (int, error) {
-	return countTradesForDay(t.tx, shadow, start, end)
+	return countTradesForDay(t.ctx, t.tx, shadow, start, end)
 }
 
 type queryRower interface {
-	QueryRow(query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func countTradesForDay(db queryRower, shadow bool, start, end time.Time) (int, error) {
+func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, end time.Time) (int, error) {
 	var n int
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		`SELECT count(*) FROM operations
 		 WHERE class='B'
 		   AND ts >= $2
 		   AND ts < $3
 		   AND status IN ('auto_approved','executed')
 		   AND COALESCE((payload->>'shadow')::bool, false) = $1`, shadow, start, end).Scan(&n)
-	return n, err
+	return n, normalizeDBError(err)
 }
 
-// WithLedgerLock serializes risk classification for one ledger and market day
-// across kernel processes. The transaction-scoped lock is released on commit
-// or rollback, so a crashed request cannot strand the gate.
-func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
-	tx, err := s.DB.Begin()
+// WithProposalLock takes the idempotency lock before the ledger lock. Both are
+// transaction-scoped, so a crashed process cannot strand either gate.
+func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return normalizeDBError(err)
 	}
 	committed := false
 	defer func() {
@@ -218,17 +397,31 @@ func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(Operati
 			_ = tx.Rollback()
 		}
 	}()
-	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, marketDay)); err != nil {
-		return err
+	if identity != nil {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, idempotencyLockKey(identity.Subject, identity.Key)); err != nil {
+			return normalizeDBError(err)
+		}
 	}
-	if err := fn(&ledgerTx{tx: tx}); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, marketDay)); err != nil {
+		return normalizeDBError(err)
+	}
+	if err := fn(&ledgerTx{tx: tx, ctx: ctx}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return normalizeDBError(err)
 	}
 	committed = true
 	return nil
+}
+
+func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
+	return s.WithProposalLock(nil, shadow, marketDay, fn)
+}
+
+func idempotencyLockKey(subject, key string) int64 {
+	digest := sha256.Sum256([]byte(subject + "\x00" + key))
+	return int64(binary.BigEndian.Uint64(digest[:8]))
 }
 
 func ledgerLockKey(shadow bool, marketDay time.Time) int64 {
@@ -243,17 +436,22 @@ func ledgerLockKey(shadow bool, marketDay time.Time) int64 {
 }
 
 func (s *Store) InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
 	var out any
 	if outcome != nil {
 		out = jstr(outcome)
 	}
-	_, err := s.DB.Exec(
+	_, err := s.DB.ExecContext(ctx,
 		`INSERT INTO journal (operation_id, hypothesis, outcome, prompt_versions, shadow) VALUES ($1,$2,$3,$4,$5)`,
 		operationID, jstr(hypothesis), out, jstr(promptVersions), shadow)
-	return normalizeJournalError(err)
+	return normalizeJournalError(normalizeDBError(err))
 }
 
 func normalizeJournalError(err error) error {
+	if errors.Is(err, ErrUnavailable) {
+		return err
+	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23503" {
 		return ErrInvalidOperationReference
@@ -268,53 +466,61 @@ type Lesson struct {
 }
 
 func (s *Store) TopLessons(limit int) ([]Lesson, error) {
-	rows, err := s.DB.Query(
+	ctx, cancel := s.deadline()
+	defer cancel()
+	rows, err := s.DB.QueryContext(ctx,
 		`SELECT text, confidence, COALESCE(applicable_when,'') FROM lessons
 		 WHERE expires_at IS NULL OR expires_at > now()
 		 ORDER BY confidence DESC, ts DESC LIMIT $1`, limit)
 	if err != nil {
-		return nil, err
+		return nil, normalizeDBError(err)
 	}
 	defer rows.Close()
 	out := []Lesson{}
 	for rows.Next() {
 		var l Lesson
 		if err := rows.Scan(&l.Text, &l.Confidence, &l.ApplicableWhen); err != nil {
-			return nil, err
+			return nil, normalizeDBError(err)
 		}
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	return out, normalizeDBError(rows.Err())
 }
 
 func (s *Store) GetBlackboard(day string) (json.RawMessage, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
 	var doc string
-	err := s.DB.QueryRow(`SELECT doc::text FROM blackboard WHERE day=$1`, day).Scan(&doc)
+	err := s.DB.QueryRowContext(ctx, `SELECT doc::text FROM blackboard WHERE day=$1`, day).Scan(&doc)
 	if err == sql.ErrNoRows {
 		return json.RawMessage(`{}`), nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, normalizeDBError(err)
 	}
 	return json.RawMessage(doc), nil
 }
 
 func (s *Store) PutBlackboard(day string, doc json.RawMessage) error {
-	_, err := s.DB.Exec(
+	ctx, cancel := s.deadline()
+	defer cancel()
+	_, err := s.DB.ExecContext(ctx,
 		`INSERT INTO blackboard (day, doc) VALUES ($1,$2)
 		 ON CONFLICT (day) DO UPDATE SET doc=EXCLUDED.doc, updated_at=now()`, day, string(doc))
-	return err
+	return normalizeDBError(err)
 }
 
 func (s *Store) LoadGlobalHalt() (bool, string, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
 	var halted bool
 	var reason string
-	err := s.DB.QueryRow(
+	err := s.DB.QueryRowContext(ctx,
 		`SELECT COALESCE((payload->>'halted')::boolean, false), COALESCE(payload->>'reason','')
 		 FROM events WHERE kind='global_halt_transition' ORDER BY id DESC LIMIT 1`).
 		Scan(&halted, &reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, "", nil
 	}
-	return halted, reason, err
+	return halted, reason, normalizeDBError(err)
 }
