@@ -26,7 +26,7 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	if strings.Contains(page.Body.String(), "<script>") {
 		t.Fatal("cockpit contains an inline script")
 	}
-	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "provider-cash", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak"} {
+	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "provider-cash", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak", "control-actions hidden", "admin-auth-form", "pending-list", "warning-list", "halt-form"} {
 		if !strings.Contains(page.Body.String(), required) {
 			t.Fatalf("cockpit query lab missing %q", required)
 		}
@@ -35,7 +35,7 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	if script.Code != http.StatusOK {
 		t.Fatalf("script status=%d", script.Code)
 	}
-	for _, forbidden := range []string{"innerHTML", "localStorage", "sessionStorage", "document.cookie"} {
+	for _, forbidden := range []string{"innerHTML", "localStorage", "sessionStorage", "document.cookie", "indexedDB"} {
 		if strings.Contains(script.Body.String(), forbidden) {
 			t.Fatalf("cockpit script contains forbidden browser API %q", forbidden)
 		}
@@ -52,6 +52,14 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 		if !strings.Contains(script.Body.String(), breakerFact) {
 			t.Fatalf("cockpit missing breaker fact %q", breakerFact)
 		}
+	}
+	for _, controlContract := range []string{"/auth/capabilities", "/control/warnings", "/review", "/halt", "/breaker/resume", "approved_price_cap", "derived_max_risk", "event_id"} {
+		if !strings.Contains(script.Body.String(), controlContract) {
+			t.Fatalf("cockpit missing M7 control contract %q", controlContract)
+		}
+	}
+	if strings.Contains(script.Body.String(), "reviewer:") {
+		t.Fatal("cockpit sends a client-controlled reviewer")
 	}
 	for _, forbidden := range []string{"CallTool", "tool_name", "place_", "cancel_", "remove_", "update_"} {
 		if strings.Contains(script.Body.String(), forbidden) {

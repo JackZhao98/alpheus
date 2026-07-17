@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Alpheus Trading Cockpit</title>
-  <meta name="description" content="Read-only Alpheus trading safety cockpit">
+  <meta name="description" content="Alpheus trading safety and human review cockpit">
   <link rel="stylesheet" href="/assets/cockpit.css">
 </head>
 <body>
@@ -68,6 +68,69 @@
       <article class="panel ledger live"><p class="eyebrow">LIVE LEDGER</p><div class="ledger-value"><strong id="live-count">—</strong><span>trades today</span></div><p id="live-risk" class="muted">Open risk —</p><p id="live-pnl" class="muted">Realized PnL —</p><p id="live-streak" class="muted">Consecutive loss days —</p><p id="live-halt" class="breaker">—</p><p id="live-asof" class="timestamp">—</p></article>
       <article class="panel ledger shadow"><p class="eyebrow">SHADOW LEDGER</p><div class="ledger-value"><strong id="shadow-count">—</strong><span>trades today</span></div><p id="shadow-risk" class="muted">Open risk —</p><p id="shadow-pnl" class="muted">Realized PnL —</p><p id="shadow-streak" class="muted">Consecutive loss days —</p><p id="shadow-halt" class="breaker">—</p><p id="shadow-asof" class="timestamp">—</p></article>
       <article class="panel hours"><p class="eyebrow">MARKET CLOCK</p><h2 id="market-state">—</h2><p id="market-hours" class="muted">Waiting for session hours</p><p id="hours-asof" class="timestamp">—</p><p id="hours-error" class="panel-error hidden" role="status"></p></article>
+    </section>
+
+    <section class="panel control-panel" aria-labelledby="control-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">HUMAN CONTROL PLANE</p><h2 id="control-title">Review and breakers</h2></div>
+        <span id="control-state" class="badge">READ ONLY</span>
+      </div>
+      <div id="control-unlock" class="control-unlock hidden">
+        <div>
+          <strong>Admin controls are locked</strong>
+          <p>Enter the Admin Token only when you need to act. It stays in this tab's memory and is cleared on reload.</p>
+        </div>
+        <form id="admin-auth-form" class="admin-auth-form">
+          <label for="admin-token">Admin bearer token</label>
+          <div class="token-row">
+            <input id="admin-token" type="password" autocomplete="off" spellcheck="false" required>
+            <button type="submit">Unlock controls</button>
+          </div>
+          <p id="admin-auth-error" class="error" role="alert"></p>
+        </form>
+      </div>
+      <div id="controls-disabled" class="control-disabled hidden">
+        This deployment is read_only. Data panels remain available, but kernel mutation routes are structurally disabled.
+      </div>
+      <div id="control-actions" class="control-actions hidden">
+        <form id="halt-form" class="halt-form">
+          <div><strong>Global halt</strong><p>Blocks new opens while verified closes remain available.</p></div>
+          <label for="halt-reason">Required reason</label>
+          <input id="halt-reason" maxlength="240" autocomplete="off" spellcheck="false" placeholder="Why are new opens being halted?">
+          <button id="halt-button" class="danger" type="submit">Arm global halt</button>
+          <p id="halt-confirmation" class="warning-text hidden">Review the reason, then press Confirm global halt.</p>
+        </form>
+        <div class="breaker-controls">
+          <div><strong>Breaker resume</strong><p>Only the active ledger/reason pair can be resumed for the current market day.</p></div>
+          <div id="breaker-actions" class="breaker-action-list"></div>
+          <p id="breaker-empty" class="empty">No resumable daily-loss, loss-streak, or PnL-divergence breaker.</p>
+        </div>
+      </div>
+      <p id="control-result" class="control-result" aria-live="polite">No control action taken.</p>
+      <p id="control-error" class="panel-error hidden" role="alert"></p>
+    </section>
+
+    <section class="panel review-panel" aria-labelledby="review-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">CLASS-C QUEUE</p><h2 id="review-title">Pending review</h2></div>
+        <span id="pending-count" class="badge">0</span>
+      </div>
+      <p class="query-intro">The kernel's computed risk, multiplier, persisted price cap, failed checks, and latest sane quote are shown before any decision. Execution is hard-bounded by the persisted approved price cap.</p>
+      <div id="pending-list" class="review-list"></div>
+      <p id="pending-empty" class="empty">No operations are awaiting review.</p>
+      <p id="pending-error" class="panel-error hidden" role="status"></p>
+    </section>
+
+    <section class="panel warning-panel" aria-labelledby="warning-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">FAIL-CLOSED HOLDS</p><h2 id="warning-title">Execution warnings</h2></div>
+        <span id="warning-count" class="badge">0</span>
+      </div>
+      <p class="query-intro">Stale or unknown execution attempts and held reservations are informational only. This console cannot release a hold or retry an uncertain broker effect.</p>
+      <div id="warning-list" class="warning-list"></div>
+      <p id="warnings-empty" class="empty">No uncertain attempts or held reservations.</p>
+      <p id="warnings-asof" class="timestamp">—</p>
+      <p id="warnings-error" class="panel-error hidden" role="status"></p>
     </section>
 
     <section class="panel table-panel">
@@ -186,7 +249,7 @@
       <div class="contract-grid">
         <p>Account <code>Micros · UTC · source</code></p><p>Position <code>Qty · multiplier · stable id</code></p><p>Quote <code>bid/ask · as_of · sanity</code></p><p>Provider <code>allowlist · snapshot · fail closed</code></p>
       </div>
-      <p class="notice">Read only. This cockpit exposes reviewed queries and order simulations, but no approve, reject, halt, place, cancel, replace, or account-selection controls.</p>
+      <p class="notice">The Cockpit can approve or reject operations and control breakers only after an in-memory Admin Token upgrade. It never exposes place, cancel, replace, reservation-release, retry, or account-selection controls.</p>
     </section>
   </main>
 

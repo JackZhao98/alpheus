@@ -36,6 +36,7 @@ type BreakerState struct {
 	Halted    bool
 	Reason    string
 	UpdatedAt time.Time
+	EventID   int64
 }
 
 func (t *ledgerTx) EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error) {
@@ -152,13 +153,14 @@ func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay time.Time, sub
 		WHERE ledger=$1`, ledger); err != nil {
 		return state, normalizeDBError(err)
 	}
-	if err := insertEvent(t.ctx, t.tx, "breaker", map[string]any{
+	eventID, err := insertEventWithID(t.ctx, t.tx, "breaker", map[string]any{
 		"ledger": ledger, "halted": false, "reason": reason,
 		"market_day": marketDay, "subject": subject, "override": true,
-	}); err != nil {
+	})
+	if err != nil {
 		return state, normalizeDBError(err)
 	}
-	state.Halted, state.Reason, state.UpdatedAt = false, "", time.Now().UTC()
+	state.Halted, state.Reason, state.UpdatedAt, state.EventID = false, "", time.Now().UTC(), eventID
 	return state, nil
 }
 

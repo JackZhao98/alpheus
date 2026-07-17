@@ -28,6 +28,7 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
       RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
+      CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
       LIVE_ACCOUNT_ID: ${LIVE_ACCOUNT_ID:-}
       RH_MCP_TOKEN_FILE: ${RH_MCP_TOKEN_FILE:-}

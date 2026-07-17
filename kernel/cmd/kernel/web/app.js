@@ -1,8 +1,13 @@
 let readToken = "";
+let adminToken = "";
 let operationCursor = "";
 let refreshPromise = null;
 let mcpTools = [];
 let mcpToolsLoaded = false;
+let controlCapabilities = {admin:false, mutations_enabled:false, mode:"unknown"};
+let latestState = null;
+let haltArmed = false;
+let pendingOperations = [];
 
 const byId = (id) => document.getElementById(id);
 const setText = (id, value) => { byId(id).textContent = value == null || value === "" ? "—" : String(value); };
@@ -10,14 +15,35 @@ const money = (value) => value == null ? "—" : new Intl.NumberFormat("en-US", 
 const when = (value) => value ? new Date(value).toLocaleString() : "—";
 const setPanelError = (id, value) => { setText(id, value); byId(id).classList.toggle("hidden", !value); };
 
-async function api(path, options = {}) {
+async function apiWithToken(path, options = {}, token = readToken) {
   const headers = {...(options.headers || {})};
-  if (readToken) headers.Authorization = `Bearer ${readToken}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(path, {...options, headers, cache:"no-store"});
-  if (response.status === 401) throw new Error("AUTH_REQUIRED");
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error || `HTTP_${response.status}`);
+  if (response.status === 401) throw new Error("AUTH_REQUIRED");
+  if (!response.ok) {
+    const error = new Error(payload?.error || `HTTP_${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return payload;
+}
+
+async function api(path, options = {}) { return apiWithToken(path, options, readToken); }
+
+async function controlAPI(path, body) {
+  if (!adminToken) throw new Error("ADMIN_REQUIRED");
+  try {
+    return await apiWithToken(path, {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+    }, adminToken);
+  } catch (error) {
+    if (error.message === "AUTH_REQUIRED") {
+      adminToken = "";
+      renderControlAccess();
+    }
+    throw error;
+  }
 }
 
 function renderLedger(prefix, ledger, asOf) {
@@ -87,7 +113,175 @@ async function loadOperations(reset) {
   setPanelError("operations-error", "");
 }
 
+function fact(label, value, className = "") {
+  const item = document.createElement("div");
+  if (className) item.className = className;
+  const name = document.createElement("span"); name.textContent = label;
+  const content = document.createElement("strong"); content.textContent = value == null || value === "" ? "—" : String(value);
+  item.append(name, content);
+  return item;
+}
+
+function renderControlAccess(rerenderReviews = true) {
+  const enabled = Boolean(controlCapabilities.mutations_enabled);
+  byId("controls-disabled").classList.toggle("hidden", enabled);
+  byId("control-unlock").classList.toggle("hidden", !enabled || Boolean(adminToken));
+  byId("control-actions").classList.toggle("hidden", !enabled || !adminToken);
+  setText("control-state", !enabled ? `${controlCapabilities.mode} · DISABLED` : adminToken ? "ADMIN ENABLED" : "ADMIN LOCKED");
+  renderBreakerActions();
+  if (rerenderReviews) renderPendingReviews();
+}
+
+async function loadControlCapabilities() {
+  controlCapabilities = await api("/auth/capabilities");
+  if (!controlCapabilities.mutations_enabled) adminToken = "";
+  renderControlAccess(false);
+}
+
+function reviewActionControls(operation) {
+  if (!adminToken || !controlCapabilities.mutations_enabled) return null;
+  const controls = document.createElement("div"); controls.className = "review-actions";
+  const rationale = document.createElement("input");
+  rationale.type = "text"; rationale.maxLength = 500; rationale.placeholder = "Rationale (optional)";
+  rationale.autocomplete = "off"; rationale.spellcheck = false;
+  const approve = document.createElement("button"); approve.type = "button"; approve.textContent = "Approve"; approve.className = "approve";
+  const reject = document.createElement("button"); reject.type = "button"; reject.textContent = "Reject"; reject.className = "danger secondary-danger";
+  const decide = async (verdict) => {
+    approve.disabled = true; reject.disabled = true;
+    setPanelError("pending-error", "");
+    try {
+      const result = await controlAPI(`/operations/${encodeURIComponent(operation.id)}/review`, {
+        verdict, rationale:rationale.value.trim()
+      });
+      const ids = [`operation ${result.operation_id || operation.id}`];
+      if (result.attempt_id) ids.push(`attempt ${result.attempt_id}`);
+      setText("control-result", `${verdict.toUpperCase()} · ${ids.join(" · ")} · ${result.status || "recorded"}`);
+      await refreshAfterControl();
+    } catch (error) {
+      setPanelError("pending-error", `Review refused: ${error.message}`);
+      approve.disabled = false; reject.disabled = false;
+    }
+  };
+  approve.addEventListener("click", () => decide("approved"));
+  reject.addEventListener("click", () => decide("rejected"));
+  controls.append(rationale, approve, reject);
+  return controls;
+}
+
+async function pendingReviewCard(operation) {
+  const payload = operation.payload || {};
+  const verdict = operation.verdict || {};
+  const card = document.createElement("article"); card.className = "review-card";
+  const head = document.createElement("div"); head.className = "review-card-head";
+  const title = document.createElement("strong"); title.textContent = `${payload.action || "operation"} · ${payload.symbol || payload.underlying || "—"}`;
+  const id = document.createElement("code"); id.textContent = operation.id;
+  head.append(title, id);
+
+  let quoteText = "Unavailable · approval fails closed";
+  const symbol = payload.symbol || payload.underlying;
+  if (symbol) {
+    try {
+      const quote = await api(`/market/quote/${encodeURIComponent(symbol)}`);
+      quoteText = `${money(quote.bid)} / ${money(quote.ask)} · ${quote.source || "provider"} · ${when(quote.as_of)}`;
+    } catch (_) {}
+  }
+
+  const facts = document.createElement("div"); facts.className = "review-facts";
+  facts.append(
+    fact("Quantity", payload.qty ?? "—"),
+    fact("Multiplier", payload.multiplier ?? "—"),
+    fact("Declared max risk", payload.max_risk_usd == null ? "Not declared" : money(payload.max_risk_usd)),
+    fact("Kernel derived risk", money(payload.derived_max_risk)),
+    fact("Approved price cap", money(payload.approved_price_cap)),
+    fact("Latest sane bid / ask", quoteText)
+  );
+
+  const checks = document.createElement("div"); checks.className = "check-list";
+  const entries = Object.entries(verdict.checks || {});
+  if (entries.length === 0) {
+    const missing = document.createElement("span"); missing.className = "check fail"; missing.textContent = "CHECK SNAPSHOT UNAVAILABLE"; checks.append(missing);
+  } else {
+    entries.sort(([left], [right]) => left.localeCompare(right)).forEach(([name, passed]) => {
+      const check = document.createElement("span"); check.className = `check ${passed ? "pass" : "fail"}`;
+      check.textContent = `${passed ? "PASS" : "FAIL"} · ${name}`; checks.append(check);
+    });
+  }
+  const plan = document.createElement("p"); plan.className = "review-plan";
+  plan.textContent = `Plan · stop ${payload.plan?.stop || "—"} · invalidation ${payload.plan?.invalidation || "—"} · time ${payload.plan?.time_stop || "—"} · target ${payload.plan?.target || "—"}`;
+  card.append(head, facts, checks, plan);
+  const controls = reviewActionControls(operation);
+  if (controls) card.append(controls);
+  return card;
+}
+
+async function loadPendingReviews() {
+  const page = await api("/operations?status=pending_review&limit=100");
+  pendingOperations = page.operations || [];
+  await renderPendingReviews();
+  setPanelError("pending-error", "");
+}
+
+async function renderPendingReviews() {
+  const list = byId("pending-list");
+  const cards = await Promise.all(pendingOperations.map((operation) => pendingReviewCard(operation)));
+  list.replaceChildren(...cards);
+  setText("pending-count", cards.length);
+  byId("pending-empty").classList.toggle("hidden", cards.length > 0);
+}
+
+async function loadControlWarnings() {
+  const snapshot = await api("/control/warnings");
+  const nodes = (snapshot.warnings || []).map((warning) => {
+    const row = document.createElement("div"); row.className = "warning-item";
+    const title = document.createElement("strong"); title.textContent = `${warning.kind} · ${warning.state}`;
+    const detail = document.createElement("span");
+    detail.textContent = `${warning.ledger || "—"} · ${warning.symbol || "—"} · operation ${warning.operation_id} · ${warning.detail || "operator inspection required"} · ${when(warning.created_at)}`;
+    const id = document.createElement("code"); id.textContent = warning.id;
+    row.append(title, detail, id); return row;
+  });
+  byId("warning-list").replaceChildren(...nodes);
+  setText("warning-count", nodes.length);
+  byId("warnings-empty").classList.toggle("hidden", nodes.length > 0);
+  setText("warnings-asof", `${snapshot.source || "kernel_db"} · ${when(snapshot.as_of)}`);
+  setPanelError("warnings-error", "");
+}
+
+function renderBreakerActions() {
+  if (!byId("breaker-actions")) return;
+  const container = byId("breaker-actions");
+  const resumable = new Set(["daily_loss", "loss_streak", "pnl_divergence"]);
+  const actions = [];
+  if (adminToken && latestState?.day) {
+    ["live", "shadow"].forEach((ledger) => {
+      const state = latestState.day[ledger];
+      if (!state?.halted || !resumable.has(state.halt_reason)) return;
+      const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
+      button.textContent = `Resume ${ledger} · ${state.halt_reason}`;
+      button.addEventListener("click", async () => {
+        button.disabled = true; setPanelError("control-error", "");
+        try {
+          const result = await controlAPI("/breaker/resume", {ledger, reason:state.halt_reason});
+          setText("control-result", `BREAKER RESUMED · event ${result.event_id} · ${result.ledger} / ${result.override_reason}`);
+          await refreshAfterControl();
+        } catch (error) {
+          setPanelError("control-error", `Resume refused: ${error.message}`); button.disabled = false;
+        }
+      });
+      actions.push(button);
+    });
+  }
+  container.replaceChildren(...actions);
+  byId("breaker-empty").classList.toggle("hidden", actions.length > 0);
+}
+
+async function refreshAfterControl() {
+  const pendingRefresh = refreshPromise;
+  if (pendingRefresh) await pendingRefresh;
+  await refresh();
+}
+
 async function renderState(state) {
+  latestState = state;
   setText("mode-badge", state.mode);
   setText("account-type", state.account.account_type); setText("account-source", state.account.source);
   setText("equity", money(state.account.equity)); setText("buying-power", money(state.account.buying_power));
@@ -96,6 +290,7 @@ async function renderState(state) {
   await renderPositions(state.positions);
   renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => ({title:`${o.side} ${o.symbol} · ${o.state}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${when(o.as_of)}`}));
   renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => ({title:`${f.side} ${f.symbol} · ${f.qty}`, detail:`${money(f.price)} · ${f.source} · ${when(f.as_of)}`}));
+  renderBreakerActions();
   ["account-error", "positions-error", "orders-error", "fills-error"].forEach((id) => setPanelError(id, ""));
 }
 
@@ -260,7 +455,11 @@ async function runMCPQuery() {
 function refresh() {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
-    const requests = [api("/state"), api("/provider/status"), api("/market/hours"), loadOperations(true), mcpToolsLoaded ? Promise.resolve(null) : loadMCPTools()];
+    const requests = [
+      api("/state"), api("/provider/status"), api("/market/hours"), loadOperations(true),
+      mcpToolsLoaded ? Promise.resolve(null) : loadMCPTools(), loadControlCapabilities(),
+      loadPendingReviews(), loadControlWarnings()
+    ];
     const results = await Promise.allSettled(requests);
     const authRequired = results.some((result) => result.status === "rejected" && result.reason.message === "AUTH_REQUIRED");
     const fulfilled = results.filter((result) => result.status === "fulfilled").length;
@@ -278,6 +477,9 @@ function refresh() {
       setText("mcp-state", "UNAVAILABLE");
       setPanelError("mcp-error", results[4].reason.message);
     }
+    if (results[5].status === "rejected" && !authRequired) setPanelError("control-error", `Control status ${results[5].reason.message}`);
+    if (results[6].status === "rejected" && !authRequired) setPanelError("pending-error", `Pending review ${results[6].reason.message}`);
+    if (results[7].status === "rejected" && !authRequired) setPanelError("warnings-error", `Warnings ${results[7].reason.message}`);
     setText("refresh-time", `Refreshed ${new Date().toLocaleTimeString()}`);
   })().finally(() => { refreshPromise = null; });
   return refreshPromise;
@@ -290,6 +492,62 @@ byId("auth-form").addEventListener("submit", async (event) => {
   if (pendingRefresh) await pendingRefresh;
   await refresh();
   if (!byId("auth-panel").classList.contains("hidden")) { readToken = ""; setText("auth-error", "Token rejected."); }
+});
+
+byId("admin-auth-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const candidate = byId("admin-token").value.trim();
+  byId("admin-token").value = "";
+  setText("admin-auth-error", "");
+  try {
+    const capabilities = await apiWithToken("/auth/capabilities", {}, candidate);
+    if (!capabilities.admin || !capabilities.mutations_enabled) throw new Error("Admin controls are unavailable for this token or mode.");
+    adminToken = candidate;
+    controlCapabilities = capabilities;
+    setText("control-result", "Admin controls unlocked in memory for this tab.");
+    renderControlAccess();
+  } catch (error) {
+    adminToken = "";
+    setText("admin-auth-error", error.message === "AUTH_REQUIRED" ? "Admin Token rejected." : error.message);
+    renderControlAccess();
+  }
+});
+
+byId("halt-reason").addEventListener("input", () => {
+  haltArmed = false;
+  byId("halt-button").textContent = "Arm global halt";
+  byId("halt-confirmation").classList.add("hidden");
+});
+
+byId("halt-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const reason = byId("halt-reason").value.trim();
+  setPanelError("control-error", "");
+  if (!reason) {
+    setPanelError("control-error", "Global halt requires a non-empty reason.");
+    return;
+  }
+  if (!haltArmed) {
+    haltArmed = true;
+    byId("halt-button").textContent = "Confirm global halt";
+    byId("halt-confirmation").classList.remove("hidden");
+    return;
+  }
+  byId("halt-button").disabled = true;
+  try {
+    const result = await controlAPI("/halt", {reason});
+    const audit = result.event_id ? `event ${result.event_id}` : "existing halt state";
+    setText("control-result", `GLOBAL HALT ACTIVE · ${audit} · ${result.reason}`);
+    byId("halt-reason").value = "";
+    haltArmed = false;
+    byId("halt-button").textContent = "Arm global halt";
+    byId("halt-confirmation").classList.add("hidden");
+    await refreshAfterControl();
+  } catch (error) {
+    setPanelError("control-error", `Halt refused: ${error.message}`);
+  } finally {
+    byId("halt-button").disabled = false;
+  }
 });
 
 byId("operations-more").addEventListener("click", async () => {

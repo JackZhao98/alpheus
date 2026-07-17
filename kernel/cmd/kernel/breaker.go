@@ -51,5 +51,6 @@ func (s *server) postBreakerResume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ledger": state.Ledger, "halted": state.Halted,
 		"reason": state.Reason, "override_reason": input.Reason,
+		"event_id": state.EventID,
 	})
 }

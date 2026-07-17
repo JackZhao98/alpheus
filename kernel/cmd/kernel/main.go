@@ -48,6 +48,7 @@ type server struct {
 	proposalTTL            time.Duration
 	runtimeURL             string
 	runtimeHTTP            *http.Client
+	consoleOrigin          string
 	haltMu                 sync.RWMutex
 	halted                 bool
 	haltReason             string
@@ -59,6 +60,7 @@ type storeAPI interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	InsertEvent(kind string, payload any) error
+	InsertEventWithID(kind string, payload any) (int64, error)
 	FindOperationByIdempotency(subject, key string) (*store.OperationRow, error)
 	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error
 	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
@@ -67,6 +69,7 @@ type storeAPI interface {
 	SetOperationStatus(id, status string, verdict any) error
 	GetOperation(id string) (*store.OperationRow, error)
 	ListOperations(status string, limit int, cursor *store.OperationCursor) ([]store.OperationRow, error)
+	ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
 	TopLessons(limit int) ([]store.Lesson, error)
 	GetBlackboard(day string) (json.RawMessage, error)
@@ -109,6 +112,10 @@ func main() {
 	}
 	if err := mode.ValidateBroker(config.Env("BROKER", "fake")); err != nil {
 		log.Fatalf("mode config: %v", err)
+	}
+	consoleOrigin, err := normalizeConsoleOrigin(config.Env("CONSOLE_ORIGIN", "http://localhost:8100"))
+	if err != nil {
+		log.Fatalf("console origin: %v", err)
 	}
 	limits, err := config.LoadLimits()
 	if err != nil {
@@ -238,6 +245,7 @@ func main() {
 		providerDedupeVerified: brokerName == "fake",
 		proposalTTL:            proposalTTL,
 		runtimeURL:             config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		consoleOrigin:          consoleOrigin,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)

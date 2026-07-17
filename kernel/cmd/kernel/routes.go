@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 
+	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 )
 
@@ -13,9 +14,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /assets/cockpit.css", serveCockpitFile("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /assets/cockpit.js", serveCockpitFile("app.js", "application/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /limits", s.authorize(permissionRead, s.getLimits))
+	mux.HandleFunc("GET /auth/capabilities", s.authorize(permissionRead, s.getAuthCapabilities))
 	mux.HandleFunc("GET /state", s.authorize(permissionRead, s.getState))
 	mux.HandleFunc("GET /operations", s.authorize(permissionRead, s.listOperations))
 	mux.HandleFunc("GET /operations/{id}", s.authorize(permissionRead, s.getOperation))
+	mux.HandleFunc("GET /control/warnings", s.authorize(permissionRead, s.getControlWarnings))
 	mux.HandleFunc("GET /lessons", s.authorize(permissionRead, s.getLessons))
 	mux.HandleFunc("GET /blackboard/{day}", s.authorize(permissionRead, s.getBlackboard))
 	mux.HandleFunc("GET /market/quote/{symbol}", s.authorize(permissionRead, s.getMarketQuote))
@@ -39,13 +42,15 @@ func (s *server) routes() http.Handler {
 	}
 
 	mux.HandleFunc("POST /operations", s.authorize(permissionRuntime, s.propose))
-	mux.HandleFunc("POST /operations/{id}/review", s.authorize(permissionAdmin, s.review))
+	mux.HandleFunc("POST /operations/{id}/review", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.review)))
 	mux.HandleFunc("POST /journal", s.authorize(permissionRuntime, s.postJournal))
 	mux.HandleFunc("PUT /blackboard/{day}", s.authorize(permissionRuntime, s.putBlackboard))
-	mux.HandleFunc("POST /halt", s.authorize(permissionAdmin, s.postHalt))
-	mux.HandleFunc("POST /breaker/resume", s.authorize(permissionAdmin, s.postBreakerResume))
-	if s.tradingMode() == config.ModeSim {
-		mux.HandleFunc("POST /sim/quote", s.authorize(permissionAdmin, s.simQuote))
+	mux.HandleFunc("POST /halt", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postHalt)))
+	mux.HandleFunc("POST /breaker/resume", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postBreakerResume)))
+	if s.tradingMode() == config.ModeSim || s.tradingMode() == config.ModeShadow {
+		if _, fakeBroker := s.broker.(*broker.Fake); s.simVenue != nil || fakeBroker {
+			mux.HandleFunc("POST /sim/quote", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.simQuote)))
+		}
 	}
 	return mux
 }

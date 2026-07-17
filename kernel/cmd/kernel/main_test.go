@@ -244,6 +244,67 @@ func (m *memoryStore) InsertEvent(kind string, payload any) error {
 	return nil
 }
 
+func (m *memoryStore) InsertEventWithID(kind string, payload any) (int64, error) {
+	if err := m.InsertEvent(kind, payload); err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(len(m.events)), nil
+}
+
+func (m *memoryStore) ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	warnings := make([]store.ControlWarning, 0)
+	for _, attempt := range m.attempts {
+		stale := attempt.State == "unknown" ||
+			(attempt.State == "pending" && attempt.CreatedAt.Before(pendingBefore)) ||
+			(attempt.State == "claimed" && attempt.ClaimedAt.Before(claimBefore))
+		if !stale {
+			continue
+		}
+		warning := store.ControlWarning{
+			Kind: "execution_attempt", ID: attempt.ID, OperationID: attempt.OperationID,
+			State: attempt.State, CreatedAt: attempt.CreatedAt, Detail: attempt.LastError,
+		}
+		if reservation := m.openReservations[attempt.OpenReservationID]; attempt.OpenReservationID != "" {
+			warning.Ledger, warning.Symbol = reservation.Ledger, reservation.Symbol
+		} else if reservation := m.reservations[attempt.CloseReservationID]; attempt.CloseReservationID != "" {
+			warning.Ledger, warning.Symbol = reservation.Ledger, reservation.Symbol
+		}
+		warnings = append(warnings, warning)
+	}
+	for _, reservation := range m.openReservations {
+		if reservation.ResourceState == "held" {
+			warnings = append(warnings, store.ControlWarning{
+				Kind: "open_reservation", ID: reservation.ID, OperationID: reservation.OperationID,
+				Ledger: reservation.Ledger, Symbol: reservation.Symbol, State: reservation.ResourceState,
+				CreatedAt: reservation.CreatedAt, Detail: "funds and risk remain reserved",
+			})
+		}
+	}
+	for _, reservation := range m.reservations {
+		if reservation.State == "held" {
+			warnings = append(warnings, store.ControlWarning{
+				Kind: "close_reservation", ID: reservation.ID, OperationID: reservation.OperationID,
+				Ledger: reservation.Ledger, Symbol: reservation.Symbol, State: reservation.State,
+				CreatedAt: reservation.CreatedAt, Detail: "position quantity remains reserved",
+			})
+		}
+	}
+	sort.Slice(warnings, func(i, j int) bool {
+		if warnings[i].CreatedAt.Equal(warnings[j].CreatedAt) {
+			return warnings[i].ID < warnings[j].ID
+		}
+		return warnings[i].CreatedAt.Before(warnings[j].CreatedAt)
+	})
+	if len(warnings) > limit {
+		warnings = warnings[:limit]
+	}
+	return warnings, nil
+}
+
 func (m *memoryStore) InsertOperation(id, proposer, class, status string, payload, verdict any, identity *store.IdempotencyIdentity) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -405,6 +466,7 @@ func (m *memoryStore) ResumeBreaker(ledger, reason string, marketDay time.Time, 
 	state.Halted, state.Reason = false, ""
 	state.UpdatedAt = marketDay
 	m.events = append(m.events, "breaker")
+	state.EventID = int64(len(m.events))
 	m.breakerStates[ledger] = state
 	return state, nil
 }

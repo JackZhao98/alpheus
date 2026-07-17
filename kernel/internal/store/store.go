@@ -35,10 +35,11 @@ type Store struct {
 }
 
 var (
-	ErrInvalidOperationReference = errors.New("invalid operation reference")
-	ErrBreakerNotActive          = errors.New("breaker is not active for that reason")
-	ErrOperationNotPending       = errors.New("operation is not pending review")
-	ErrUnavailable               = errors.New("database unavailable")
+	ErrInvalidOperationReference  = errors.New("invalid operation reference")
+	ErrBreakerNotActive           = errors.New("breaker is not active for that reason")
+	ErrOperationNotPending        = errors.New("operation is not pending review")
+	ErrInvalidControlWarningQuery = errors.New("invalid control warning query")
+	ErrUnavailable                = errors.New("database unavailable")
 )
 
 type IdempotencyIdentity struct {
@@ -239,6 +240,13 @@ func (s *Store) InsertEvent(kind string, payload any) error {
 	return normalizeDBError(insertEvent(ctx, s.DB, kind, payload))
 }
 
+func (s *Store) InsertEventWithID(kind string, payload any) (int64, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	id, err := insertEventWithID(ctx, s.DB, kind, payload)
+	return id, normalizeDBError(err)
+}
+
 func (t *ledgerTx) InsertEvent(kind string, payload any) error {
 	return normalizeDBError(insertEvent(t.ctx, t.tx, kind, payload))
 }
@@ -246,6 +254,14 @@ func (t *ledgerTx) InsertEvent(kind string, payload any) error {
 func insertEvent(ctx context.Context, db execer, kind string, payload any) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO events (kind, payload) VALUES ($1, $2)`, kind, jstr(payload))
 	return err
+}
+
+func insertEventWithID(ctx context.Context, db rowQueryer, kind string, payload any) (int64, error) {
+	var id int64
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO events (kind, payload) VALUES ($1, $2) RETURNING id`,
+		kind, jstr(payload)).Scan(&id)
+	return id, err
 }
 
 func (s *Store) InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error {

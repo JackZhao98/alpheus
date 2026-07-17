@@ -3,6 +3,7 @@
 # Usage: ./scripts/smoke.sh   (kernel must be up on :8100)
 set -e
 K=${KERNEL_URL:-http://localhost:8100}
+ORIGIN=${CONSOLE_ORIGIN:-http://localhost:8100}
 PLAN='{"stop":"-30%","invalidation":"thesis dead","time_stop":"15:45 ET","target":"+50%"}'
 SMOKE_DB_CHECK=${SMOKE_DB_CHECK:-1}
 SMOKE_DB_NAME=${SMOKE_DB_NAME:-alpheus}
@@ -19,7 +20,7 @@ if [ "$SMOKE_DB_CHECK" = "1" ]; then
 fi
 
 quote() {
-  curl -s -X POST "$K/sim/quote" -H 'Content-Type: application/json' -d "$1"
+  curl -s -X POST "$K/sim/quote" -H 'Content-Type: application/json' -H "Origin: $ORIGIN" -d "$1"
   echo
 }
 
@@ -45,7 +46,7 @@ class_c_id=$(printf '%s' "$class_c_response" | sed -E 's/.*"operation_id":"([^"]
 test -n "$class_c_id"
 
 echo "== 2b) approve Class C -> expect one atomic entitlement and execution =="
-curl -s -X POST "$K/operations/$class_c_id/review" -H 'Content-Type: application/json' -d '{"verdict":"approved","rationale":"smoke M4"}'; echo; echo
+curl -s -X POST "$K/operations/$class_c_id/review" -H 'Content-Type: application/json' -H "Origin: $ORIGIN" -d '{"verdict":"approved","rationale":"smoke M4"}'; echo; echo
 
 echo "== seed equity quote =="
 quote '{"symbol":"SMOKE","bid":100,"ask":100.1,"open_interest":0}'

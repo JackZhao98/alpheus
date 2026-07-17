@@ -37,6 +37,7 @@ func routeRequestWithKey(handler http.Handler, method, target, body, token, key 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	req.Header.Set("Origin", defaultConsoleOrigin)
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
@@ -139,6 +140,19 @@ func TestReadOnlyRoutesReturn405AndLiveDoesNotMountSim(t *testing.T) {
 	w := routeRequest(live.routes(), http.MethodPost, "/sim/quote", `{"symbol":"SPY","bid":1,"ask":2}`, "admin-secret")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("live sim route status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestShadowFakeMountsAuthenticatedSimQuote(t *testing.T) {
+	venue := newFake("300")
+	shadow := &server{
+		mode: protectedMode(config.ModeShadow), limits: dualLedgerLimits(),
+		broker: venue, store: newMemoryStore(), consoleOrigin: defaultConsoleOrigin,
+	}
+	w := routeRequest(shadow.routes(), http.MethodPost, "/sim/quote",
+		`{"symbol":"SPY","bid":1,"ask":2}`, "admin-secret")
+	if w.Code != http.StatusOK {
+		t.Fatalf("shadow fake sim route status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

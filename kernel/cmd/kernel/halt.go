@@ -59,18 +59,23 @@ func (s *server) postHalt(w http.ResponseWriter, r *http.Request) {
 
 	s.haltMu.Lock()
 	defer s.haltMu.Unlock()
+	var eventID int64
 	if !s.halted {
 		payload := map[string]any{
 			"halted": true, "reason": in.Reason,
 			"subject": authenticatedSubject(r), "mode": s.tradingMode(),
 		}
-		if err := s.store.InsertEvent(globalHaltEvent, payload); err != nil {
+		var err error
+		eventID, err = s.store.InsertEventWithID(globalHaltEvent, payload)
+		if err != nil {
 			writeStoreError(w, "persist global halt", err)
 			return
 		}
 		s.halted, s.haltReason = true, in.Reason
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"halted": true, "reason": s.haltReason})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"halted": true, "reason": s.haltReason, "event_id": eventID,
+	})
 }
 
 func (s *server) assertLiveAccountBinding(ctx context.Context, operationID string) error {
