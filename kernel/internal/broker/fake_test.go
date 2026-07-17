@@ -44,6 +44,9 @@ func TestRecentFillsUseDurableFillTimestamp(t *testing.T) {
 	if err != nil || result.State != "filled" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
+	if len(result.Fills) != 1 || result.Fills[0].FillID != "fake-fill-"+result.BrokerOrderID || result.Fills[0].AsOf.IsZero() {
+		t.Fatalf("result does not carry a stable fill: %+v", result)
+	}
 	fills, err := b.RecentFills(context.Background(), time.Time{})
 	if err != nil || len(fills) != 1 || fills[0].AsOf.IsZero() {
 		t.Fatalf("fills=%+v err=%v", fills, err)

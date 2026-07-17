@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"alpheus/kernel/internal/broker"
@@ -100,6 +101,45 @@ func (s *server) reconcileAttempts(ctx context.Context) error {
 			if err := s.reconcileUncertainAttempt(ctx, &attempt, now); err != nil {
 				log.Printf("reconcile uncertain attempt %s: %v", attempt.ID, err)
 			}
+		}
+	}
+	return s.reconcileWorkingOrders(ctx)
+}
+
+func (s *server) reconcileWorkingOrders(ctx context.Context) error {
+	if halted, reason := s.haltSnapshot(); halted && strings.HasPrefix(reason, store.ErrFillIntegrity.Error()) {
+		return nil
+	}
+	execution := s.executionProvider()
+	if execution == nil {
+		return nil
+	}
+	orders, err := s.store.ListWorkingOrders(reconcileBatchSize)
+	if err != nil {
+		return err
+	}
+	for _, order := range orders {
+		queryCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		result, queryErr := execution.GetOrder(queryCtx, order.BrokerOrderID)
+		cancel()
+		if queryErr != nil {
+			if !errors.Is(queryErr, broker.ErrNotFound) {
+				log.Printf("reconcile order %s: %v", order.ID, queryErr)
+			}
+			continue
+		}
+		update := resolutionForOrder(&store.ExecutionAttempt{
+			ID: order.ExecutionAttemptID, Intent: "place",
+		}, result).OrderUpdate
+		if update == nil {
+			continue
+		}
+		if err := s.store.ApplyOrderUpdate(*update); err != nil {
+			if errors.Is(err, store.ErrFillIntegrity) {
+				_ = s.refreshGlobalHalt()
+				return err
+			}
+			log.Printf("reconcile order %s: %v", order.ID, err)
 		}
 	}
 	return nil
@@ -261,7 +301,6 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 	cancel()
 	if err == nil {
 		resolution := resolutionForOrder(claimed, result)
-		resolution.OrderEvent = map[string]any{"operation_id": claimed.OperationID, "order": result}
 		_, err = s.store.ResolveAttempt(claimed.ID, claimed.Attempt, resolution)
 		return err
 	}

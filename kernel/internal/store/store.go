@@ -58,6 +58,7 @@ type OperationGate interface {
 	InsertTradeGrant(grant TradeGrant) error
 	InsertCloseReservation(reservation CloseReservation) error
 	InsertExecutionAttempt(attempt ExecutionAttempt) error
+	InsertOrder(order Order) error
 }
 
 type ledgerTx struct {

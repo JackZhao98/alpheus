@@ -197,8 +197,8 @@ func TestDelayedCloseReservationBlocksNineteenFollowers(t *testing.T) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for _, reservation := range st.reservations {
-		if reservation.State != "held" || reservation.RemainingQty != units.MustQty("1") {
-			t.Fatalf("filled close reservation=%+v, want held until M2.9 persists the fill", reservation)
+		if reservation.State != "released" || reservation.RemainingQty != 0 {
+			t.Fatalf("filled close reservation=%+v, want atomically released after durable fill", reservation)
 		}
 	}
 }

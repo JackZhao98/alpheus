@@ -56,6 +56,7 @@ type AttemptResolution struct {
 	LastError          string
 	OperationStatus    string
 	ReleaseReservation bool
+	OrderUpdate        *OrderUpdate
 	OrderEvent         any
 }
 
@@ -182,14 +183,29 @@ func (s *Store) GetExecutionAttempt(id string) (*ExecutionAttempt, error) {
 func (s *Store) UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
-	result, err := s.DB.ExecContext(ctx, `UPDATE execution_attempt
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE execution_attempt
 		SET limit_micros=LEAST(limit_micros,$2)
 		WHERE id=$1 AND state='pending' AND intent='place'`, id, int64(limit))
 	if err != nil {
 		return false, normalizeDBError(err)
 	}
 	affected, err := result.RowsAffected()
-	return affected == 1, normalizeDBError(err)
+	if err != nil || affected != 1 {
+		return false, normalizeDBError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE orders SET limit_micros=LEAST(limit_micros,$2),updated_at=now()
+		WHERE execution_attempt_id=$1 AND state='new'`, id, int64(limit)); err != nil {
+		return false, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, normalizeDBError(err)
+	}
+	return true, nil
 }
 
 func (s *Store) ClaimPendingAttempt(id, instance string) (*ExecutionAttempt, error) {
@@ -272,8 +288,15 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 	}
 	defer tx.Rollback()
 
+	var operationID string
 	var reservationID sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT close_reservation_id FROM execution_attempt WHERE id=$1`, id).Scan(&reservationID); err != nil {
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id
+		FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed' FOR UPDATE`,
+		id, fencingToken).Scan(&operationID, &reservationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
 		return false, normalizeDBError(err)
 	}
 	if reservationID.Valid {
@@ -286,16 +309,26 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 		}
 	}
 
-	var operationID string
-	err = tx.QueryRowContext(ctx, `UPDATE execution_attempt SET state=$3,
+	if resolution.OrderUpdate != nil {
+		if resolution.OrderUpdate.ExecutionAttemptID == "" {
+			resolution.OrderUpdate.ExecutionAttemptID = id
+		}
+		if _, err := applyOrderUpdate(ctx, tx, *resolution.OrderUpdate); err != nil {
+			_ = tx.Rollback()
+			return false, s.recordOrderUpdateFailure(*resolution.OrderUpdate, err)
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, `UPDATE execution_attempt SET state=$3,
 		broker_order_id=NULLIF($4,''), last_error=NULLIF($5,''),
 		resolved_at=CASE WHEN $3 IN ('settled','failed') THEN now() ELSE NULL END
-		WHERE id=$1 AND attempt=$2 AND state='claimed' RETURNING operation_id`,
-		id, fencingToken, resolution.State, resolution.BrokerOrderID, resolution.LastError).Scan(&operationID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
+		WHERE id=$1 AND attempt=$2 AND state='claimed'`,
+		id, fencingToken, resolution.State, resolution.BrokerOrderID, resolution.LastError)
 	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected != 1 {
 		return false, normalizeDBError(err)
 	}
 	if resolution.OperationStatus != "" {

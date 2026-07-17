@@ -327,6 +327,13 @@ func (f *Fake) fillOrder(order *fakeOrder, quote Quote) error {
 	order.result.FilledPrice = price
 	order.updatedAt = now
 	order.filledAt = now
+	order.result.Fills = []ReadFill{{
+		FillID:        "fake-fill-" + order.result.BrokerOrderID,
+		BrokerOrderID: order.result.BrokerOrderID,
+		InstrumentID:  "fake-instrument-" + order.symbol,
+		Symbol:        order.symbol, Side: order.side, Qty: order.qty, Price: price,
+		Source: "fake", AsOf: now,
+	}}
 	return nil
 }
 

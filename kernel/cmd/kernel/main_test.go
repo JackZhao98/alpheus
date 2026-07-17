@@ -17,6 +17,7 @@ import (
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/risk"
+	orderstate "alpheus/kernel/internal/state"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
 )
@@ -25,6 +26,12 @@ type journalEntry struct {
 	operationID string
 	hypothesis  any
 	shadow      bool
+}
+
+type memoryFill struct {
+	orderID string
+	ledger  string
+	fill    store.FillInput
 }
 
 type memoryStore struct {
@@ -42,6 +49,8 @@ type memoryStore struct {
 	grants           map[string]store.TradeGrant
 	reservations     map[string]store.CloseReservation
 	attempts         map[string]store.ExecutionAttempt
+	orders           map[string]store.Order
+	fills            map[string]memoryFill
 	verdicts         map[string]json.RawMessage
 	journals         []journalEntry
 	events           []string
@@ -64,6 +73,8 @@ func newMemoryStore() *memoryStore {
 		grants:           map[string]store.TradeGrant{},
 		reservations:     map[string]store.CloseReservation{},
 		attempts:         map[string]store.ExecutionAttempt{},
+		orders:           map[string]store.Order{},
+		fills:            map[string]memoryFill{},
 		verdicts:         map[string]json.RawMessage{},
 		blackboards:      map[string]json.RawMessage{},
 	}
@@ -247,6 +258,13 @@ func (m *memoryStore) InsertExecutionAttempt(attempt store.ExecutionAttempt) err
 	return nil
 }
 
+func (m *memoryStore) InsertOrder(order store.Order) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.orders[order.ExecutionAttemptID] = order
+	return nil
+}
+
 func (m *memoryStore) GetExecutionAttempt(id string) (*store.ExecutionAttempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -268,6 +286,9 @@ func (m *memoryStore) UpdatePendingAttemptLimit(id string, limit units.Micros) (
 	if limit < attempt.Limit {
 		attempt.Limit = limit
 		m.attempts[id] = attempt
+		order := m.orders[id]
+		order.Limit = limit
+		m.orders[id] = order
 	}
 	return true, nil
 }
@@ -330,6 +351,11 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 	if !ok || attempt.State != "claimed" || attempt.Attempt != fencingToken {
 		return false, nil
 	}
+	if resolution.OrderUpdate != nil {
+		if err := m.applyMemoryOrderUpdateLocked(*resolution.OrderUpdate); err != nil {
+			return false, err
+		}
+	}
 	attempt.State = resolution.State
 	attempt.BrokerOrderID = resolution.BrokerOrderID
 	attempt.LastError = resolution.LastError
@@ -351,6 +377,118 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 		m.events = append(m.events, "order_update")
 	}
 	return true, nil
+}
+
+func (m *memoryStore) ListWorkingOrders(limit int) ([]store.Order, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]store.Order, 0, limit)
+	for _, order := range m.orders {
+		if order.State == "submitted" || order.State == "partially_filled" {
+			result = append(result, order)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (m *memoryStore) ApplyOrderUpdate(update store.OrderUpdate) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.applyMemoryOrderUpdateLocked(update)
+}
+
+func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) error {
+	order, ok := m.orders[update.ExecutionAttemptID]
+	if !ok {
+		return nil // Older recovery fixtures predate M2.9 order creation.
+	}
+	if order.State != update.State {
+		current := order.State
+		if current == "new" && update.State != "submitted" && update.State != "rejected" {
+			if _, err := orderstate.Advance(current, "submitted"); err != nil {
+				m.events = append(m.events, "order_transition_rejected")
+				return store.ErrIllegalOrderTransition
+			}
+			current = "submitted"
+		}
+		if _, err := orderstate.Advance(current, update.State); err != nil {
+			m.events = append(m.events, "order_transition_rejected")
+			return store.ErrIllegalOrderTransition
+		}
+	}
+	for _, fill := range update.Fills {
+		if existing, exists := m.fills[fill.BrokerFillID]; exists {
+			if existing.orderID != order.ID || existing.ledger != order.Ledger ||
+				existing.fill.Qty != fill.Qty || existing.fill.Price != fill.Price || existing.fill.Fees != fill.Fees {
+				m.events = append(m.events, "fill_integrity_error", globalHaltEvent)
+				m.halted, m.haltReason = true, "fill integrity failure"
+				return store.ErrFillIntegrity
+			}
+			continue
+		}
+		m.fills[fill.BrokerFillID] = memoryFill{orderID: order.ID, ledger: order.Ledger, fill: fill}
+		m.events = append(m.events, "fill")
+		attempt := m.attempts[order.ExecutionAttemptID]
+		if attempt.CloseReservationID != "" {
+			reservation := m.reservations[attempt.CloseReservationID]
+			if reservation.State != "held" || fill.Qty > reservation.RemainingQty {
+				return store.ErrFillIntegrity
+			}
+			reservation.RemainingQty -= fill.Qty
+			if reservation.RemainingQty == 0 {
+				reservation.State = "released"
+				reservation.ReleasedAt = time.Now().UTC()
+			}
+			m.reservations[attempt.CloseReservationID] = reservation
+		}
+	}
+	attempt := m.attempts[order.ExecutionAttemptID]
+	if attempt.CloseReservationID != "" {
+		reservation := m.reservations[attempt.CloseReservationID]
+		switch update.State {
+		case "cancelled", "rejected", "expired":
+			if reservation.State == "held" {
+				reservation.State = "released"
+				reservation.RemainingQty = 0
+				reservation.ReleasedAt = time.Now().UTC()
+				m.reservations[attempt.CloseReservationID] = reservation
+			}
+		case "filled":
+			if reservation.State != "released" || reservation.RemainingQty != 0 {
+				return store.ErrFillIntegrity
+			}
+		}
+	}
+	order.BrokerOrderID = update.BrokerOrderID
+	order.State = update.State
+	order.UpdatedAt = time.Now().UTC()
+	m.orders[order.ExecutionAttemptID] = order
+	m.events = append(m.events, "order_update")
+	if attemptState, operationStatus := memoryTerminalPlacementState(update.State); attemptState != "" {
+		attempt := m.attempts[order.ExecutionAttemptID]
+		if attempt.State == "placed" {
+			attempt.State = attemptState
+			m.attempts[attempt.ID] = attempt
+		}
+		m.statuses[order.OperationID] = operationStatus
+	}
+	return nil
+}
+
+func memoryTerminalPlacementState(orderState string) (string, string) {
+	switch orderState {
+	case "filled":
+		return "settled", "executed"
+	case "rejected":
+		return "failed", "failed"
+	case "cancelled", "expired":
+		return "settled", "failed"
+	default:
+		return "", ""
+	}
 }
 
 func (m *memoryStore) FailPendingAttempt(id, reason string) (bool, error) {

@@ -3,8 +3,8 @@
 [Back to Plan Index](INDEX.md)
 
 > Frozen specification v1.1. M2.5–M2.9 are the safety foundation; M8A/M8B
-> provide early production-read parity and visibility. M2.5 is the current
-> implementation target. Progress is tracked only in `INDEX.md`.
+> provide early production-read parity and visibility. Implementation status
+> and the current target are tracked only in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->
 

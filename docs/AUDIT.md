@@ -97,9 +97,12 @@ violated, and severity.
   a provider without independently verified deduplication must not re-place.
   Hold the close symbol advisory key externally (signed big-endian first 64
   bits of SHA-256 over `symbol\0{ledger}\0{symbol}`): a close must block or
-  hit `DB_TIMEOUT_MS` with no broker effect. Through M2.8 a filled close remains
-  reserved fail-closed; M2.9 must prove the durable fill before decrementing or
-  releasing it.
+  hit `DB_TIMEOUT_MS` with no broker effect. For M2.9, verify every place
+  attempt has exactly one typed order; replay an identical stable fill id and
+  require a no-op, then reuse it with different economics and require a
+  persistent halt with no order/reservation mutation. A partial close fill and
+  its reservation decrement must commit atomically under the same symbol lock;
+  terminal cancellation releases only the unfilled remainder.
 - **I8 Dependency-failure honesty.** `docker compose pause db`, then
   propose: the kernel must return 503 within `DB_TIMEOUT_MS` (allowing only
   small scheduler/network jitter) and make no broker call. This probe must
@@ -170,14 +173,13 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M2.7 plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M2.9 plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
-DB deadlines, idempotency and production-read/cockpit boundaries are audit
-targets, not suppressed findings.
+DB deadlines, idempotency, durable orders/fills and production-read/cockpit
+boundaries are audit targets, not suppressed findings.
 
 1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3A/M3C).
-2. `orders`/`fills` tables are never written (PLAN M2.9).
-3. Approved Class-C ops are not executed (PLAN M4).
+2. Approved Class-C ops are not executed (PLAN M4).
 
 Suppression is about the CURRENT build, not the plan: each item above is still
 the live behavior. When its milestone lands, the item leaves this list and

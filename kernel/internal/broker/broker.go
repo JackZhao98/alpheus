@@ -107,6 +107,7 @@ type ReadFill struct {
 	Side          string       `json:"side"`
 	Qty           units.Qty    `json:"qty"`
 	Price         units.Micros `json:"price"`
+	Fees          units.Micros `json:"fees"`
 	Source        string       `json:"source"`
 	AsOf          time.Time    `json:"as_of"`
 }
@@ -126,6 +127,7 @@ type OrderResult struct {
 	State         string       `json:"state"`
 	FilledQty     units.Qty    `json:"filled_qty"`
 	FilledPrice   units.Micros `json:"filled_price"`
+	Fills         []ReadFill   `json:"fills,omitempty"`
 	Reason        string       `json:"reason,omitempty"`
 }
 

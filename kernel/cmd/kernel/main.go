@@ -77,6 +77,8 @@ type storeAPI interface {
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
 	FailPendingAttempt(id, reason string) (bool, error)
 	GetCloseReservation(id string) (*store.CloseReservation, error)
+	ListWorkingOrders(limit int) ([]store.Order, error)
+	ApplyOrderUpdate(update store.OrderUpdate) error
 }
 
 type tradeCounter interface {
@@ -668,6 +670,17 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if err := gate.InsertExecutionAttempt(attempt); err != nil {
 			return err
 		}
+		if attempt.Intent == "place" {
+			if err := gate.InsertOrder(store.Order{
+				ID: store.NewID(), OperationID: opID, ExecutionAttemptID: attempt.ID,
+				ClientOrderID: attempt.ClientOrderID, Ledger: ledgerName(op.Shadow),
+				Symbol: operationSymbol(op), Side: op.Side, Kind: op.Kind,
+				Multiplier: op.Multiplier, Qty: attempt.Qty, Limit: attempt.Limit,
+				State: "new",
+			}); err != nil {
+				return err
+			}
+		}
 		if err := gate.InsertEvent("execution_attempt_created", map[string]any{
 			"operation_id": opID, "attempt_id": attempt.ID, "intent": attempt.Intent,
 		}); err != nil {
@@ -928,9 +941,14 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 		return nil, fmt.Errorf("%w", errBrokerResultUnknown)
 	}
 	resolution := resolutionForOrder(attempt, result)
-	resolution.OrderEvent = map[string]any{"operation_id": attempt.OperationID, "order": result}
 	updated, err := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, resolution)
 	if err != nil {
+		if errors.Is(err, store.ErrIllegalOrderTransition) {
+			log.Printf("order transition rejected for attempt %s: %v", attempt.ID, err)
+		}
+		if errors.Is(err, store.ErrFillIntegrity) {
+			_ = s.refreshGlobalHalt()
+		}
 		return nil, err
 	}
 	if !updated {
@@ -956,14 +974,31 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 
 func resolutionForOrder(attempt *store.ExecutionAttempt, result broker.OrderResult) store.AttemptResolution {
 	resolution := store.AttemptResolution{State: "unknown", BrokerOrderID: result.BrokerOrderID}
+	if attempt.Intent == "place" {
+		fills := make([]store.FillInput, 0, len(result.Fills))
+		for _, fill := range result.Fills {
+			fills = append(fills, store.FillInput{
+				BrokerFillID: fill.FillID, Qty: fill.Qty, Price: fill.Price,
+				Fees: fill.Fees, TS: fill.AsOf,
+			})
+		}
+		resolution.OrderUpdate = &store.OrderUpdate{
+			ExecutionAttemptID: attempt.ID, BrokerOrderID: result.BrokerOrderID,
+			State: result.State, FilledQty: result.FilledQty, Fills: fills,
+		}
+	} else {
+		resolution.OrderEvent = map[string]any{
+			"operation_id": attempt.OperationID, "order": result,
+		}
+	}
 	switch result.State {
 	case "filled":
 		resolution.State, resolution.OperationStatus = "settled", "executed"
 	case "rejected":
 		resolution.State, resolution.OperationStatus = "failed", "failed"
-		// A conclusively zero-fill terminal result may release immediately.
-		// Any filled quantity stays reserved until M2.9 persists the fill and
-		// decrements the reservation in the same transaction.
+		// The typed order update persists any fills and releases only the
+		// unfilled remainder. Keep the zero-fill release flag as an idempotent
+		// fallback for conclusively untouched reservations.
 		resolution.ReleaseReservation = attempt.CloseReservationID != "" && result.FilledQty == 0
 	case "cancelled", "expired":
 		resolution.State = "settled"
@@ -977,7 +1012,7 @@ func resolutionForOrder(attempt *store.ExecutionAttempt, result broker.OrderResu
 		if attempt.Intent == "cancel" {
 			// Querying a cancel target that is still working does not prove the
 			// cancel effect happened. Keep reconciling instead of stranding the
-			// attempt in placed, which only M2.9 order/fill ingestion advances.
+			// attempt in placed, which the order/fill reconciler advances.
 			resolution.LastError = "cancel not confirmed by broker"
 		} else {
 			resolution.State = "placed"
@@ -1407,12 +1442,20 @@ func (s *server) simQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "not a sim broker"})
 		return
 	}
+	if halted, reason := s.haltSnapshot(); halted && strings.HasPrefix(reason, store.ErrFillIntegrity.Error()) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "fill reconciliation halted"})
+		return
+	}
 	var q broker.Quote
 	if !decodeJSONBody(w, r, &q) {
 		return
 	}
 	if err := venue.SetQuote(q); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.reconcileWorkingOrders(r.Context()); err != nil {
+		writeStoreError(w, "persist simulated fills", err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
