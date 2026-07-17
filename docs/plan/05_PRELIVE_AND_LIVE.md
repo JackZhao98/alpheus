@@ -2,7 +2,7 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1. This phase covers M9, M10, and M11. M11 remains the
+> Frozen specification v1.1. This phase covers M9, M10, and M11. M11 remains the
 > final milestone and is gated by every listed precondition. Progress is tracked
 > only in `INDEX.md`.
 

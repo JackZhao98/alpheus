@@ -2,7 +2,7 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Plan v1 is frozen at semantic baseline `fa5a29e`.
+> Plan v1.1 is frozen; amendments are recorded in `INDEX.md`.
 > This file owns global context, invariants, scope, and the Definition of Done.
 > Canonical sequence and progress live only in `INDEX.md`.
 
@@ -119,7 +119,7 @@ status, dependency gates, and the current implementation target.
 - Changing limits.yaml numbers or approval-class semantics. (Adding a key a
   milestone specifies is fine; see invariant 6.)
 - Robinhood ORDER placement before M11's preconditions are met.
-- Any UI beyond Milestone 7's single page.
+- Any UI beyond the M8B/M7 single Trading Cockpit.
 - Backtest replay tooling (Phase 3, separate plan).
 - Covered / multi-leg strategies. The single-leg model cannot express them and
   approximating one is how `open`+`sell` became a hole; they need their own

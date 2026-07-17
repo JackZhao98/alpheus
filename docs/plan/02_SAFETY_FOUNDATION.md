@@ -1,8 +1,9 @@
-# Phase 1 — Safety foundation
+# Phase 1 — Safety foundation and production parity
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1. Milestones M2.5–M2.9 are P0; M2.5 is the current
+> Frozen specification v1.1. M2.5–M2.9 are the safety foundation; M8A/M8B
+> provide early production-read parity and visibility. M2.5 is the current
 > implementation target. Progress is tracked only in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->
@@ -286,6 +287,180 @@ non-zero at startup; review without a bearer → 401; review with
 auth subject regardless of body content; `POST /sim/quote` in live mode → 404;
 after `POST /halt`, open → REJECT and a verified close → still Class A and
 executed.
+
+---
+
+## Milestone 8A — Production read providers + Robinhood MCP capability discovery
+
+**Sequence and safety boundary:** land this immediately after M2.6, before
+M2.7. M2.5 must land first so production data enters fixed-point domain types;
+M2.6 must land first so `read_only` / `shadow`, authentication, secret
+handling and exact `LIVE_ACCOUNT_ID` binding already exist. This milestone is
+read-only: it must be structurally unable to place, cancel, replace or approve
+an order. Real broker mutations remain M11.
+
+**Context — verify, do not assume.** Robinhood MCP uses a separately funded
+Agentic account. Public product pages and the user's main-account settings do
+not establish the Agentic account's type, settlement semantics, approval level,
+tool schemas, fill identity or buying-power semantics. Connect early so the
+remaining ledger and execution milestones are designed against production
+shapes rather than a late guess.
+
+**Provider capability split:**
+- Replace the monolithic venue boundary with explicit capabilities:
+  ```go
+  type AccountProvider interface {
+      Account(ctx context.Context) (AccountState, error)
+      Positions(ctx context.Context) ([]Position, error)
+      OpenOrders(ctx context.Context) ([]ReadOrder, error)
+      RecentFills(ctx context.Context, since time.Time) ([]ReadFill, error)
+      AccountID(ctx context.Context) (string, error)
+  }
+
+  type ExecutionProvider interface {
+      PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
+      CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
+      GetOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
+      FindOrderByClientID(ctx context.Context, clientOrderID string) (OrderResult, error)
+  }
+  ```
+  FakeBroker may implement both for simulation. Production `read_only` and
+  `shadow` construct only `AccountProvider` plus the marketdata provider;
+  no production `ExecutionProvider` is registered or reachable before M11.
+  A method that returns "disabled" is weaker than absence: construction and
+  routing must make writes structurally unreachable.
+- New package `kernel/internal/marketdata`:
+  ```go
+  type Provider interface {
+      Quote(ctx context.Context, symbol string) (broker.Quote, error)
+      Instrument(ctx context.Context, symbol string) (InstrumentSpec, error)
+      Chain(ctx context.Context, underlying, expiry string, window PercentMicros) ([]OptionQuote, error)
+      Expirations(ctx context.Context, underlying string) ([]string, error)
+      Bars(ctx context.Context, symbol string, days int) ([]Bar, error)
+      Movers(ctx context.Context, direction string, n int) ([]Mover, error)
+      Hours(ctx context.Context) (MarketHours, error)
+  }
+  ```
+  Server-side caps are part of the contract: window <= 15 percentage points,
+  days <= 30, n <= 10. Clamp rather than forwarding unbounded work.
+- Every normalized type uses M2.5 `Micros`, `Qty`, exact multipliers and UTC
+  timestamps. Provider payload numbers never pass through `float64).
+  Account/position/order/fill and instrument responses include `source`,
+  `as_of` and stable external identifiers where the provider supplies them.
+
+**Robinhood MCP adapter:**
+- Use `github.com/modelcontextprotocol/go-sdk`. There is exactly one
+  `CallTool` boundary with per-call deadlines, a persistent kernel-owned OAuth
+  session, serialized calls, idle cleanup, one reconnect on transport failure,
+  a bounded TTL cache and a token-bucket rate limiter. These lifecycle ideas may
+  be informed by the neighboring tofi-core implementation, but Alpheus does not
+  import tofi-core packages or its MCP SDK.
+- Never auto-select the first/default account. Every read resolves and then
+  exactly matches `LIVE_ACCOUNT_ID`; zero or multiple matches, or a different
+  account, fail closed and emit an account-binding event.
+- Decode versioned response envelopes strictly into provider fixtures. Do not
+  recursively search arbitrary JSON for the first field with a familiar name:
+  a renamed or relocated money field is schema drift, not permission to guess.
+  Discard fields outside the normalized contract after validation.
+- Credentials and refreshed OAuth state live only in a kernel secret file or
+  volume with mode 0600. They never enter the repository, database payloads,
+  API responses, events or logs.
+
+**Capability and production-shape snapshots:**
+- An explicit authenticated discovery command lists tool names plus input/output
+  schemas and writes a reviewed, secret-free
+  `docs/rh_mcp_capabilities.json`. Production never mutates the source tree.
+  Live read-only startup compares the server with the committed snapshot and
+  fails closed on missing, renamed or incompatible required tools.
+- Capture redacted golden fixtures for account, positions, open orders, recent
+  fills, quote, instrument and option-chain responses. Preserve structure and
+  edge cases while removing account numbers, tokens and user data. Offline CI
+  decodes these fixtures through the real adapter and runs the same semantic
+  contract suite as FakeProvider.
+- Record as facts: account type, settlement behavior, options level, supported
+  assets/order types, quantity increments, price ticks, contract
+  multiplier/deliverables, buying-power/settled-cash semantics, order and fill
+  identifiers, cumulative fill behavior, and whether the order API accepts,
+  queries and deduplicates a client-supplied id. Read-only discovery may record
+  documentation for dedupe but cannot safely prove it with a live duplicate
+  order; mark it unverified and keep automatic replacement disabled.
+- M3D remains blocked until the account/settlement facts are recorded. M2.8 and
+  M2.9 use the discovered order/fill shapes while implementing their durable
+  models rather than discovering them again at M11.
+
+**Kernel integration:**
+- `TRADING_MODE=read_only` reads the production account and marketdata but
+  mounts no write route. `shadow` uses production reads with the paper ledger
+  and still never reaches production execution. `sim` uses Fake providers.
+- Kernel endpoints are the only Agent doorway:
+  `GET /market/quote/{symbol}`,
+  `GET /market/chain/{underlying}?expiry=&window_pct=`,
+  `GET /market/expirations/{underlying}`,
+  `GET /market/bars/{symbol}?days=`,
+  `GET /market/movers?dir=&n=`, `GET /market/hours`, and authenticated
+  `GET /provider/status`. The status endpoint exposes connection state,
+  snapshot version, last successful read, last sanitized error and schema-drift
+  state — never raw provider payloads or secrets.
+- Risk, state and execution consume the same normalized quote provider
+  instance. FakeBroker consumes FakeProvider's quote map. Two independent quote
+  sources would let the gate approve one market and the venue simulate another.
+- Quotes carry `source` and `as_of`; stale, locked, crossed, non-positive or
+  incomplete data fails invariant 9 closed.
+
+**Acceptance:** offline fixture tests fail on a renamed/nested required money
+field, extra precision, unknown multiplier or missing stable identifier;
+FakeProvider and Robinhood fixture adapters pass one shared semantic contract
+suite. In `read_only`, account/positions/orders/fills/quotes load for exactly
+`LIVE_ACCOUNT_ID`, every write endpoint is 405 and no mutation tool is
+registered. A non-allowlisted or ambiguous account fails closed. Capability
+snapshot drift rejects startup. An env-gated integration test reconnects after
+a dropped transport, reuses protected OAuth state across restart, respects
+timeouts/rate limits, and a log/API scan contains no token, account number or
+raw payload.
+
+---
+
+## Milestone 8B — Read-only Trading Cockpit
+
+**Purpose:** expose the production-shape integration early enough for a human to
+inspect it while M2.7 onward is still being built. This is the durable shell of
+the later review console, not a throwaway demo and not an early mutation
+surface.
+
+**Spec:**
+- Kernel serves one embedded, mobile-friendly HTML/JS application with no build
+  step or new framework. It works in `sim`, `shadow` and `read_only`.
+- Display: trading mode; provider connection and capability-snapshot status;
+  masked account id; account type, equity, buying power and settled cash;
+  positions with normalized quantity/kind/multiplier and current quote; market
+  hours; live/shadow day ledgers; paginated recent operations; and per-panel
+  `source`, `as_of`, stale state and last sanitized error.
+- Move the read-only list API here:
+  `GET /operations?status=&limit=&cursor=`, cursor over `(ts,id)`, limit
+  clamped to 100. Provider order/fill diagnostics are clearly labeled as
+  external read data until M2.9 creates kernel-owned durable rows.
+- Include a contract-diagnostics panel showing the normalized field set,
+  capability snapshot version and pass/fail parity checks against committed
+  Fake/Robinhood fixtures. Never render raw MCP responses, tokens, full account
+  numbers or secret paths.
+- Outside `sim`, the page asks once for a read-capable token, holds it only in
+  memory and sends it as a bearer header. Never use URL parameters,
+  localStorage, cookies or embedded environment values.
+- All stored/provider text is untrusted: render with `textContent`, never
+  `innerHTML`; send a restrictive CSP with no `unsafe-inline`.
+- This milestone adds no mutation control and no new write endpoint. There are
+  no Approve, Reject, Halt, Resume, Place, Cancel or Replace buttons. M7 adds
+  authenticated review controls only after the underlying execution paths are
+  safe.
+
+**Acceptance:** with FakeProvider the cockpit renders every panel and pagination
+without console errors; with an env-gated `read_only` Robinhood integration it
+shows normalized production data plus provenance and snapshot status. Removing
+or renaming a fixture field makes the diagnostics fail visibly while the kernel
+also fails closed. A phone-width viewport remains usable. Injected
+`<img src=x onerror=...>` text executes no script. Browser/network inspection
+finds no token persistence, full account id, raw provider payload or mutation
+request.
 
 ---
 

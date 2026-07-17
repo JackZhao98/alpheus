@@ -2,7 +2,7 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1. These milestones are landed and retained as the
+> Frozen specification v1.1. These milestones are landed and retained as the
 > historical acceptance contract. Progress is tracked only in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->

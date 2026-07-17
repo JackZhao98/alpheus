@@ -109,7 +109,7 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 ## 骨架刻意没做的事
 
 reviewer 角色接入（C 级裁决现在留给人 curl）、marketdata 门面与 MCP
-只读接入（见 [`Phase 2` 的 M8A](docs/plan/03_LEDGER_AND_CONTROLS.md)）、inbox/watchlist 注入（assemble 有
+只读接入（见 [`Phase 1` 的 M8A](docs/plan/02_SAFETY_FOUNDATION.md)）、inbox/watchlist 注入（assemble 有
 TODO）、C 级批准后的执行路径、订单重挂状态机接线、熔断的实时计算
 （dayState 有 TODO）、watchdog → runtime 的 /wake 通道、任何 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。

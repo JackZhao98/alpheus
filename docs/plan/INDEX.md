@@ -1,6 +1,6 @@
 # Alpheus Plan Index
 
-> Plan version: **v1 — frozen**
+> Plan version: **v1.1 — frozen**
 >
 > Semantic baseline: commit `fa5a29e` (`docs: harden roadmap execution invariants`)
 >
@@ -42,8 +42,8 @@ PR/commit and update this index only after its acceptance criteria pass.
 | Phase | Milestones | Status | File |
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
-| 1 — Safety foundation | M2.5–M2.9 | **Active: M2.5 next** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
-| 2 — Ledger and controls | M3A, M8A, M3C, M3D, M4, M5B | Pending; M3D blocked on M8A | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
+| 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | **Active: M2.5 next** | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
+| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Pending; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
@@ -58,12 +58,13 @@ Status vocabulary: `LANDED`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
 | M2.4 | LANDED | M2 | `5889771` | Phase 0 |
 | **M2.5** | **NEXT** | M2.4 | — | Phase 1 |
 | M2.6 | PENDING | M2.5 | — | Phase 1 |
-| M2.7 | PENDING | M2.6 | — | Phase 1 |
+| M8A | PENDING | M2.6; read capabilities only | — | Phase 1 |
+| M8B | PENDING | M8A | — | Phase 1 |
+| M2.7 | PENDING | M8B | — | Phase 1 |
 | M2.8 | PENDING | M2.7 | — | Phase 1 |
 | M2.9 | PENDING | M2.8 | — | Phase 1 |
 | M3A | PENDING | M2.9 | — | Phase 2 |
-| M8A | PENDING | M3A; live provider discovery only | — | Phase 2 |
-| M3C | PENDING | M8A | — | Phase 2 |
+| M3C | PENDING | M3A plus M8A provider evidence | — | Phase 2 |
 | M3D | BLOCKED | M8A account/settlement evidence | — | Phase 2 |
 | M4 | PENDING | M3D; amend the frozen plan first if M8A voids M3D's premise | — | Phase 2 |
 | M5B | PENDING | M4 | — | Phase 2 |
@@ -73,7 +74,9 @@ Status vocabulary: `LANDED`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
 | M10 | PENDING | M9 | — | Phase 4 |
 | M11 | LAST | M10 plus every M11 precondition | — | Phase 4 |
 
-Ordering constraint: M2.9 must precede M3A because exposure and partial-fill
+Ordering constraints: M8A/M8B land after M2.6 so production reads inherit
+fixed-point types, authentication and account binding, while all production
+mutations remain M11. M2.9 must precede M3A because exposure and partial-fill
 reservation updates consume durable fill records. M2.5–M2.9 remain P0.
 
 ## Progress update protocol
@@ -91,3 +94,4 @@ When a milestone lands:
 | Date | Version | Scope | Reason / evidence |
 |---|---|---|---|
 | 2026-07-16 | v1 | Freeze and file split only | Semantic baseline `fa5a29e`; no milestone behavior changed |
+| 2026-07-16 | v1.1 | Move M8A after M2.6; add M8B | Validate provider shapes and a read-only cockpit early; production writes remain M11 |

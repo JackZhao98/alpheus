@@ -2,7 +2,7 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1. This phase covers M6 and M7. Progress is tracked only
+> Frozen specification v1.1. This phase covers M6 and M7. Progress is tracked only
 > in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->
@@ -32,36 +32,46 @@ role → 404; kernel spine_tick events pair with runtime session logs.
 
 ---
 
-## Milestone 7 — Minimal review console (authenticated)
+## Milestone 7 — Authenticated review controls on the Trading Cockpit
+
+**Context:** M8B already serves the authenticated read-only cockpit and the
+paginated operations list. This milestone extends that same application; it
+does not create a second console or replace the early production-data view.
 
 **Spec:**
-- kernel: `GET /operations?status=&limit=&cursor=` — paginated, `limit` clamped
-  to 100, cursor over `(ts, id)`. An unbounded list endpoint in front of a
-  growing pending queue is its own outage.
-- `GET /` serves ONE embedded HTML page (`go:embed`, vanilla JS, no build step,
-  mobile-friendly): both day ledgers + breaker lights + positions (poll /state
-  every 5s), pending_review operations with failed checks highlighted and the
-  kernel's `derived_max_risk` shown next to the proposer's declaration. Before
-  approval show quantity, kernel-derived instrument multiplier, persisted
+- Add a pending-review panel with failed checks highlighted and the kernel's
+  `derived_max_risk` shown beside the proposer's declaration. Before approval,
+  show quantity, kernel-derived instrument multiplier, persisted
   `approved_price_cap`, latest sane quote and the fact that execution cannot
-  exceed that cap. Include Approve / Reject buttons and a "Resume breaker"
-  button when halted.
-- Auth landed in M2.6 — the old "no auth (deployment is private)" note is void.
-  The page takes ADMIN_TOKEN once, holds it in memory, and sends it as a bearer
-  header. Not in a cookie, not in the URL, not in localStorage.
-- Operation plans, symbols, reasons and all other stored text are untrusted:
-  render with `textContent`, never `innerHTML`. Send a restrictive CSP with no
-  `unsafe-inline` (a static script hash or separately embedded same-origin JS is
-  fine). A stored-XSS bug here would steal the in-memory admin token and turn a
-  journal field into trading authority.
-- Mutating requests require an `Origin` matching the configured console origin.
-- Approve/Reject send **no** `reviewer` field; identity is the token's subject.
+  exceed that cap.
+- Add Approve / Reject controls backed by M4, plus explicit Halt and Resume
+  Breaker controls backed by M2.6/M3C. Halt requires a non-empty reason and a
+  confirmation step. Do not add direct Place, Cancel or Replace controls: users
+  approve operations, while the kernel owns broker effects.
+- The page upgrades from a read-capable token to `ADMIN_TOKEN` only when the
+  user invokes a control. Hold it in memory only; never use cookies, URLs,
+  localStorage or embedded configuration. A read-only token continues to render
+  every M8B panel but cannot see or invoke mutation controls.
+- Operation plans, symbols, reasons and all stored/provider text remain
+  untrusted: render with `textContent`, never `innerHTML`. Preserve M8B's
+  restrictive CSP with no `unsafe-inline`.
+- Mutating requests require an `Origin` matching the configured console
+  origin. Approve/Reject send no `reviewer` field; identity is the authenticated
+  token subject. Every action renders its resulting operation/event id so the
+  user can follow the audit trail.
+- Surface stale/unknown execution attempts and held reservations as
+  non-actionable warnings. The console must never offer a button that releases
+  an ambiguous reservation or retries an uncertain broker effect.
 
-**Acceptance:** manual — run smoke path 2, open `http://localhost:8100/`,
-approve from a phone-width viewport, operation executes (M4); the same page
-with no token cannot approve; a cross-origin POST is refused; an operation field
-containing `<img src=x onerror=...>` renders as text, executes no script and
-cannot observe the admin token.
+**Acceptance:** create a pending-review operation, open the M8B cockpit at a
+phone-width viewport, and approve it with an admin token: M4 executes exactly
+once and the audit ids appear. With no token or a read-only/runtime token,
+controls are unavailable and direct mutation requests return 401. A
+cross-origin POST is refused. Reject then approve is impossible; a repeated
+approve is 409. Halt blocks opens while a verified close remains possible;
+Resume clears only the intended breaker state. Stored
+`<img src=x onerror=...>` content renders as text, executes no script and
+cannot observe either token.
 
 ---
 

@@ -2,9 +2,9 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Frozen specification v1. This phase covers M3A, M8A, M3C, M3D, M4, and M5B.
-> M3D remains blocked until M8A supplies provider evidence. Progress is tracked
-> only in `INDEX.md`.
+> Frozen specification v1.1. This phase covers M3A, M3C, M3D, M4, and M5B.
+> M3D remains blocked until the earlier M8A supplies provider evidence.
+> Progress is tracked only in `INDEX.md`.
 
 <!-- BEGIN FROZEN SPEC -->
 
@@ -337,106 +337,6 @@ skipped without DATABASE_URL):
   another symbol / another ledger / a non-open / a nonexistent id → 400; on
   `tighten_stop` → 400; six shadow opens → shadow open risk reflects shadow
   paper fills while live open risk stays 0.
-
----
-
-## Milestone 8A — Marketdata facade + Robinhood MCP (read-only) + capability discovery
-
-**Context — verify, do not assume.** As of 2026-07-16, Robinhood's official
-[Agentic Trading page](https://robinhood.com/us/en/agentic-trading/) says MCP is
-available now, uses a separately funded dedicated **Robinhood Agentic Account**,
-and may place trades. Robinhood's
-[2026-07-01 announcement](https://robinhood.com/us/en/newsroom/robinhood-accelerates-global-expansion-robinhood-chain-mainnet-stock-tokens-agentic-trading/)
-says Agentic Trading launched for US equities and options. Those public pages
-do **not** establish this account's approval level, cash-vs-margin type,
-settlement semantics, exact tool schema, client-id behavior, fill identity, or
-which account data the authenticated MCP session exposes. The old M3b's
-"Context (confirmed): the live account is a Robinhood CASH account, options
-Level 2" was confirmed about the user's *main* account, which is not the
-account an agent can trade. Nothing downstream may assume it carries over.
-
-**Spec:**
-- New package `kernel/internal/marketdata`:
-  ```go
-  type Provider interface {
-      Quote(symbol string) (broker.Quote, error)
-      Instrument(symbol string) (InstrumentSpec, error) // multiplier, qty increment, tick rules
-      Chain(underlying, expiry string, window PercentMicros) ([]OptionQuote, error)
-      Expirations(underlying string) ([]string, error)
-      Bars(symbol string, days int) ([]Bar, error)      // daily OHLCV, days<=30
-      Movers(direction string, n int) ([]Mover, error)  // n<=10
-      Hours() (MarketHours, error)
-  }
-  ```
-  Server-side caps are part of the contract (window<=15 percentage points,
-  days<=30, n<=10): clamp, don't error. `PercentMicros` is M2.5 fixed-point;
-  this interface introduces no new float boundary.
-- `fake` provider: backed by the FakeBroker quote map + synthesized chains
-  (strikes every $1 within window, OI 1000, spread 5% of mid) and flat bars.
-- `robinhoodmcp` provider — **read-only**. Uses
-  `github.com/modelcontextprotocol/go-sdk`. EXACTLY ONE call site wraps
-  `CallTool` with: 10s timeout, TTL cache (quotes 2s, chains 30s, bars/hours
-  10min), a token-bucket rate limiter (default 30 calls/min, env-tunable), and
-  one retry on transport error. Wrap only the tools the interface needs;
-  normalize to the structs above and DISCARD all other fields. Env:
-  `MARKETDATA=fake|robinhood_mcp`, `RH_MCP_URL`, `RH_MCP_TOKEN` — kernel env
-  only. Persist the OAuth/session in a kernel-only secret volume/file (0600),
-  never in the source tree, database payloads, API responses or logs, so a
-  restart does not require a human without widening credential exposure.
-- **Capability discovery is a deliverable, not a runtime file write.** An
-  explicit authenticated discovery command lists tools and updates
-  `docs/rh_mcp_capabilities.json`; production never mutates the source tree.
-  Offline CI tests the adapter against the committed snapshot. Live/read-only
-  startup lists tools and compares them with the snapshot, failing closed on a
-  renamed, withdrawn or incompatible tool. A normal CI job without OAuth cannot
-  detect live drift; an optional secret-backed scheduled compatibility job may
-  do so, but the startup gate is mandatory.
-- Record in that snapshot, as facts rather than assumptions: the Agentic
-  account's `account_type` (cash|margin), its settlement behaviour, its options
-  level, supported asset/order types, quantity increments, price-tick rules,
-  option contract multiplier/deliverable metadata, whether realized-PnL and
-  option order tools exist, whether executions expose a stable unique fill id
-  plus cumulative filled quantity, whether account/order data can normalize
-  buying power and settled cash gross of Alpheus's own provider-side order
-  holds without including external holds, and **whether the
-  order API (a) accepts a client-supplied id, (b) can be queried by it, and
-  (c) deduplicates on it.** These are M2.8's live-trading preconditions and they
-  are three separate questions: (a)+(b) make a crash diagnosable; only (c) makes
-  recovery from `NotFound` safe, because without it "the broker has never heard
-  of this id" is indistinguishable from "it is still in flight".
-  **M8A can only answer these from schema and documentation — it is read-only
-  and cannot place the duplicate order that would actually prove (c).** Record
-  the documented answer and mark it `unverified`. Automatic re-place stays OFF
-  unless (c) is demonstrated in a provider-supported sandbox/test environment;
-  a documented guarantee is not a tested one, and the failure mode of trusting
-  it is a duplicate live order. Until then, ambiguous attempts escalate to a
-  human.
-  **M3D stays blocked until these are recorded.**
-- `LIVE_ACCOUNT_ID` allowlist (M2.6) applies to reads too: refuse to read any
-  account not on the allowlist, even if the current or a future MCP session
-  happens to expose it.
-- Quotes carry `source` and `as_of`. A quote older than `quote_max_age_sec`
-  fails invariant 9 exactly like a crossed one — a stale quote is a non-sane
-  quote.
-- Kernel endpoints (agents' only doorway):
-  `GET /market/quote/{symbol}`, `GET /market/chain/{underlying}?expiry=&window_pct=`,
-  `GET /market/expirations/{underlying}`, `GET /market/bars/{symbol}?days=`,
-  `GET /market/movers?dir=&n=`, `GET /market/hours`.
-- assemble: inject quotes for all held positions into context under `"quotes"`.
-  Exploratory calls stay tool-side for Phase 2 (do NOT build runtime tools now).
-- **Single source of truth:** risk and execution MUST read quotes from the same
-  provider instance, and FakeBroker must consume the fake provider's quote map.
-  Two quote sources means the gate and the order disagree. Document in code.
-
-**Acceptance:** unit tests for clamping + cache TTL (fake clock or short TTLs);
-with `MARKETDATA=fake`, `/market/chain` returns a filtered window; smoke
-extended with `/market/quote/SPY`; capability snapshot committed, offline
-fixture drift breaks CI, and live startup rejects a renamed/removed tool; a
-fixture instrument returns exact multiplier/quantity increment/tick metadata,
-and missing required instrument metadata fails closed; a stale quote fails the liquidity check
-closed; a read for a non-allowlisted account id is refused. `robinhoodmcp` is
-exercised behind an env-gated integration test that skips without `RH_MCP_URL`;
-restart reuses the protected session and a log/API scan contains no token.
 
 ---
 

@@ -1,6 +1,6 @@
 # Alpheus Implementation Plan
 
-The v1 implementation plan is frozen and split into phase files.
+The v1.1 implementation plan is frozen and split into phase files.
 
 Start here: [Plan Index](plan/INDEX.md)
 
