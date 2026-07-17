@@ -6,7 +6,7 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **M3A**
+> Current implementation target: **M3C**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -43,7 +43,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 |---|---|---|---|
 | 0 — Landed baseline | M1, M2, M2.4 | Landed / historical | [`01_LANDED_BASELINE.md`](01_LANDED_BASELINE.md) |
 | 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | Landed | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
-| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | **Active: M3A**; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
+| 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | **Active: M3C**; M3D blocked on M8A evidence | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Pending | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | Pending; M11 always last | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
 
@@ -63,8 +63,8 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M2.7** | **LANDED** | M8B | fresh/legacy/partial/checksum/concurrent migration probes; 20-way idempotency barrier; runtime response-read retry; 503 in 0.315s under a 300ms paused-DB deadline with zero FakeBroker effects; race/vet green | Phase 1 |
 | **M2.8** | **LANDED** | M2.7 | fresh/legacy migration 3 and exact grant backfill; irreversible live/shadow grant caps; 20-close reservation barrier; lease fencing and three crash-window recovery cases; 1800-second TTL; timeout/unknown no-blind-retry; external symbol-lock deadline with zero broker effects; race/vet/compose smoke and read-only deployment green | Phase 1 |
 | **M2.9** | **LANDED** | M2.8 | typed migrations 4–5 with M2.8 attempt backfill; one order per place attempt; stable Fake fill ids; state-machine-only transitions with rejection events; duplicate/collision and partial-close atomicity PostgreSQL probes; 2-order/2-fill zero-orphan smoke; race/vet and read-only deployment green | Phase 1 |
-| **M3A** | **NEXT** | M2.9 | — | Phase 2 |
-| M3C | PENDING | M3A plus M8A provider evidence | — | Phase 2 |
+| **M3A** | **LANDED** | M2.9 | migration 6; stable cross-day ledger gate; atomic open reservation/fill/exposure transfer and FIFO close allocation; durable shadow paper book; entitlement and terminal-proof probes; activation backfill/rollback/idempotency; fresh-PostgreSQL suite and isolated compose smoke; Robinhood read-only upgrade with 0 orders/fills/place attempts; race/vet green | Phase 2 |
+| **M3C** | **NEXT** | M3A plus M8A provider evidence | — | Phase 2 |
 | M3D | BLOCKED | M8A account/settlement evidence | — | Phase 2 |
 | M4 | PENDING | M3D; amend the frozen plan first if M8A voids M3D's premise | — | Phase 2 |
 | M5B | PENDING | M4 | — | Phase 2 |

@@ -1,10 +1,12 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"time"
 
 	"alpheus/kernel/internal/units"
@@ -35,6 +37,7 @@ type ExecutionAttempt struct {
 	OperationID         string
 	Seq                 int
 	CloseReservationID  string
+	OpenReservationID   string
 	Intent              string
 	ClientOrderID       string
 	TargetBrokerOrderID string
@@ -101,7 +104,7 @@ func (t *ledgerTx) InsertCloseReservation(reservation CloseReservation) error {
 }
 
 func (t *ledgerTx) InsertExecutionAttempt(attempt ExecutionAttempt) error {
-	var clientOrderID, targetBrokerOrderID, closeReservationID, quantity, limit any
+	var clientOrderID, targetBrokerOrderID, closeReservationID, openReservationID, quantity, limit any
 	if attempt.ClientOrderID != "" {
 		clientOrderID = attempt.ClientOrderID
 	}
@@ -111,14 +114,17 @@ func (t *ledgerTx) InsertExecutionAttempt(attempt ExecutionAttempt) error {
 	if attempt.CloseReservationID != "" {
 		closeReservationID = attempt.CloseReservationID
 	}
-	if attempt.Intent == "place" {
+	if attempt.OpenReservationID != "" {
+		openReservationID = attempt.OpenReservationID
+	}
+	if attempt.Intent == "place" || attempt.Intent == "paper_place" {
 		quantity, limit = int64(attempt.Qty), int64(attempt.Limit)
 	}
 	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO execution_attempt
-		(id,operation_id,seq,close_reservation_id,intent,client_order_id,
+		(id,operation_id,seq,close_reservation_id,open_reservation_id,intent,client_order_id,
 		 target_broker_order_id,state,qty,limit_micros)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, attempt.ID, attempt.OperationID,
-		attempt.Seq, closeReservationID, attempt.Intent, clientOrderID,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, attempt.ID, attempt.OperationID,
+		attempt.Seq, closeReservationID, openReservationID, attempt.Intent, clientOrderID,
 		targetBrokerOrderID, attempt.State, quantity, limit)
 	return normalizeDBError(err)
 }
@@ -132,7 +138,7 @@ func sha256Bytes(value string) [32]byte {
 	return sha256.Sum256([]byte(value))
 }
 
-const attemptColumns = `id,operation_id,seq,close_reservation_id,intent,client_order_id,
+const attemptColumns = `id,operation_id,seq,close_reservation_id,open_reservation_id,intent,client_order_id,
 	target_broker_order_id,state,broker_order_id,qty,limit_micros,attempt,claimed_by,
 	created_at,claimed_at,resolved_at,last_error`
 
@@ -142,10 +148,10 @@ type scanner interface {
 
 func scanAttempt(row scanner) (*ExecutionAttempt, error) {
 	var attempt ExecutionAttempt
-	var reservationID, clientOrderID, targetOrderID, brokerOrderID, claimedBy, lastError sql.NullString
+	var reservationID, openReservationID, clientOrderID, targetOrderID, brokerOrderID, claimedBy, lastError sql.NullString
 	var quantity, limit sql.NullInt64
 	var claimedAt, resolvedAt sql.NullTime
-	err := row.Scan(&attempt.ID, &attempt.OperationID, &attempt.Seq, &reservationID,
+	err := row.Scan(&attempt.ID, &attempt.OperationID, &attempt.Seq, &reservationID, &openReservationID,
 		&attempt.Intent, &clientOrderID, &targetOrderID, &attempt.State, &brokerOrderID,
 		&quantity, &limit, &attempt.Attempt, &claimedBy, &attempt.CreatedAt,
 		&claimedAt, &resolvedAt, &lastError)
@@ -153,6 +159,7 @@ func scanAttempt(row scanner) (*ExecutionAttempt, error) {
 		return nil, err
 	}
 	attempt.CloseReservationID = reservationID.String
+	attempt.OpenReservationID = openReservationID.String
 	attempt.ClientOrderID = clientOrderID.String
 	attempt.TargetBrokerOrderID = targetOrderID.String
 	attempt.BrokerOrderID = brokerOrderID.String
@@ -244,6 +251,10 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
+	if err := validateM3AExecutionEntitlement(ctx, tx, attempt); err != nil {
+		_ = tx.Rollback()
+		return nil, s.recordExecutionEntitlementFailure(attempt.ID, err)
+	}
 	if err := insertEvent(ctx, tx, "execution_attempt_claimed", map[string]any{
 		"attempt_id": attempt.ID, "operation_id": attempt.OperationID,
 		"fencing_token": attempt.Attempt,
@@ -254,6 +265,139 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 		return nil, normalizeDBError(err)
 	}
 	return attempt, nil
+}
+
+func validateM3AExecutionEntitlement(ctx context.Context, tx *sql.Tx, attempt *ExecutionAttempt) error {
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM feature_activation WHERE name='m3a')`).Scan(&active); err != nil {
+		return err
+	}
+	if !active {
+		return nil
+	}
+	var action string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(payload->>'action','')
+		FROM operations WHERE id=$1`, attempt.OperationID).Scan(&action); err != nil {
+		return err
+	}
+	if attempt.Intent == "cancel" {
+		if action != "cancel" || attempt.OpenReservationID != "" || attempt.CloseReservationID != "" {
+			return fmt.Errorf("%w: cancel attempt has invalid execution entitlement", ErrFillIntegrity)
+		}
+		return nil
+	}
+	if attempt.Intent != "place" && attempt.Intent != "paper_place" {
+		return fmt.Errorf("%w: unsupported placement intent %q", ErrFillIntegrity, attempt.Intent)
+	}
+
+	var orderOperationID, orderLedger, orderState, orderSymbol, orderKind, orderSide string
+	var orderMultiplier, orderQty, orderLimit int64
+	if err := tx.QueryRowContext(ctx, `SELECT operation_id,ledger,state,symbol,kind,side,
+		multiplier,qty,limit_micros FROM orders WHERE execution_attempt_id=$1`, attempt.ID).Scan(
+		&orderOperationID, &orderLedger, &orderState, &orderSymbol, &orderKind, &orderSide,
+		&orderMultiplier, &orderQty, &orderLimit); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: placement attempt has no durable order", ErrFillIntegrity)
+		}
+		return err
+	}
+	if orderOperationID != attempt.OperationID {
+		return fmt.Errorf("%w: placement order belongs to another operation", ErrFillIntegrity)
+	}
+	if orderQty != int64(attempt.Qty) || orderLimit != int64(attempt.Limit) {
+		return fmt.Errorf("%w: placement order differs from its attempt", ErrFillIntegrity)
+	}
+	if (attempt.Intent == "paper_place") != (orderLedger == "shadow") {
+		return fmt.Errorf("%w: placement intent does not match its ledger", ErrFillIntegrity)
+	}
+
+	switch action {
+	case "open":
+		if attempt.OpenReservationID == "" || attempt.CloseReservationID != "" {
+			return fmt.Errorf("%w: open attempt lacks its exclusive reservation", ErrFillIntegrity)
+		}
+		var reservationOperationID, reservationLedger, reservationState, reservationSymbol, reservationKind string
+		var grantLedger, riskSource string
+		var reservationMarketDay, grantMarketDay time.Time
+		var originalQty, remainingQty, originalRisk, originalCash, authorizedRisk int64
+		err := tx.QueryRowContext(ctx, `SELECT r.operation_id,r.ledger,r.resource_state,
+			r.symbol,r.kind,r.market_day,r.original_qty,r.remaining_qty,
+			r.original_risk_micros,r.original_cash_micros,
+			g.ledger,g.market_day,g.authorized_risk_micros,g.risk_source
+			FROM open_reservation r
+			JOIN trade_grant g ON g.operation_id=r.operation_id
+			WHERE r.id=$1`, attempt.OpenReservationID).Scan(
+			&reservationOperationID, &reservationLedger, &reservationState,
+			&reservationSymbol, &reservationKind, &reservationMarketDay,
+			&originalQty, &remainingQty, &originalRisk, &originalCash,
+			&grantLedger, &grantMarketDay, &authorizedRisk, &riskSource)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: open attempt lacks its reservation or grant", ErrFillIntegrity)
+		}
+		if err != nil {
+			return err
+		}
+		expectedState := "held"
+		if orderState == "filled" {
+			expectedState = "converted"
+		} else if isTerminalUnfilledOrderState(orderState) {
+			expectedState = "released"
+		}
+		if reservationOperationID != attempt.OperationID || reservationLedger != orderLedger ||
+			grantLedger != orderLedger || reservationState != expectedState ||
+			reservationSymbol != orderSymbol || reservationKind != orderKind ||
+			orderSide != "buy" || orderMultiplier <= 0 || originalQty != orderQty ||
+			originalRisk <= 0 || originalCash <= 0 || authorizedRisk != originalRisk ||
+			riskSource != "computed" || !reservationMarketDay.Equal(grantMarketDay) ||
+			(expectedState == "held" && remainingQty <= 0) {
+			return fmt.Errorf("%w: open attempt entitlement does not match its durable order", ErrFillIntegrity)
+		}
+	case "close":
+		if attempt.CloseReservationID == "" || attempt.OpenReservationID != "" {
+			return fmt.Errorf("%w: close attempt lacks its exclusive reservation", ErrFillIntegrity)
+		}
+		var reservationOperationID, reservationLedger, reservationState, reservationSymbol string
+		var originalQty, remainingQty int64
+		err := tx.QueryRowContext(ctx, `SELECT operation_id,ledger,state,symbol,original_qty,remaining_qty
+			FROM close_reservation
+			WHERE id=$1`, attempt.CloseReservationID).Scan(
+			&reservationOperationID, &reservationLedger, &reservationState,
+			&reservationSymbol, &originalQty, &remainingQty)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: close attempt lacks its reservation", ErrFillIntegrity)
+		}
+		if err != nil {
+			return err
+		}
+		expectedState := "held"
+		if isTerminalOrderStateForEntitlement(orderState) {
+			expectedState = "released"
+		}
+		if reservationOperationID != attempt.OperationID || reservationLedger != orderLedger ||
+			reservationState != expectedState || reservationSymbol != orderSymbol ||
+			orderSide != "sell" || orderKind == "" || orderMultiplier <= 0 ||
+			originalQty != orderQty || (expectedState == "held" && remainingQty <= 0) {
+			return fmt.Errorf("%w: close attempt entitlement does not match its durable order", ErrFillIntegrity)
+		}
+	default:
+		return fmt.Errorf("%w: placement attempt belongs to action %q", ErrFillIntegrity, action)
+	}
+	return nil
+}
+
+func isTerminalUnfilledOrderState(state string) bool {
+	return state == "cancelled" || state == "rejected" || state == "expired"
+}
+
+func isTerminalOrderStateForEntitlement(state string) bool {
+	return state == "filled" || isTerminalUnfilledOrderState(state)
+}
+
+func (s *Store) recordExecutionEntitlementFailure(attemptID string, cause error) error {
+	return s.recordIntegrityFailure("execution_entitlement_invalid", map[string]any{
+		"execution_attempt_id": attemptID, "error": cause.Error(),
+	}, cause)
 }
 
 func (s *Store) ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]ExecutionAttempt, error) {
@@ -289,24 +433,54 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 	defer tx.Rollback()
 
 	var operationID string
-	var reservationID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id
-		FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed' FOR UPDATE`,
-		id, fencingToken).Scan(&operationID, &reservationID)
+	var reservationID, openReservationID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id
+		FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed'`,
+		id, fencingToken).Scan(&operationID, &reservationID, &openReservationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, normalizeDBError(err)
 	}
+	if reservationID.Valid && openReservationID.Valid {
+		return false, errors.New("execution attempt references both open and close reservations")
+	}
+	var closeLedger, closeSymbol, reservationLedger string
 	if reservationID.Valid {
-		var ledger, symbol string
-		if err := tx.QueryRowContext(ctx, `SELECT ledger,symbol FROM close_reservation WHERE id=$1`, reservationID.String).Scan(&ledger, &symbol); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT ledger,symbol FROM close_reservation WHERE id=$1`, reservationID.String).Scan(&closeLedger, &closeSymbol); err != nil {
 			return false, normalizeDBError(err)
 		}
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, symbolLockKey(ledger, symbol)); err != nil {
+		reservationLedger = closeLedger
+	}
+	if openReservationID.Valid {
+		if err := tx.QueryRowContext(ctx, `SELECT ledger FROM open_reservation WHERE id=$1`, openReservationID.String).Scan(&reservationLedger); err != nil {
 			return false, normalizeDBError(err)
 		}
+	}
+	if reservationLedger != "" {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(reservationLedger == "shadow")); err != nil {
+			return false, normalizeDBError(err)
+		}
+	}
+	if reservationID.Valid {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, symbolLockKey(closeLedger, closeSymbol)); err != nil {
+			return false, normalizeDBError(err)
+		}
+	}
+	var lockedOperationID string
+	var lockedReservationID, lockedOpenReservationID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id
+		FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed' FOR UPDATE`,
+		id, fencingToken).Scan(&lockedOperationID, &lockedReservationID, &lockedOpenReservationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	if lockedOperationID != operationID || lockedReservationID != reservationID || lockedOpenReservationID != openReservationID {
+		return false, errors.New("execution attempt identity changed while acquiring resource locks")
 	}
 
 	if resolution.OrderUpdate != nil {
@@ -343,6 +517,13 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 			return false, normalizeDBError(err)
 		}
 	}
+	if resolution.ReleaseReservation && openReservationID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE open_reservation SET resource_state='released',
+			remaining_risk_micros=0,remaining_cash_micros=0,settled_at=COALESCE(settled_at,now())
+			WHERE id=$1 AND resource_state='held'`, openReservationID.String); err != nil {
+			return false, normalizeDBError(err)
+		}
+	}
 	if err := insertEvent(ctx, tx, "execution_attempt_resolved", map[string]any{
 		"attempt_id": id, "operation_id": operationID, "state": resolution.State,
 		"broker_order_id": resolution.BrokerOrderID, "fencing_token": fencingToken,
@@ -369,14 +550,23 @@ func (s *Store) FailPendingAttempt(id, reason string) (bool, error) {
 	}
 	defer tx.Rollback()
 	var operationID string
-	var reservationID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id
-		FROM execution_attempt WHERE id=$1 AND state='pending'`, id).Scan(&operationID, &reservationID)
+	var reservationID, openReservationID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id
+		FROM execution_attempt WHERE id=$1 AND state='pending'`, id).Scan(&operationID, &reservationID, &openReservationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, normalizeDBError(err)
+	}
+	if openReservationID.Valid {
+		var shadow bool
+		if err := tx.QueryRowContext(ctx, `SELECT ledger='shadow' FROM open_reservation WHERE id=$1`, openReservationID.String).Scan(&shadow); err != nil {
+			return false, normalizeDBError(err)
+		}
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow)); err != nil {
+			return false, normalizeDBError(err)
+		}
 	}
 	if reservationID.Valid {
 		var ledger, symbol string
@@ -402,6 +592,13 @@ func (s *Store) FailPendingAttempt(id, reason string) (bool, error) {
 	if reservationID.Valid {
 		if _, err := tx.ExecContext(ctx, `UPDATE close_reservation SET state='released',remaining_qty=0,released_at=COALESCE(released_at,now())
 			WHERE id=$1 AND state='held'`, reservationID.String); err != nil {
+			return false, normalizeDBError(err)
+		}
+	}
+	if openReservationID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE open_reservation SET resource_state='released',
+			remaining_risk_micros=0,remaining_cash_micros=0,settled_at=COALESCE(settled_at,now())
+			WHERE id=$1 AND resource_state='held'`, openReservationID.String); err != nil {
 			return false, normalizeDBError(err)
 		}
 	}
@@ -436,4 +633,12 @@ func (s *Store) GetCloseReservation(id string) (*CloseReservation, error) {
 		reservation.ReleasedAt = releasedAt.Time
 	}
 	return &reservation, nil
+}
+
+func (s *Store) HasTradeGrant(operationID string) (bool, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	var exists bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM trade_grant WHERE operation_id=$1)`, operationID).Scan(&exists)
+	return exists, normalizeDBError(err)
 }

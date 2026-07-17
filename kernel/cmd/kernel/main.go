@@ -77,12 +77,21 @@ type storeAPI interface {
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
 	FailPendingAttempt(id, reason string) (bool, error)
 	GetCloseReservation(id string) (*store.CloseReservation, error)
+	GetOpenReservation(id string) (*store.OpenReservation, error)
+	HasTradeGrant(operationID string) (bool, error)
 	ListWorkingOrders(limit int) ([]store.Order, error)
 	ApplyOrderUpdate(update store.OrderUpdate) error
+	ListTerminalReservationCandidates(limit int) ([]store.TerminalReservationCandidate, error)
+	ReleaseProvenTerminalReservation(candidate store.TerminalReservationCandidate, provenFilledQty units.Qty, terminalProof bool) (bool, error)
+	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
+	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
+	FeatureActive(name string) (bool, error)
 }
 
-type tradeCounter interface {
+type dayStateReader interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
+	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
+	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
 }
 
 func main() {
@@ -180,6 +189,37 @@ func main() {
 				"reason": "read_provider_binding_failed", "mode": mode.TradingMode,
 			})
 			log.Fatalf("broker: account binding failed")
+		}
+	}
+	m3aActive, err := st.FeatureActive("m3a")
+	if err != nil {
+		log.Fatalf("M3A activation marker: %v", err)
+	}
+	if !m3aActive {
+		activationCtx, cancel := context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
+		activationAccount, accountErr := account.Account(activationCtx)
+		cancel()
+		if accountErr != nil || !activationAccount.EquityKnown {
+			log.Fatalf("M3A activation: account snapshot unavailable")
+		}
+		activationCtx, cancel = context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
+		activationPositions, positionErr := account.Positions(activationCtx)
+		cancel()
+		if positionErr != nil {
+			log.Fatalf("M3A activation: position snapshot unavailable")
+		}
+		positions := make([]store.ActivationPosition, 0, len(activationPositions))
+		for _, position := range activationPositions {
+			positions = append(positions, store.ActivationPosition{
+				Symbol: position.Symbol, Kind: position.Kind,
+				Multiplier: position.Multiplier, Qty: position.Qty,
+			})
+		}
+		if err := st.ActivateM3A(store.M3AActivationSnapshot{
+			Equity: activationAccount.Equity, BuyingPower: activationAccount.BuyingPower,
+			Positions: positions,
+		}); err != nil {
+			log.Fatalf("M3A activation: %v", err)
 		}
 	}
 	s := &server{
@@ -364,16 +404,27 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
 }
 
-func (s *server) dayStateAtAccount(gate tradeCounter, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
+func (s *server) dayStateAtAccount(gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
 	}
-	// TODO: OpenRisk from positions+journal; daily pnl vs MaxDailyLossPct;
-	// consecutive-loss breaker evaluation.
+	ledger := ledgerName(shadow)
+	resources, err := gate.LedgerResources(ledger, "")
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	buyingPower, err := units.Add(account.BuyingPower, -resources.HeldCash)
+	if err != nil {
+		return risk.DayState{}, err
+	}
+	if err := gate.InsertDayOpen(window.day, ledger, account.Equity); err != nil {
+		return risk.DayState{}, err
+	}
+	// TODO M3C: daily pnl and consecutive-loss breaker evaluation.
 	return risk.DayState{
-		TradesToday: n, OpenRisk: 0, Equity: account.Equity,
-		EquityKnown: account.EquityKnown, BuyingPower: account.BuyingPower,
+		TradesToday: n, OpenRisk: resources.OpenRisk, Equity: account.Equity,
+		EquityKnown: account.EquityKnown, BuyingPower: buyingPower,
 		Halted: halted, HaltReason: haltReason,
 	}, nil
 }
@@ -426,7 +477,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	}
 	window, err := currentMarketWindow()
 	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeInternalError(w, "derive market day", err)
 		return
 	}
 	orders, err := account.OpenOrders(r.Context())
@@ -440,13 +491,23 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	halted, haltReason := s.haltSnapshot()
-	liveDay, err := s.dayStateAtAccount(s.store, false, acct, window, halted, haltReason)
-	if err != nil {
+	var liveDay, shadowDay risk.DayState
+	if err := s.store.WithLedgerLock(false, window.day, func(gate store.OperationGate) error {
+		var err error
+		liveDay, err = s.dayStateAtAccount(gate, false, acct, window, halted, haltReason)
+		return err
+	}); err != nil {
 		writeStoreError(w, "get live day state", err)
 		return
 	}
-	shadowDay, err := s.dayStateAtAccount(s.store, true, acct, window, halted, haltReason)
-	if err != nil {
+	if err := s.store.WithLedgerLock(true, window.day, func(gate store.OperationGate) error {
+		shadowAccount, err := s.shadowAccountSnapshot(r.Context(), gate)
+		if err != nil {
+			return err
+		}
+		shadowDay, err = s.dayStateAtAccount(gate, true, shadowAccount, window, halted, haltReason)
+		return err
+	}); err != nil {
 		writeStoreError(w, "get shadow day state", err)
 		return
 	}
@@ -517,15 +578,6 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var acct broker.AccountState
-	if op.Action == "open" {
-		accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-		acct, err = s.accountProvider().Account(accountCtx)
-		cancel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "account data unavailable"})
-			return
-		}
-	}
 	opID := store.NewID()
 	var halted bool
 	var haltReason string
@@ -542,6 +594,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	status := "auto_approved"
 	var replay *store.OperationRow
 	var executionAttempt *store.ExecutionAttempt
+	var committedProposalError error
 	var marketDayLock *time.Time
 	if op.Action == "open" {
 		marketDayLock = &window.day
@@ -560,14 +613,82 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 		}
-		if op.Action == "close" {
+		if op.Action == "open" {
+			// M3A deliberately fetches account state after acquiring the stable
+			// per-ledger gate. A prior fill cannot leave this proposal classifying
+			// against a stale pre-lock snapshot.
+			var err error
 			if op.Shadow {
-				op.VerifiedReduction = true
+				acct, err = s.shadowAccountSnapshot(r.Context(), gate)
 			} else {
-				ledger, symbol := ledgerName(op.Shadow), operationSymbol(op)
-				if err := gate.LockLedgerSymbol(ledger, symbol); err != nil {
+				accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+				acct, err = s.accountProvider().Account(accountCtx)
+				cancel()
+			}
+			if err != nil {
+				return fmt.Errorf("%w: account", errBrokerDataUnavailable)
+			}
+			// Derive the market day from an advancing database clock after the
+			// bounded account read. PostgreSQL now() is transaction-start time and
+			// would stamp the old day after a lock wait across midnight.
+			databaseNow, err := gate.DatabaseNow()
+			if err != nil {
+				return err
+			}
+			window, err = marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
+			if err != nil {
+				return err
+			}
+		}
+		if op.Action == "close" {
+			ledger, symbol := ledgerName(op.Shadow), operationSymbol(op)
+			if err := gate.LockLedgerSymbol(ledger, symbol); err != nil {
+				return err
+			}
+			if op.Shadow {
+				positions, err := gate.ShadowPositions()
+				if err != nil {
 					return err
 				}
+				var paper *store.ShadowPosition
+				for i := range positions {
+					if positions[i].Symbol == symbol {
+						paper = &positions[i]
+						break
+					}
+				}
+				if paper == nil || paper.Qty <= 0 {
+					return fmt.Errorf("%w: close requires an existing shadow position for %s", errInvalidClose, symbol)
+				}
+				if op.Kind != "" && op.Kind != paper.Kind {
+					return fmt.Errorf("%w: close kind %q does not match shadow position kind %q", errInvalidClose, op.Kind, paper.Kind)
+				}
+				if paper.Kind == "option" && op.Qty%units.Qty(units.Scale) != 0 {
+					return fmt.Errorf("%w: option qty must be a whole number of contracts", errInvalidClose)
+				}
+				exposureQty, err := gate.OpenExposureQuantity(ledger, symbol, paper.Kind)
+				if err != nil {
+					return err
+				}
+				if paper.Qty != exposureQty {
+					if err := gate.InsertEvent("position_exposure_mismatch", map[string]any{
+						"operation_id": opID, "ledger": ledger, "symbol": symbol, "paper_qty": paper.Qty,
+						"exposure_qty": exposureQty,
+					}); err != nil {
+						return err
+					}
+				}
+				held, err := gate.HeldCloseQuantity(ledger, symbol)
+				if err != nil {
+					return err
+				}
+				closable := minQty(paper.Qty, exposureQty)
+				if held > closable || op.Qty > closable-held {
+					committedProposalError = errInsufficientClosableQuantity
+					return nil
+				}
+				op.Side, op.Kind, op.Multiplier, op.VerifiedReduction = "sell", paper.Kind, paper.Multiplier, true
+			} else {
 				brokerCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
 				positions, err := s.accountProvider().Positions(brokerCtx)
 				cancel()
@@ -578,16 +699,49 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return fmt.Errorf("%w: %v", errInvalidClose, err)
 				}
+				// Normalize metadata with a quantity that the broker position covers
+				// so a position/exposure mismatch is recorded before the final
+				// conservative min-quantity check rejects an oversized request.
+				probe := op
+				probe.Qty = minQty(op.Qty, positionQty)
+				normalized, err := normalizeClose(probe, positions)
+				if err != nil {
+					return fmt.Errorf("%w: %v", errInvalidClose, err)
+				}
+				exposureQty, err := gate.OpenExposureQuantity(ledger, symbol, normalized.Kind)
+				if err != nil {
+					return err
+				}
+				if positionQty != exposureQty {
+					if err := gate.InsertEvent("position_exposure_mismatch", map[string]any{
+						"operation_id": opID, "ledger": ledger, "symbol": symbol, "broker_qty": positionQty,
+						"exposure_qty": exposureQty,
+					}); err != nil {
+						return err
+					}
+				}
 				held, err := gate.HeldCloseQuantity(ledger, symbol)
 				if err != nil {
 					return err
 				}
-				if held > positionQty || op.Qty > positionQty-held {
-					return errInsufficientClosableQuantity
+				closable := minQty(positionQty, exposureQty)
+				if held > closable || op.Qty > closable-held {
+					committedProposalError = errInsufficientClosableQuantity
+					return nil
 				}
-				op, err = normalizeClose(op, positions)
+				normalized.Qty = op.Qty
+				op = normalized
+			}
+			if op.ClosesOperationID != "" {
+				if !validUUID(op.ClosesOperationID) {
+					return fmt.Errorf("%w: closes_operation_id is not a UUID", errInvalidClose)
+				}
+				firstOperationID, err := gate.FirstOpenExposureOperation(ledger, symbol, op.Kind)
 				if err != nil {
-					return fmt.Errorf("%w: %v", errInvalidClose, err)
+					return err
+				}
+				if firstOperationID == "" || firstOperationID != op.ClosesOperationID {
+					return fmt.Errorf("%w: closes_operation_id does not match the first FIFO lot", errInvalidClose)
 				}
 			}
 		}
@@ -629,7 +783,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if (v.Class != "A" && v.Class != "B") || op.Shadow || op.Action == "tighten_stop" {
+		if (v.Class != "A" && v.Class != "B") || op.Action == "tighten_stop" {
 			return nil
 		}
 		attempt := store.ExecutionAttempt{
@@ -643,10 +797,44 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			}
 			attempt.Intent = "place"
 			attempt.ClientOrderID = store.NewID()
+			if op.Shadow {
+				attempt.Intent = "paper_place"
+				attempt.ClientOrderID = "shadow:" + attempt.ID
+				if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+					return fmt.Errorf("market_data_unavailable")
+				}
+				if op.Side == "buy" {
+					limit = quote.Ask
+					if op.Action == "open" && limit > op.ApprovedPriceCap {
+						limit = op.ApprovedPriceCap
+					}
+				} else if op.Limit == nil {
+					limit = quote.Bid
+				}
+			}
 			attempt.Qty, attempt.Limit = op.Qty, limit
-			if op.Action == "close" {
+			if op.Action == "open" {
+				reservation := store.OpenReservation{
+					ID: store.NewID(), OperationID: opID, Ledger: ledgerName(op.Shadow),
+					MarketDay: window.day, Symbol: operationSymbol(op), Kind: op.Kind,
+					OriginalQty: op.Qty, RemainingQty: op.Qty,
+					OriginalRisk: op.DerivedMaxRisk, RemainingRisk: op.DerivedMaxRisk,
+					OriginalCash: op.RequiredCash, RemainingCash: op.RequiredCash,
+					ResourceState: "held",
+				}
+				if err := gate.InsertOpenReservation(reservation); err != nil {
+					return err
+				}
+				attempt.OpenReservationID = reservation.ID
+				if err := gate.InsertEvent("open_reservation_created", map[string]any{
+					"operation_id": opID, "reservation_id": reservation.ID,
+					"ledger": reservation.Ledger, "symbol": reservation.Symbol,
+				}); err != nil {
+					return err
+				}
+			} else {
 				reservation := store.CloseReservation{
-					ID: store.NewID(), OperationID: opID, Ledger: ledgerName(false),
+					ID: store.NewID(), OperationID: opID, Ledger: ledgerName(op.Shadow),
 					Symbol: operationSymbol(op), OriginalQty: op.Qty,
 					RemainingQty: op.Qty, State: "held",
 				}
@@ -670,7 +858,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if err := gate.InsertExecutionAttempt(attempt); err != nil {
 			return err
 		}
-		if attempt.Intent == "place" {
+		if attempt.Intent == "place" || attempt.Intent == "paper_place" {
 			if err := gate.InsertOrder(store.Order{
 				ID: store.NewID(), OperationID: opID, ExecutionAttemptID: attempt.ID,
 				ClientOrderID: attempt.ClientOrderID, Ledger: ledgerName(op.Shadow),
@@ -698,7 +886,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errBrokerDataUnavailable) {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "position data unavailable"})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "broker account or position data unavailable"})
 			return
 		}
 		if errors.Is(err, errInvalidClose) {
@@ -706,6 +894,10 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeStoreError(w, "propose transaction", err)
+		return
+	}
+	if errors.Is(committedProposalError, errInsufficientClosableQuantity) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "insufficient closable quantity"})
 		return
 	}
 	if replay != nil {
@@ -730,7 +922,8 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Class A and B execute only through a durable execution attempt. Shadow
-	// retains classification/journaling only until M3A's paper executor.
+	// attempts settle through the atomic paper executor and never reach broker
+	// execution capability.
 	resp := map[string]any{"operation_id": opID, "status": status, "class": v.Class, "checks": v.Checks, "reasons": v.Reasons, "shadow": op.Shadow}
 	addRiskFacts(resp, op)
 	if op.Action == "tighten_stop" {
@@ -765,6 +958,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if errors.Is(err, errPaperExecutionFailed) {
+			resp["status"] = "failed"
+			resp["attempt_id"] = executionAttempt.ID
+			resp["attempt_state"] = "failed"
+			resp["error"] = "paper_execution_failed"
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"operation_id": opID, "status": "unknown", "attempt_id": executionAttempt.ID,
 			"error": "broker result uncertain",
@@ -775,6 +976,42 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		resp[k] = value
 	}
 	writeJSON(w, 200, resp)
+}
+
+func (s *server) shadowAccountSnapshot(ctx context.Context, gate store.OperationGate) (broker.AccountState, error) {
+	paper, err := gate.ShadowAccount()
+	if err != nil {
+		return broker.AccountState{}, err
+	}
+	positions, err := gate.ShadowPositions()
+	if err != nil {
+		return broker.AccountState{}, err
+	}
+	equity := paper.Cash
+	for _, position := range positions {
+		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		quote, err := s.marketProvider().Quote(quoteCtx, position.Symbol)
+		cancel()
+		if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+			return broker.AccountState{}, fmt.Errorf("shadow mark unavailable for %s", position.Symbol)
+		}
+		// Long paper positions are marked at bid and rounded down, against the
+		// account, so shadow risk capacity is never overstated.
+		value, err := units.MulQtyPrice(position.Qty, quote.Bid, position.Multiplier, false)
+		if err != nil {
+			return broker.AccountState{}, err
+		}
+		equity, err = units.Add(equity, value)
+		if err != nil {
+			return broker.AccountState{}, err
+		}
+	}
+	return broker.AccountState{
+		AccountType: "paper", BuyingPower: paper.BuyingPower,
+		Equity: equity, EquityKnown: true, Cash: paper.Cash, CashKnown: true,
+		SettledCash: paper.Cash, SettledCashKnown: true,
+		Source: "shadow", AsOf: time.Now().UTC(),
+	}, nil
 }
 
 func (s *server) executeNonBroker(opID string, op risk.Operation) (map[string]any, error) {
@@ -798,6 +1035,7 @@ var (
 	errBrokerDataUnavailable        = errors.New("broker data unavailable")
 	errBrokerResultUnknown          = errors.New("broker result uncertain")
 	errInvalidClose                 = errors.New("invalid close")
+	errPaperExecutionFailed         = errors.New("paper execution failed")
 )
 
 func ledgerName(shadow bool) string {
@@ -826,6 +1064,13 @@ func closablePositionQuantity(symbol string, positions []broker.Position) (units
 		return quantity, nil
 	}
 	return 0, fmt.Errorf("close requires an existing position for %s", symbol)
+}
+
+func minQty(left, right units.Qty) units.Qty {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func executionLimit(op risk.Operation, quote *broker.Quote, maxAgeSec int) (units.Micros, error) {
@@ -884,6 +1129,9 @@ func (s *server) executePendingAttempt(ctx context.Context, attemptID string) (m
 }
 
 func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
+	if attempt.Intent == "paper_place" {
+		return s.executeClaimedPaperAttempt(ctx, attempt)
+	}
 	execution := s.executionProvider()
 	if execution == nil {
 		_, err := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
@@ -972,9 +1220,87 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 	}, nil
 }
 
+func (s *server) executeClaimedPaperAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
+	row, err := s.store.GetOperation(attempt.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	var op risk.Operation
+	if err := json.Unmarshal(row.Payload, &op); err != nil {
+		return nil, fmt.Errorf("decode persisted paper operation: %w", err)
+	}
+	quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	quote, err := s.marketProvider().Quote(quoteCtx, operationSymbol(op))
+	cancel()
+	if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "failed", LastError: "paper market data unavailable",
+			OperationStatus: "failed", ReleaseReservation: true,
+		})
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		return nil, fmt.Errorf("%w: market data unavailable", errPaperExecutionFailed)
+	}
+	price := quote.Ask
+	marketable := op.Side == "buy" && quote.Ask <= attempt.Limit
+	if op.Side == "sell" {
+		price = quote.Bid
+		marketable = quote.Bid >= attempt.Limit
+	}
+	if !marketable {
+		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "failed", LastError: "paper limit is not marketable",
+			OperationStatus: "failed", ReleaseReservation: true,
+		})
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		return nil, fmt.Errorf("%w: limit is not marketable", errPaperExecutionFailed)
+	}
+	now := time.Now().UTC()
+	result := broker.OrderResult{
+		BrokerOrderID: "shadow-order:" + attempt.ID,
+		ClientOrderID: attempt.ClientOrderID, State: "filled",
+		FilledQty: attempt.Qty, FilledPrice: price,
+		Fills: []broker.ReadFill{{
+			FillID:        "shadow-fill:" + attempt.ID + ":1",
+			BrokerOrderID: "shadow-order:" + attempt.ID,
+			Symbol:        operationSymbol(op), Side: op.Side, Qty: attempt.Qty,
+			Price: price, Source: "shadow", AsOf: now,
+		}},
+	}
+	resolution := resolutionForOrder(attempt, result)
+	updated, err := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, resolution)
+	if err != nil {
+		if errors.Is(err, store.ErrFillIntegrity) {
+			_ = s.refreshGlobalHalt()
+		}
+		return nil, err
+	}
+	if !updated {
+		current, readErr := s.store.GetExecutionAttempt(attempt.ID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		operation, readErr := s.store.GetOperation(current.OperationID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		return map[string]any{
+			"attempt_id": current.ID, "attempt_state": current.State,
+			"status": operation.Status,
+		}, nil
+	}
+	return map[string]any{
+		"status": "executed", "order": result, "attempt_id": attempt.ID,
+		"attempt_state": "settled",
+	}, nil
+}
+
 func resolutionForOrder(attempt *store.ExecutionAttempt, result broker.OrderResult) store.AttemptResolution {
 	resolution := store.AttemptResolution{State: "unknown", BrokerOrderID: result.BrokerOrderID}
-	if attempt.Intent == "place" {
+	if attempt.Intent == "place" || attempt.Intent == "paper_place" {
 		fills := make([]store.FillInput, 0, len(result.Fills))
 		for _, fill := range result.Fills {
 			fills = append(fills, store.FillInput{
@@ -1153,6 +1479,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 
 	if op.Limit != nil && *op.Limit <= 0 {
 		return op, fmt.Errorf("limit must be greater than zero")
+	}
+	if op.Action != "close" && strings.TrimSpace(op.ClosesOperationID) != "" {
+		return op, fmt.Errorf("closes_operation_id is meaningful only on close")
 	}
 	return op, nil
 }

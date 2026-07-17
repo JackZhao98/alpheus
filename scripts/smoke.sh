@@ -4,6 +4,19 @@
 set -e
 K=${KERNEL_URL:-http://localhost:8100}
 PLAN='{"stop":"-30%","invalidation":"thesis dead","time_stop":"15:45 ET","target":"+50%"}'
+SMOKE_DB_CHECK=${SMOKE_DB_CHECK:-1}
+SMOKE_DB_NAME=${SMOKE_DB_NAME:-alpheus}
+
+sql_scalar() {
+  docker compose exec -T db psql -U alpheus -d "$SMOKE_DB_NAME" -Atqc "$1"
+}
+
+if [ "$SMOKE_DB_CHECK" = "1" ]; then
+  shadow_orders_before=$(sql_scalar "select count(*) from orders where ledger='shadow'")
+  shadow_fills_before=$(sql_scalar "select count(*) from fills where ledger='shadow'")
+  live_orders_before=$(sql_scalar "select count(*) from orders where ledger='live'")
+  live_fills_before=$(sql_scalar "select count(*) from fills where ledger='live'")
+fi
 
 quote() {
   curl -s -X POST "$K/sim/quote" -H 'Content-Type: application/json' -d "$1"
@@ -52,4 +65,21 @@ curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer
 echo "== 6) runtime wake without KERNEL_TOKEN bearer -> expect HTTP 401 =="
 curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X POST http://localhost:8200/wake -H 'Content-Type: application/json' -d '{"role":"scout"}'; echo
 
-echo "db check: docker compose exec db psql -U alpheus -c \"select class,status from operations order by ts desc limit 5;\""
+echo "== final state (shadow risk must remain isolated from live) =="
+curl -s "$K/state"; echo; echo
+
+if [ "$SMOKE_DB_CHECK" = "1" ]; then
+  shadow_orders_after=$(sql_scalar "select count(*) from orders where ledger='shadow'")
+  shadow_fills_after=$(sql_scalar "select count(*) from fills where ledger='shadow'")
+  live_orders_after=$(sql_scalar "select count(*) from orders where ledger='live'")
+  live_fills_after=$(sql_scalar "select count(*) from fills where ledger='live'")
+  orphan_attempts=$(sql_scalar "select count(*) from execution_attempt a left join orders o on o.execution_attempt_id=a.id where o.id is null and a.intent in ('place','paper_place')")
+  test "$((shadow_orders_after-shadow_orders_before))" -eq 1
+  test "$((shadow_fills_after-shadow_fills_before))" -eq 1
+  test "$((live_orders_after-live_orders_before))" -eq 2
+  test "$((live_fills_after-live_fills_before))" -eq 2
+  test "$orphan_attempts" -eq 0
+  echo "db invariants: +1 shadow order/fill, +2 live orders/fills, 0 orphan place attempts"
+else
+  echo "db invariants skipped (SMOKE_DB_CHECK=0)"
+fi

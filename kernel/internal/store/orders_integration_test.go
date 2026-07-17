@@ -29,6 +29,52 @@ func TestM29OrderFillPersistencePostgres(t *testing.T) {
 	}
 	defer s.DB.Close()
 
+	// M3A makes every close fill consume durable exposure. Seed one historical
+	// open lot so this M2.9 state-machine test remains valid under the current
+	// schema instead of relying on a broker-only position.
+	seedOperationID, seedAttemptID, seedOrderID, seedFillID := NewID(), NewID(), NewID(), NewID()
+	seedClientID := NewID()
+	if err := s.InsertOperation(seedOperationID, "m29-test", "B", "executed",
+		map[string]any{"action": "open", "shadow": false, "symbol": "M29", "kind": "equity"},
+		map[string]any{"class": "B"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
+			ID: seedAttemptID, OperationID: seedOperationID, Seq: 1, Intent: "place",
+			ClientOrderID: seedClientID, State: "settled", Qty: 2,
+			Limit: units.MustMicros("10"),
+		}); err != nil {
+			return err
+		}
+		return gate.InsertOrder(Order{
+			ID: seedOrderID, OperationID: seedOperationID, ExecutionAttemptID: seedAttemptID,
+			ClientOrderID: seedClientID, Ledger: "live", Symbol: "M29",
+			Side: "buy", Kind: "equity", Multiplier: 1, Qty: 2,
+			Limit: units.MustMicros("10"), State: "filled",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAt := time.Now().UTC().Add(-time.Minute)
+	seedCost, err := units.MulQtyPrice(2, units.MustMicros("10"), 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO fills
+		(id,order_id,broker_fill_id,ledger,qty,price_micros,fees_micros,ts)
+		VALUES ($1,$2,$3,'live',$4,$5,0,$6)`, seedFillID, seedOrderID,
+		"m29-seed-fill-"+seedFillID, 2, int64(units.MustMicros("10")), seedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO exposure_lot
+		(open_fill_id,operation_id,ledger,symbol,kind,multiplier,opened_qty,closed_qty,
+		 entry_cost_micros,remaining_cost_basis_micros,remaining_risk_micros,opened_at)
+		VALUES ($1,$2,'live','M29','equity',1,2,0,$3,$3,$3,$4)`,
+		seedFillID, seedOperationID, int64(seedCost), seedAt); err != nil {
+		t.Fatal(err)
+	}
+
 	operationID, reservationID, attemptID, orderID := NewID(), NewID(), NewID(), NewID()
 	clientOrderID := NewID()
 	if err := s.InsertOperation(operationID, "m29-test", "A", "auto_approved",
@@ -152,13 +198,13 @@ func TestM29BackfillsM28PlaceAttemptsPostgres(t *testing.T) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
-		return gate.InsertExecutionAttempt(ExecutionAttempt{
-			ID: attemptID, OperationID: operationID, Seq: 1, Intent: "place",
-			ClientOrderID: clientID, State: "pending", Qty: 3,
-			Limit: units.MustMicros("12.34"),
-		})
-	}); err != nil {
+	// This fixture deliberately represents the pre-M3A schema. Insert only the
+	// columns that existed in M2.8 instead of routing through the current writer.
+	if _, err := s.DB.Exec(`INSERT INTO execution_attempt
+		(id,operation_id,seq,close_reservation_id,intent,client_order_id,target_broker_order_id,
+		 state,qty,limit_micros)
+		VALUES ($1,$2,1,NULL,'place',$3,NULL,'pending',$4,$5)`,
+		attemptID, operationID, clientID, int64(3), int64(units.MustMicros("12.34"))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Exec(`UPDATE execution_attempt SET state='placed',broker_order_id='m28-broker' WHERE id=$1`, attemptID); err != nil {

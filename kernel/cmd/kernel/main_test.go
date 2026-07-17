@@ -48,6 +48,11 @@ type memoryStore struct {
 	operationRows    map[string]store.OperationRow
 	grants           map[string]store.TradeGrant
 	reservations     map[string]store.CloseReservation
+	openReservations map[string]store.OpenReservation
+	shadowAccount    store.ShadowAccount
+	shadowPositions  map[string]store.ShadowPosition
+	exposureQty      map[string]units.Qty
+	firstExposureOp  map[string]string
 	attempts         map[string]store.ExecutionAttempt
 	orders           map[string]store.Order
 	fills            map[string]memoryFill
@@ -59,6 +64,8 @@ type memoryStore struct {
 	halted           bool
 	haltReason       string
 	proposalLockErr  error
+	m3aActive        bool
+	databaseNow      func() time.Time
 }
 
 func newMemoryStore() *memoryStore {
@@ -72,11 +79,18 @@ func newMemoryStore() *memoryStore {
 		symbolLocks:      map[string]*sync.Mutex{},
 		grants:           map[string]store.TradeGrant{},
 		reservations:     map[string]store.CloseReservation{},
-		attempts:         map[string]store.ExecutionAttempt{},
-		orders:           map[string]store.Order{},
-		fills:            map[string]memoryFill{},
-		verdicts:         map[string]json.RawMessage{},
-		blackboards:      map[string]json.RawMessage{},
+		openReservations: map[string]store.OpenReservation{},
+		shadowAccount: store.ShadowAccount{
+			Cash: units.MustMicros("300"), BuyingPower: units.MustMicros("300"),
+		},
+		shadowPositions: map[string]store.ShadowPosition{},
+		exposureQty:     map[string]units.Qty{},
+		firstExposureOp: map[string]string{},
+		attempts:        map[string]store.ExecutionAttempt{},
+		orders:          map[string]store.Order{},
+		fills:           map[string]memoryFill{},
+		verdicts:        map[string]json.RawMessage{},
+		blackboards:     map[string]json.RawMessage{},
 	}
 }
 
@@ -251,6 +265,76 @@ func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation)
 	return nil
 }
 
+func (m *memoryStore) InsertOpenReservation(reservation store.OpenReservation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.openReservations[reservation.ID] = reservation
+	return nil
+}
+
+func (m *memoryStore) LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var resources store.LedgerResources
+	for _, reservation := range m.openReservations {
+		if reservation.Ledger == ledger && reservation.OperationID != excludeOperationID && reservation.ResourceState == "held" {
+			resources.OpenRisk += reservation.RemainingRisk
+			resources.HeldCash += reservation.RemainingCash
+		}
+	}
+	return resources, nil
+}
+
+func (m *memoryStore) InsertDayOpen(_ time.Time, _ string, _ units.Micros) error {
+	return nil
+}
+
+func (m *memoryStore) DatabaseNow() (time.Time, error) {
+	if m.databaseNow != nil {
+		return m.databaseNow(), nil
+	}
+	return time.Now().UTC(), nil
+}
+
+func (m *memoryStore) ShadowAccount() (store.ShadowAccount, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.shadowAccount, nil
+}
+
+func (m *memoryStore) ShadowPositions() ([]store.ShadowPosition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	positions := make([]store.ShadowPosition, 0, len(m.shadowPositions))
+	for _, position := range m.shadowPositions {
+		positions = append(positions, position)
+	}
+	sort.Slice(positions, func(i, j int) bool { return positions[i].Symbol < positions[j].Symbol })
+	return positions, nil
+}
+
+func memoryExposureKey(ledger, symbol, kind string) string {
+	return ledger + "\x00" + symbol + "\x00" + kind
+}
+
+func (m *memoryStore) OpenExposureQuantity(ledger, symbol, kind string) (units.Qty, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	quantity, exists := m.exposureQty[memoryExposureKey(ledger, symbol, kind)]
+	if exists || m.m3aActive || ledger == "shadow" {
+		return quantity, nil
+	}
+	// Legacy handler fixtures seed broker positions directly, before M3A's
+	// exposure ledger exists in the in-memory double.
+	return units.Qty(1<<63 - 1), nil
+}
+
+func (m *memoryStore) FirstOpenExposureOperation(ledger, symbol, kind string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.firstExposureOp[memoryExposureKey(ledger, symbol, kind)], nil
+}
+
 func (m *memoryStore) InsertExecutionAttempt(attempt store.ExecutionAttempt) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -373,6 +457,14 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 		reservation.ReleasedAt = time.Now().UTC()
 		m.reservations[attempt.CloseReservationID] = reservation
 	}
+	if resolution.ReleaseReservation && attempt.OpenReservationID != "" {
+		reservation := m.openReservations[attempt.OpenReservationID]
+		reservation.ResourceState = "released"
+		reservation.RemainingRisk = 0
+		reservation.RemainingCash = 0
+		reservation.SettledAt = time.Now().UTC()
+		m.openReservations[attempt.OpenReservationID] = reservation
+	}
 	if resolution.OrderEvent != nil {
 		m.events = append(m.events, "order_update")
 	}
@@ -398,6 +490,14 @@ func (m *memoryStore) ApplyOrderUpdate(update store.OrderUpdate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.applyMemoryOrderUpdateLocked(update)
+}
+
+func (m *memoryStore) ListTerminalReservationCandidates(int) ([]store.TerminalReservationCandidate, error) {
+	return nil, nil
+}
+
+func (m *memoryStore) ReleaseProvenTerminalReservation(store.TerminalReservationCandidate, units.Qty, bool) (bool, error) {
+	return false, nil
 }
 
 func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) error {
@@ -444,6 +544,82 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 			}
 			m.reservations[attempt.CloseReservationID] = reservation
 		}
+		op := m.operations[order.OperationID]
+		key := memoryExposureKey(order.Ledger, order.Symbol, order.Kind)
+		switch op.Action {
+		case "open":
+			if attempt.OpenReservationID != "" {
+				reservation := m.openReservations[attempt.OpenReservationID]
+				if reservation.ResourceState != "held" || fill.Qty > reservation.RemainingQty {
+					return store.ErrFillIntegrity
+				}
+				reservation.RemainingQty -= fill.Qty
+				reservation.RemainingRisk = memoryProportionalCeil(
+					reservation.OriginalRisk, reservation.RemainingQty, reservation.OriginalQty,
+				)
+				reservation.RemainingCash = memoryProportionalCeil(
+					reservation.OriginalCash, reservation.RemainingQty, reservation.OriginalQty,
+				)
+				if reservation.RemainingQty == 0 {
+					reservation.RemainingRisk, reservation.RemainingCash = 0, 0
+					reservation.ResourceState = "converted"
+					reservation.SettledAt = time.Now().UTC()
+				}
+				m.openReservations[attempt.OpenReservationID] = reservation
+			}
+			m.exposureQty[key] += fill.Qty
+			if m.firstExposureOp[key] == "" {
+				m.firstExposureOp[key] = order.OperationID
+			}
+			if order.Ledger == "shadow" {
+				cost, err := units.MulQtyPrice(fill.Qty, fill.Price, order.Multiplier, true)
+				if err != nil {
+					return store.ErrFillIntegrity
+				}
+				cost, err = units.Add(cost, fill.Fees)
+				if err != nil || cost > m.shadowAccount.Cash || cost > m.shadowAccount.BuyingPower {
+					return store.ErrFillIntegrity
+				}
+				m.shadowAccount.Cash -= cost
+				m.shadowAccount.BuyingPower -= cost
+				position := m.shadowPositions[order.Symbol]
+				if position.Symbol != "" && (position.Kind != order.Kind || position.Multiplier != order.Multiplier) {
+					return store.ErrFillIntegrity
+				}
+				position.Symbol, position.Kind, position.Multiplier = order.Symbol, order.Kind, order.Multiplier
+				position.Qty += fill.Qty
+				m.shadowPositions[order.Symbol] = position
+			}
+		case "close":
+			if m.m3aActive || order.Ledger == "shadow" {
+				if m.exposureQty[key] < fill.Qty {
+					return store.ErrFillIntegrity
+				}
+				m.exposureQty[key] -= fill.Qty
+			}
+			if order.Ledger == "shadow" {
+				position := m.shadowPositions[order.Symbol]
+				if position.Kind != order.Kind || position.Multiplier != order.Multiplier || position.Qty < fill.Qty {
+					return store.ErrFillIntegrity
+				}
+				position.Qty -= fill.Qty
+				if position.Qty == 0 {
+					delete(m.shadowPositions, order.Symbol)
+				} else {
+					m.shadowPositions[order.Symbol] = position
+				}
+				proceeds, err := units.MulQtyPrice(fill.Qty, fill.Price, order.Multiplier, false)
+				if err != nil {
+					return store.ErrFillIntegrity
+				}
+				proceeds, err = units.Add(proceeds, -fill.Fees)
+				if err != nil || proceeds < 0 {
+					return store.ErrFillIntegrity
+				}
+				m.shadowAccount.Cash += proceeds
+				m.shadowAccount.BuyingPower += proceeds
+			}
+		}
 	}
 	attempt := m.attempts[order.ExecutionAttemptID]
 	if attempt.CloseReservationID != "" {
@@ -462,6 +638,22 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 			}
 		}
 	}
+	if attempt.OpenReservationID != "" {
+		reservation := m.openReservations[attempt.OpenReservationID]
+		switch update.State {
+		case "cancelled", "rejected", "expired":
+			if reservation.ResourceState == "held" {
+				reservation.ResourceState = "released"
+				reservation.RemainingRisk, reservation.RemainingCash = 0, 0
+				reservation.SettledAt = time.Now().UTC()
+				m.openReservations[attempt.OpenReservationID] = reservation
+			}
+		case "filled":
+			if reservation.ResourceState != "converted" {
+				return store.ErrFillIntegrity
+			}
+		}
+	}
 	order.BrokerOrderID = update.BrokerOrderID
 	order.State = update.State
 	order.UpdatedAt = time.Now().UTC()
@@ -476,6 +668,15 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate) err
 		m.statuses[order.OperationID] = operationStatus
 	}
 	return nil
+}
+
+func memoryProportionalCeil(original units.Micros, remaining, total units.Qty) units.Micros {
+	if remaining == 0 {
+		return 0
+	}
+	numerator := int64(original) * int64(remaining)
+	denominator := int64(total)
+	return units.Micros((numerator + denominator - 1) / denominator)
 }
 
 func memoryTerminalPlacementState(orderState string) (string, string) {
@@ -508,6 +709,13 @@ func (m *memoryStore) FailPendingAttempt(id, reason string) (bool, error) {
 		reservation.RemainingQty = 0
 		m.reservations[attempt.CloseReservationID] = reservation
 	}
+	if attempt.OpenReservationID != "" {
+		reservation := m.openReservations[attempt.OpenReservationID]
+		reservation.ResourceState = "released"
+		reservation.RemainingRisk, reservation.RemainingCash = 0, 0
+		reservation.SettledAt = time.Now().UTC()
+		m.openReservations[attempt.OpenReservationID] = reservation
+	}
 	return true, nil
 }
 
@@ -520,6 +728,28 @@ func (m *memoryStore) GetCloseReservation(id string) (*store.CloseReservation, e
 	}
 	copy := reservation
 	return &copy, nil
+}
+
+func (m *memoryStore) GetOpenReservation(id string) (*store.OpenReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	reservation, ok := m.openReservations[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	copy := reservation
+	return &copy, nil
+}
+
+func (m *memoryStore) HasTradeGrant(operationID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.grants[operationID]
+	return ok, nil
+}
+
+func (m *memoryStore) FeatureActive(name string) (bool, error) {
+	return name == "m3a" && m.m3aActive, nil
 }
 
 func (m *memoryStore) SetOperationStatus(id, status string, verdict any) error {
@@ -668,8 +898,8 @@ func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
 
 	for i := 0; i < 6; i++ {
 		w, body := postOperation(t, s, shadowPayload)
-		if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "auto_approved" {
-			t.Fatalf("shadow %d: status=%d body=%v, want B/auto_approved", i+1, w.Code, body)
+		if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "executed" {
+			t.Fatalf("shadow %d: status=%d body=%v, want B/executed", i+1, w.Code, body)
 		}
 	}
 

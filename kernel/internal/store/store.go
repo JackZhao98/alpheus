@@ -45,8 +45,9 @@ type IdempotencyIdentity struct {
 }
 
 // OperationGate is the minimum store surface used while the kernel holds a
-// per-ledger, per-market-day advisory transaction lock. Count, event, and
-// insert must use the same implementation passed to WithLedgerLock.
+// stable per-ledger advisory transaction lock. Market day remains a data
+// dimension and never participates in the mutex key. Count, event, and insert
+// must use the same implementation passed to WithLedgerLock.
 type OperationGate interface {
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
@@ -59,11 +60,28 @@ type OperationGate interface {
 	InsertCloseReservation(reservation CloseReservation) error
 	InsertExecutionAttempt(attempt ExecutionAttempt) error
 	InsertOrder(order Order) error
+	InsertOpenReservation(reservation OpenReservation) error
+	LedgerResources(ledger, excludeOperationID string) (LedgerResources, error)
+	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
+	DatabaseNow() (time.Time, error)
+	ShadowAccount() (ShadowAccount, error)
+	ShadowPositions() ([]ShadowPosition, error)
+	OpenExposureQuantity(ledger, symbol, kind string) (units.Qty, error)
+	FirstOpenExposureOperation(ledger, symbol, kind string) (string, error)
 }
 
 type ledgerTx struct {
 	tx  *sql.Tx
 	ctx context.Context
+}
+
+func (t *ledgerTx) DatabaseNow() (time.Time, error) {
+	var now time.Time
+	// clock_timestamp(), unlike now(), advances after transaction start. This
+	// keeps a proposal that waited on the ledger gate across market midnight
+	// from consuming the previous day's entitlement.
+	err := t.tx.QueryRowContext(t.ctx, `SELECT clock_timestamp()`).Scan(&now)
+	return now, normalizeDBError(err)
 }
 
 // Open waits for postgres on cold start.
@@ -395,6 +413,9 @@ func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, e
 	err := db.QueryRowContext(ctx,
 		`SELECT count(*) FROM trade_grant
 		 WHERE ledger = $1 AND market_day = $2::date
+		   AND ($1 <> 'shadow'
+		        OR NOT EXISTS (SELECT 1 FROM feature_activation WHERE name='m3a')
+		        OR granted_at >= (SELECT activated_at FROM feature_activation WHERE name='m3a'))
 		   AND (NULLIF($3,'') IS NULL OR operation_id <> NULLIF($3,'')::uuid)`,
 		ledgerName(shadow), start, operationID).Scan(&n)
 	return n, normalizeDBError(err)
@@ -421,7 +442,7 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 		}
 	}
 	if marketDay != nil {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow, *marketDay)); err != nil {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow)); err != nil {
 			return normalizeDBError(err)
 		}
 	}
@@ -444,11 +465,11 @@ func idempotencyLockKey(subject, key string) int64 {
 	return int64(binary.BigEndian.Uint64(digest[:8]))
 }
 
-func ledgerLockKey(shadow bool, marketDay time.Time) int64 {
-	year, month, day := marketDay.Date()
-	dateKey := int64(year*10_000 + int(month)*100 + day)
-	const namespace int64 = 0x414c5048 // "ALPH"
-	key := (namespace << 32) | (dateKey << 1)
+func ledgerLockKey(shadow bool) int64 {
+	// M3A resources survive market midnight. The mutex is therefore stable per
+	// ledger; market_day remains a query dimension and never enters this key.
+	const keyBase int64 = 0x414c50484c454400 // "ALPHLED\0"
+	key := keyBase
 	if shadow {
 		key |= 1
 	}

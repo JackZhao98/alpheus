@@ -65,10 +65,10 @@ violated, and severity.
   with `-urls http://localhost:8100,http://localhost:8101`. Repeat this barrier
   pattern for total_open_risk near the cap. This harness is a reference
   implementation, not the audit oracle: auditors should design and run an
-  independent concurrency probe as well. Through M2.9 the deterministic lock
-  probe uses `(ledger,market_day)`; once PLAN M3A lands, use its stable
-  per-ledger gate key and add a market-midnight barrier case. Continuing to hold
-  the retired day key would produce a false failure of the probe itself.
+  independent concurrency probe as well. M3A uses a stable per-ledger gate key;
+  add a market-midnight barrier case and verify two requests assigned to
+  opposite market days still serialize on the same ledger. Continuing to hold
+  the retired `(ledger,market_day)` key produces a false failure of the probe.
 - **I5 No gate bypass via payload.** Probe with: uppercase/whitespace
   action values ("OPEN", " open"); qty 0, negative, huge (1e18);
   max_risk_usd negative/0/NaN-as-string; limit 0/negative; plan keys
@@ -173,12 +173,14 @@ violated, and severity.
 These are scheduled work in the plan index and its phase files; verify they
 behave as currently documented, but do not report them as discoveries:
 
-M1 through M2.9 plus M8A/M8B have landed: Class-A behavior, dual-ledger
+M1 through M3A plus M8A/M8B have landed: Class-A behavior, dual-ledger
 counters, exact risk, mode/auth, account binding, the kill switch, migrations,
-DB deadlines, idempotency, durable orders/fills and production-read/cockpit
-boundaries are audit targets, not suppressed findings.
+DB deadlines, idempotency, durable orders/fills, open reservations, exposure
+FIFO, the shadow paper book and production-read/cockpit boundaries are audit
+targets, not suppressed findings.
 
-1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3A/M3C).
+1. Cost-basis realized PnL and automatic daily/consecutive-loss breakers are
+   not implemented (PLAN M3C).
 2. Approved Class-C ops are not executed (PLAN M4).
 
 Suppression is about the CURRENT build, not the plan: each item above is still

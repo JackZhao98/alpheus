@@ -155,13 +155,23 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 	if update.ExecutionAttemptID == "" && update.BrokerOrderID == "" {
 		return nil, fmt.Errorf("order update has no durable identity")
 	}
-	query := `SELECT ` + orderColumns + ` FROM orders WHERE execution_attempt_id=$1 FOR UPDATE`
+	query := `SELECT ` + orderColumns + ` FROM orders WHERE execution_attempt_id=$1`
 	identity := update.ExecutionAttemptID
 	if identity == "" {
-		query = `SELECT ` + orderColumns + ` FROM orders WHERE broker_order_id=$1 FOR UPDATE`
+		query = `SELECT ` + orderColumns + ` FROM orders WHERE broker_order_id=$1`
 		identity = update.BrokerOrderID
 	}
 	order, err := scanOrder(tx.QueryRowContext(ctx, query, identity))
+	if err != nil {
+		return nil, err
+	}
+
+	// Fill/resource mutations take the stable ledger lock before the optional
+	// symbol and row locks, matching the proposal and recovery lock order.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(order.Ledger == "shadow")); err != nil {
+		return nil, err
+	}
+	order, err = scanOrder(tx.QueryRowContext(ctx, query+` FOR UPDATE`, identity))
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +181,9 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 	if err := validateOrderTransition(order.State, update.State); err != nil {
 		return nil, err
 	}
-
-	var reservationID sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT close_reservation_id
-		FROM execution_attempt WHERE id=$1`, order.ExecutionAttemptID).Scan(&reservationID); err != nil {
+	var reservationID, openReservationID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT close_reservation_id,open_reservation_id
+		FROM execution_attempt WHERE id=$1`, order.ExecutionAttemptID).Scan(&reservationID, &openReservationID); err != nil {
 		return nil, err
 	}
 	if reservationID.Valid {
@@ -188,6 +197,14 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, symbolLockKey(ledger, symbol)); err != nil {
 			return nil, err
 		}
+	}
+	attempt, err := scanAttempt(tx.QueryRowContext(ctx, `SELECT `+attemptColumns+`
+		FROM execution_attempt WHERE id=$1`, order.ExecutionAttemptID))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateM3AExecutionEntitlement(ctx, tx, attempt); err != nil {
+		return nil, err
 	}
 
 	for _, fill := range update.Fills {
@@ -244,6 +261,9 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 		}); err != nil {
 			return nil, err
 		}
+		if err := applyExposureFill(ctx, tx, order, fillID, fill, openReservationID); err != nil {
+			return nil, err
+		}
 	}
 	var durableFilled int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(qty),0) FROM fills WHERE order_id=$1`, order.ID).Scan(&durableFilled); err != nil {
@@ -272,6 +292,25 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate) (*Ord
 			}
 			if remaining != 0 || reservationState != "released" {
 				return nil, fmt.Errorf("%w: filled close is missing durable fills", ErrFillIntegrity)
+			}
+		}
+	}
+	if openReservationID.Valid {
+		switch update.State {
+		case "cancelled", "rejected", "expired":
+			if _, err := tx.ExecContext(ctx, `UPDATE open_reservation SET
+				resource_state='released',remaining_risk_micros=0,remaining_cash_micros=0,
+				settled_at=COALESCE(settled_at,now())
+				WHERE id=$1 AND resource_state='held'`, openReservationID.String); err != nil {
+				return nil, err
+			}
+		case "filled":
+			var resourceState string
+			if err := tx.QueryRowContext(ctx, `SELECT resource_state FROM open_reservation WHERE id=$1`, openReservationID.String).Scan(&resourceState); err != nil {
+				return nil, err
+			}
+			if resourceState != "converted" {
+				return nil, fmt.Errorf("%w: filled open is missing durable exposure", ErrFillIntegrity)
 			}
 		}
 	}
@@ -323,26 +362,32 @@ func (s *Store) recordOrderUpdateFailure(update OrderUpdate, cause error) error 
 		return errors.Join(cause, normalizeDBError(err))
 	}
 	if errors.Is(cause, ErrFillIntegrity) {
-		tx, err := s.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return errors.Join(cause, normalizeDBError(err))
-		}
-		defer tx.Rollback()
-		reason := cause.Error()
-		if err := insertEvent(ctx, tx, "fill_integrity_error", map[string]any{
+		return s.recordIntegrityFailure("fill_integrity_error", map[string]any{
 			"execution_attempt_id": update.ExecutionAttemptID,
-			"broker_order_id":      update.BrokerOrderID, "error": reason,
-		}); err != nil {
-			return errors.Join(cause, normalizeDBError(err))
-		}
-		if err := insertEvent(ctx, tx, "global_halt_transition", map[string]any{
-			"halted": true, "reason": reason,
-		}); err != nil {
-			return errors.Join(cause, normalizeDBError(err))
-		}
-		if err := tx.Commit(); err != nil {
-			return errors.Join(cause, normalizeDBError(err))
-		}
+			"broker_order_id":      update.BrokerOrderID, "error": cause.Error(),
+		}, cause)
+	}
+	return cause
+}
+
+func (s *Store) recordIntegrityFailure(kind string, payload map[string]any, cause error) error {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.Join(cause, normalizeDBError(err))
+	}
+	defer tx.Rollback()
+	if err := insertEvent(ctx, tx, kind, payload); err != nil {
+		return errors.Join(cause, normalizeDBError(err))
+	}
+	if err := insertEvent(ctx, tx, "global_halt_transition", map[string]any{
+		"halted": true, "reason": cause.Error(),
+	}); err != nil {
+		return errors.Join(cause, normalizeDBError(err))
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.Join(cause, normalizeDBError(err))
 	}
 	return cause
 }

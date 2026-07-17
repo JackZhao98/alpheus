@@ -161,15 +161,20 @@ inline script 的 CSP。
   中的 `side`。live 平仓在 PostgreSQL 的 `(ledger,symbol)` 事务锁内扣除
   已持有的 close reservation，并把 operation、reservation 和带稳定 client id
   的 execution attempt 一次提交后才触达 broker；不再依赖单进程 mutex。
-  崩溃恢复会重新核对仓位方向和其他 reservation。M2.9 写入 durable fill 前，
-  有成交的 close reservation 保持 held（fail closed）。撤单同样先写 attempt；
+  崩溃恢复会重新核对仓位方向和其他 reservation。M2.9 起，每笔 durable fill
+  与 close reservation 的数量扣减在同一事务完成；超时或结果不明时，未被完整
+  证明的剩余 reservation 继续保持 held（fail closed）。撤单同样先写 attempt；
   原生止损单上线前，`tighten_stop` 只更新 operation payload 与 journal。
 - **B 合规新仓**：清单全过（预算/总敞口/日单数/白名单/流动性/计划完整）
   → 代码自动放行，不经过任何 LLM。额度按**净值百分比**计算，
   agent 赚得越多绝对额度自动越大；live 与 shadow 使用相同清单、独立的
   市场日日内交易计数。每个获准 open 都先写不可撤销的 `trade_grant`；即使
   broker 拒绝也消耗当日槽位，避免失败循环绕过上限。PostgreSQL 事务锁会串行化
-  `count → classify → grant → attempt`（进攻档宪法见 `kernel/limits.yaml`）。
+  `count → resources → classify → grant → reservation → attempt`。M3A 使用跨市场日
+  稳定的 per-ledger 锁；总开仓风险等于已成交 exposure lots 加仍 held 的 open
+  reservations，挂单不会制造风险或购买力的空窗。live fill 在同一事务里把预留
+  转成 exposure lot；shadow 则原子写 synthetic order/fill、独立 paper 资金与
+  持仓，从不调用 broker（进攻档宪法见 `kernel/limits.yaml`）。
 - **C 例外**：清单未过但不违反绝对项 → `pending_review`，
   交 reviewer（不同家族模型）或人一键裁决（`POST /operations/{id}/review`）。
 - **REJECT 绝对项**：熔断中、任何单腿 `open + sell`、风险声明不实、
@@ -225,9 +230,9 @@ fake adapter = Robinhood 没有的模拟盘 = 集成测试靶 = 回测场
 ## 骨架刻意没做的事
 
 reviewer 模型接入（C 级裁决现在留给带 Admin Token 的人）、inbox/watchlist
-注入（assemble 有 TODO）、C 级批准后的执行路径、M2.9 durable orders/fills、
-订单重挂状态机接线、熔断的实时计算
-（dayState 有 TODO）、watchdog 对 runtime `/wake` 的实际投递（端点和
+注入（assemble 有 TODO）、C 级批准后的执行路径、
+订单重挂状态机接线、基于成本的已实现 PnL 与自动日亏/连亏熔断
+（M3C）、watchdog 对 runtime `/wake` 的实际投递（端点和
 Kernel Token 校验已落地，M6 接线）、M7 的写控制 UI。
 券商原生止损单也尚未实现；当前 `tighten_stop` 只留下可审计的新止损记录。
 这些都有明确的挂载点，但骨架的任务是把边界立住。
