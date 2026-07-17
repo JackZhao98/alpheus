@@ -64,7 +64,10 @@ violated, and severity.
   with `-urls http://localhost:8100,http://localhost:8101`. Repeat this barrier
   pattern for total_open_risk near the cap. This harness is a reference
   implementation, not the audit oracle: auditors should design and run an
-  independent concurrency probe as well.
+  independent concurrency probe as well. Through M2.9 the deterministic lock
+  probe uses `(ledger,market_day)`; once PLAN M3A lands, use its stable
+  per-ledger gate key and add a market-midnight barrier case. Continuing to hold
+  the retired day key would produce a false failure of the probe itself.
 - **I5 No gate bypass via payload.** Probe with: uppercase/whitespace
   action values ("OPEN", " open"); qty 0, negative, huge (1e18);
   max_risk_usd negative/0/NaN-as-string; limit 0/negative; plan keys
@@ -106,10 +109,14 @@ documented, but do not report them as discoveries:
 M1 and M2 have landed: Class-A behavior and dual-ledger counters are audit
 targets, not suppressed findings.
 
-1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3).
-2. `orders`/`fills` tables are never written (PLAN M5).
-3. No auth on any endpoint (PLAN M7 TODO).
+1. day_state open_risk/pnl are 0; breakers never trip (PLAN M3A/M3C).
+2. `orders`/`fills` tables are never written (PLAN M2.9).
+3. No auth on any endpoint (PLAN M2.6, P0 — scheduled, not yet landed).
 4. Approved Class-C ops are not executed (PLAN M4).
+
+Suppression is about the CURRENT build, not the plan: each item above is still
+the live behavior. When its milestone lands, the item leaves this list and
+becomes an audit target — item 3 in particular, the moment M2.6 ships.
 
 If any suppressed item's ACTUAL behavior differs from its description here
 (e.g. a shadow op somehow places an order), that IS a finding.
