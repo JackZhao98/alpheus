@@ -76,7 +76,7 @@ type OperationGate interface {
 	OpenExposureQuantity(ledger, symbol, kind string) (units.Qty, error)
 	FirstOpenExposureOperation(ledger, symbol, kind string) (string, error)
 	EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error)
-	ResumeBreaker(ledger, reason string, marketDay time.Time, subject string) (BreakerState, error)
+	ResumeBreaker(ledger, reason string, marketDay, observedAt time.Time, subject string) (BreakerState, error)
 }
 
 type ledgerTx struct {
@@ -257,11 +257,32 @@ func insertEvent(ctx context.Context, db execer, kind string, payload any) error
 	return err
 }
 
+func insertEventAt(ctx context.Context, db execer, kind string, payload any, observedAt time.Time) error {
+	if observedAt.IsZero() {
+		return fmt.Errorf("event observation time is required")
+	}
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO events (ts, kind, payload) VALUES ($1, $2, $3)`,
+		observedAt, kind, jstr(payload))
+	return err
+}
+
 func insertEventWithID(ctx context.Context, db rowQueryer, kind string, payload any) (int64, error) {
 	var id int64
 	err := db.QueryRowContext(ctx,
 		`INSERT INTO events (kind, payload) VALUES ($1, $2) RETURNING id`,
 		kind, jstr(payload)).Scan(&id)
+	return id, err
+}
+
+func insertEventWithIDAt(ctx context.Context, db rowQueryer, kind string, payload any, observedAt time.Time) (int64, error) {
+	if observedAt.IsZero() {
+		return 0, fmt.Errorf("event observation time is required")
+	}
+	var id int64
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO events (ts, kind, payload) VALUES ($1, $2, $3) RETURNING id`,
+		observedAt, kind, jstr(payload)).Scan(&id)
 	return id, err
 }
 
@@ -464,7 +485,7 @@ func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, e
 
 // WithProposalLock takes the idempotency lock before the ledger lock. Both are
 // transaction-scoped, so a crashed process cannot strand either gate.
-func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(OperationGate) error) error {
+func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow, lockLedger bool, fn func(OperationGate) error) error {
 	ctx, cancel := s.deadline()
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -482,7 +503,7 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 			return normalizeDBError(err)
 		}
 	}
-	if marketDay != nil {
+	if lockLedger {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow)); err != nil {
 			return normalizeDBError(err)
 		}
@@ -497,8 +518,8 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow bool, mar
 	return nil
 }
 
-func (s *Store) WithLedgerLock(shadow bool, marketDay time.Time, fn func(OperationGate) error) error {
-	return s.WithProposalLock(nil, shadow, &marketDay, fn)
+func (s *Store) WithLedgerLock(shadow bool, fn func(OperationGate) error) error {
+	return s.WithProposalLock(nil, shadow, true, fn)
 }
 
 // WithReviewLock serializes a review against the pending operation row. The

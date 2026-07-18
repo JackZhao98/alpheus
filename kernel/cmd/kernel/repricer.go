@@ -224,7 +224,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 		return true, nil
 	}
 	var halted bool
-	err := s.store.WithLedgerLock(shadow, time.Time{}, func(gate store.OperationGate) error {
+	err := s.store.WithLedgerLock(shadow, func(gate store.OperationGate) error {
 		var account broker.AccountState
 		var err error
 		if shadow {
@@ -237,11 +237,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 		if err != nil {
 			return err
 		}
-		databaseNow, err := gate.DatabaseNow()
-		if err != nil {
-			return err
-		}
-		window, err := marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
+		window, err := s.databaseMarketWindow(gate)
 		if err != nil {
 			return err
 		}
@@ -250,7 +246,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 			return err
 		}
 		halted = day.Halted
-		return nil
+		return s.ensureMarketDay(gate, window)
 	})
 	return halted, err
 }

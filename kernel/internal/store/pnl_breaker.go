@@ -15,6 +15,7 @@ type DayRiskInput struct {
 	MarketDay               time.Time
 	Start                   time.Time
 	End                     time.Time
+	ObservedAt              time.Time
 	ProviderRealizedPnL     *units.Micros
 	MaxDailyLossPct         units.PercentMicros
 	ConsecutiveLossDaysHalt int
@@ -44,8 +45,17 @@ func (t *ledgerTx) EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error) {
 	if input.Ledger != "live" && input.Ledger != "shadow" {
 		return stats, fmt.Errorf("invalid breaker ledger")
 	}
-	if input.MarketDay.IsZero() || input.Start.IsZero() || input.End.IsZero() || !input.End.After(input.Start) {
+	if input.MarketDay.IsZero() || input.Start.IsZero() || input.End.IsZero() ||
+		input.ObservedAt.IsZero() || !input.End.After(input.Start) ||
+		input.ObservedAt.Before(input.Start) || !input.ObservedAt.Before(input.End) {
 		return stats, fmt.Errorf("invalid market-day window")
+	}
+	canonicalStart, canonicalEnd, err := marketDayBounds(input.MarketDay, t.marketTZ)
+	if err != nil {
+		return stats, err
+	}
+	if !input.Start.Equal(canonicalStart) || !input.End.Equal(canonicalEnd) {
+		return stats, fmt.Errorf("market-day window does not match configured timezone")
 	}
 	if input.MaxDailyLossPct < 0 || input.ConsecutiveLossDaysHalt < 0 || input.PnLReconciliationLimit < 0 {
 		return stats, fmt.Errorf("invalid breaker limits")
@@ -58,7 +68,7 @@ func (t *ledgerTx) EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error) {
 	stats.ProviderRealizedPnL = cloneMicros(input.ProviderRealizedPnL)
 	stats.EffectiveRealizedPnL = moreLossMaking(local, input.ProviderRealizedPnL)
 	if err := persistDailyPnL(t.ctx, t.tx, input.MarketDay, input.Ledger,
-		local, input.ProviderRealizedPnL, stats.EffectiveRealizedPnL); err != nil {
+		local, input.ProviderRealizedPnL, stats.EffectiveRealizedPnL, input.ObservedAt); err != nil {
 		return stats, err
 	}
 
@@ -105,16 +115,17 @@ func (t *ledgerTx) EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error) {
 		trigger = "loss_streak"
 	}
 
-	state, changed, err := t.transitionBreaker(input.Ledger, trigger, input.MarketDay, "")
+	state, changed, err := t.transitionBreaker(input.Ledger, trigger, input.MarketDay, input.ObservedAt, "")
 	if err != nil {
 		return stats, err
 	}
 	if changed && trigger == "pnl_divergence" {
-		if err := insertEvent(t.ctx, t.tx, "pnl_divergence", map[string]any{
+		if err := insertEventAt(t.ctx, t.tx, "pnl_divergence", map[string]any{
 			"ledger": input.Ledger, "market_day": input.MarketDay,
+			"observed_at":        input.ObservedAt,
 			"local_realized_pnl": local, "provider_realized_pnl": *input.ProviderRealizedPnL,
 			"tolerance": input.PnLReconciliationLimit,
-		}); err != nil {
+		}, input.ObservedAt); err != nil {
 			return stats, normalizeDBError(err)
 		}
 	}
@@ -122,7 +133,7 @@ func (t *ledgerTx) EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error) {
 	return stats, nil
 }
 
-func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay time.Time, subject string) (BreakerState, error) {
+func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay, observedAt time.Time, subject string) (BreakerState, error) {
 	var state BreakerState
 	if ledger != "live" && ledger != "shadow" {
 		return state, fmt.Errorf("invalid breaker ledger")
@@ -130,8 +141,15 @@ func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay time.Time, sub
 	if reason != "daily_loss" && reason != "loss_streak" && reason != "pnl_divergence" {
 		return state, fmt.Errorf("invalid breaker reason")
 	}
-	if marketDay.IsZero() || subject == "" {
-		return state, fmt.Errorf("breaker resume requires market day and subject")
+	if marketDay.IsZero() || observedAt.IsZero() || subject == "" {
+		return state, fmt.Errorf("breaker resume requires market day, observation time, and subject")
+	}
+	start, end, err := marketDayBounds(marketDay, t.marketTZ)
+	if err != nil {
+		return state, err
+	}
+	if observedAt.Before(start) || !observedAt.Before(end) {
+		return state, fmt.Errorf("breaker observation is outside market day")
 	}
 	var currentReason sql.NullString
 	if err := t.tx.QueryRowContext(t.ctx, `SELECT ledger,halted,reason,updated_at
@@ -143,24 +161,30 @@ func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay time.Time, sub
 	if !state.Halted || state.Reason != reason {
 		return state, ErrBreakerNotActive
 	}
+	if reason == "daily_loss" && (state.UpdatedAt.Before(start) || !state.UpdatedAt.Before(end)) {
+		// A daily-loss halt is scoped to the market day on which it fired. A
+		// stale prior-day row must not create a pre-emptive override for today.
+		return state, ErrBreakerNotActive
+	}
 	if _, err := t.tx.ExecContext(t.ctx, `INSERT INTO breaker_override
-		(ledger,reason,market_day,subject) VALUES ($1,$2,$3,$4)
+		(ledger,reason,market_day,subject,ts) VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (ledger,reason,market_day) DO UPDATE
-		SET subject=EXCLUDED.subject,ts=now()`, ledger, reason, marketDay, subject); err != nil {
+		SET subject=EXCLUDED.subject,ts=EXCLUDED.ts`, ledger, reason, marketDay, subject, observedAt); err != nil {
 		return state, normalizeDBError(err)
 	}
-	if _, err := t.tx.ExecContext(t.ctx, `UPDATE breaker_state SET halted=false,reason=NULL,updated_at=now()
-		WHERE ledger=$1`, ledger); err != nil {
+	if _, err := t.tx.ExecContext(t.ctx, `UPDATE breaker_state SET halted=false,reason=NULL,updated_at=$2
+		WHERE ledger=$1`, ledger, observedAt); err != nil {
 		return state, normalizeDBError(err)
 	}
-	eventID, err := insertEventWithID(t.ctx, t.tx, "breaker", map[string]any{
+	eventID, err := insertEventWithIDAt(t.ctx, t.tx, "breaker", map[string]any{
 		"ledger": ledger, "halted": false, "reason": reason,
-		"market_day": marketDay, "subject": subject, "override": true,
-	})
+		"market_day": marketDay, "observed_at": observedAt,
+		"subject": subject, "override": true,
+	}, observedAt)
 	if err != nil {
 		return state, normalizeDBError(err)
 	}
-	state.Halted, state.Reason, state.UpdatedAt, state.EventID = false, "", time.Now().UTC(), eventID
+	state.Halted, state.Reason, state.UpdatedAt, state.EventID = false, "", observedAt, eventID
 	return state, nil
 }
 
@@ -269,7 +293,7 @@ func (t *ledgerTx) consecutiveLossDays(input DayRiskInput, current units.Micros)
 			return 0, err
 		}
 		effective := moreLossMaking(local, provider)
-		if err := persistDailyPnL(t.ctx, t.tx, day, input.Ledger, local, provider, effective); err != nil {
+		if err := persistDailyPnL(t.ctx, t.tx, day, input.Ledger, local, provider, effective, input.ObservedAt); err != nil {
 			return 0, err
 		}
 		if effective >= 0 {
@@ -308,22 +332,22 @@ func persistedProviderPnL(ctx context.Context, tx *sql.Tx, day time.Time, ledger
 }
 
 func persistDailyPnL(ctx context.Context, tx *sql.Tx, day time.Time, ledger string,
-	local units.Micros, provider *units.Micros, effective units.Micros) error {
+	local units.Micros, provider *units.Micros, effective units.Micros, observedAt time.Time) error {
 	var providerValue any
 	if provider != nil {
 		providerValue = int64(*provider)
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO daily_pnl
 		(market_day,ledger,local_realized_pnl_micros,provider_realized_pnl_micros,
-		 effective_realized_pnl_micros)
-		VALUES ($1,$2,$3,$4,$5)
+		 effective_realized_pnl_micros,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6)
 		ON CONFLICT (market_day,ledger) DO UPDATE SET
 		local_realized_pnl_micros=EXCLUDED.local_realized_pnl_micros,
 		provider_realized_pnl_micros=COALESCE(EXCLUDED.provider_realized_pnl_micros,daily_pnl.provider_realized_pnl_micros),
 		effective_realized_pnl_micros=LEAST(EXCLUDED.local_realized_pnl_micros,
 			COALESCE(EXCLUDED.provider_realized_pnl_micros,daily_pnl.provider_realized_pnl_micros,
-			         EXCLUDED.local_realized_pnl_micros)),updated_at=now()`,
-		day, ledger, int64(local), providerValue, int64(effective))
+			         EXCLUDED.local_realized_pnl_micros)),updated_at=EXCLUDED.updated_at`,
+		day, ledger, int64(local), providerValue, int64(effective), observedAt)
 	return normalizeDBError(err)
 }
 
@@ -334,7 +358,7 @@ func (t *ledgerTx) breakerOverridden(ledger, reason string, day time.Time) (bool
 	return exists, normalizeDBError(err)
 }
 
-func (t *ledgerTx) transitionBreaker(ledger, trigger string, day time.Time, subject string) (BreakerState, bool, error) {
+func (t *ledgerTx) transitionBreaker(ledger, trigger string, day, observedAt time.Time, subject string) (BreakerState, bool, error) {
 	var state BreakerState
 	var reason sql.NullString
 	if err := t.tx.QueryRowContext(t.ctx, `SELECT ledger,halted,reason,updated_at
@@ -374,12 +398,13 @@ func (t *ledgerTx) transitionBreaker(ledger, trigger string, day time.Time, subj
 	if nextHalted {
 		nextReason = trigger
 	}
-	if _, err := t.tx.ExecContext(t.ctx, `UPDATE breaker_state SET halted=$2,reason=$3,updated_at=now()
-		WHERE ledger=$1`, ledger, nextHalted, nextReason); err != nil {
+	if _, err := t.tx.ExecContext(t.ctx, `UPDATE breaker_state SET halted=$2,reason=$3,updated_at=$4
+		WHERE ledger=$1`, ledger, nextHalted, nextReason, observedAt); err != nil {
 		return state, false, normalizeDBError(err)
 	}
 	payload := map[string]any{
 		"ledger": ledger, "halted": nextHalted, "market_day": day,
+		"observed_at": observedAt,
 	}
 	if trigger != "" {
 		payload["reason"] = trigger
@@ -389,10 +414,10 @@ func (t *ledgerTx) transitionBreaker(ledger, trigger string, day time.Time, subj
 	if subject != "" {
 		payload["subject"] = subject
 	}
-	if err := insertEvent(t.ctx, t.tx, "breaker", payload); err != nil {
+	if err := insertEventAt(t.ctx, t.tx, "breaker", payload, observedAt); err != nil {
 		return state, false, normalizeDBError(err)
 	}
-	state.Halted, state.Reason, state.UpdatedAt = nextHalted, trigger, time.Now().UTC()
+	state.Halted, state.Reason, state.UpdatedAt = nextHalted, trigger, observedAt
 	return state, true, nil
 }
 

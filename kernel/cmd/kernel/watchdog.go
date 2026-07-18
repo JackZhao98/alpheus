@@ -10,15 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/watchdog"
 
 	"github.com/robfig/cron/v3"
 )
 
 func startWatchdog(s *server) (*cron.Cron, error) {
-	tz := config.Env("TZ_MARKET", "America/New_York")
-	return watchdog.Start(tz, func(role, occurrenceID string) {
+	return watchdog.Start(s.marketTimezone(), func(role, occurrenceID string) {
 		s.fireSpineTick(role, occurrenceID)
 	})
 }

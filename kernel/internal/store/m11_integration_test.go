@@ -177,7 +177,7 @@ func TestCandidateAdoptionCommitsFillAndClearsLatchAtomicallyPostgres(t *testing
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, marketDay, func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: "live", MarketDay: marketDay,
 			AuthorizedRisk: units.MustMicros("10"), RiskSource: "computed",
@@ -307,7 +307,7 @@ func TestTradeGrantCanaryBarrierPostgres(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			err := s.WithLedgerLock(false, marketDay, func(gate OperationGate) error {
+			err := s.WithLedgerLock(false, func(gate OperationGate) error {
 				usage, err := gate.TradeGrantUsage("live", marketDay, operationID)
 				if err != nil {
 					return err
@@ -362,7 +362,7 @@ func TestTradeGrantUsagePostgres(t *testing.T) {
 
 	assertUsage := func(exclude string, wantRisk units.Micros, wantLegacy bool, wantCount int) {
 		t.Helper()
-		err := s.WithLedgerLock(false, marketDay, func(gate OperationGate) error {
+		err := s.WithLedgerLock(false, func(gate OperationGate) error {
 			usage, err := gate.TradeGrantUsage("live", marketDay, exclude)
 			if err != nil {
 				return err
@@ -413,7 +413,7 @@ func seedM11Grant(t *testing.T, s *Store, ledger string, marketDay time.Time, so
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	err := s.WithLedgerLock(shadow, marketDay, func(gate OperationGate) error {
+	err := s.WithLedgerLock(shadow, func(gate OperationGate) error {
 		return gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: ledger, MarketDay: marketDay,
 			AuthorizedRisk: amount, RiskSource: source,

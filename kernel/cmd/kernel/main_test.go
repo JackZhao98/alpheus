@@ -67,6 +67,7 @@ type memoryStore struct {
 	proposalLockErr      error
 	m3aActive            bool
 	databaseNow          func() time.Time
+	databaseNowErr       error
 	dayOpenEquity        map[string]units.Micros
 	realizedPnL          map[string]units.Micros
 	breakerStates        map[string]store.BreakerState
@@ -141,12 +142,11 @@ func (m *memoryStore) CountTradesForDayExcluding(shadow bool, _, _ time.Time, op
 	return n, nil
 }
 
-func (m *memoryStore) WithLedgerLock(shadow bool, _ time.Time, fn func(store.OperationGate) error) error {
-	marketDay := time.Time{}
-	return m.WithProposalLock(nil, shadow, &marketDay, fn)
+func (m *memoryStore) WithLedgerLock(shadow bool, fn func(store.OperationGate) error) error {
+	return m.WithProposalLock(nil, shadow, true, fn)
 }
 
-func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error {
+func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shadow, lockLedger bool, fn func(store.OperationGate) error) error {
 	if m.proposalLockErr != nil {
 		return m.proposalLockErr
 	}
@@ -162,7 +162,7 @@ func (m *memoryStore) WithProposalLock(identity *store.IdempotencyIdentity, shad
 		lock.Lock()
 		defer lock.Unlock()
 	}
-	if marketDay != nil {
+	if lockLedger {
 		index := 0
 		if shadow {
 			index = 1
@@ -428,6 +428,9 @@ func (m *memoryStore) InsertDayOpen(_ time.Time, ledger string, equity units.Mic
 func (m *memoryStore) EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskStats, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if input.ObservedAt.IsZero() || input.ObservedAt.Before(input.Start) || !input.ObservedAt.Before(input.End) {
+		return store.DayRiskStats{}, errors.New("invalid market-day observation")
+	}
 	local := m.realizedPnL[input.Ledger]
 	effective := local
 	if input.ProviderRealizedPnL != nil && *input.ProviderRealizedPnL < effective {
@@ -468,7 +471,7 @@ func (m *memoryStore) EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskSt
 		case "pnl_divergence":
 			reason = state.Reason
 		case "daily_loss":
-			if state.UpdatedAt.Format(time.DateOnly) == day && reason != "pnl_divergence" {
+			if !state.UpdatedAt.Before(input.Start) && state.UpdatedAt.Before(input.End) && reason != "pnl_divergence" {
 				reason = state.Reason
 			}
 		}
@@ -477,22 +480,29 @@ func (m *memoryStore) EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskSt
 	if state.Halted != nextHalted || state.Reason != reason {
 		m.events = append(m.events, "breaker")
 	}
-	state.Halted, state.Reason, state.UpdatedAt = nextHalted, reason, input.MarketDay
+	state.Halted, state.Reason, state.UpdatedAt = nextHalted, reason, input.ObservedAt
 	m.breakerStates[input.Ledger] = state
 	stats.Halted, stats.Reason = state.Halted, state.Reason
 	return stats, nil
 }
 
-func (m *memoryStore) ResumeBreaker(ledger, reason string, marketDay time.Time, _ string) (store.BreakerState, error) {
+func (m *memoryStore) ResumeBreaker(ledger, reason string, marketDay, observedAt time.Time, _ string) (store.BreakerState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.breakerStates[ledger]
 	if !state.Halted || state.Reason != reason {
 		return state, store.ErrBreakerNotActive
 	}
+	if reason == "daily_loss" {
+		start := marketDay.UTC()
+		end := marketDay.AddDate(0, 0, 1).UTC()
+		if state.UpdatedAt.Before(start) || !state.UpdatedAt.Before(end) {
+			return state, store.ErrBreakerNotActive
+		}
+	}
 	m.breakerOverrides[ledger+"\x00"+reason+"\x00"+marketDay.Format(time.DateOnly)] = true
 	state.Halted, state.Reason = false, ""
-	state.UpdatedAt = marketDay
+	state.UpdatedAt = observedAt
 	m.events = append(m.events, "breaker")
 	state.EventID = int64(len(m.events))
 	m.breakerStates[ledger] = state
@@ -500,6 +510,9 @@ func (m *memoryStore) ResumeBreaker(ledger, reason string, marketDay time.Time, 
 }
 
 func (m *memoryStore) DatabaseNow() (time.Time, error) {
+	if m.databaseNowErr != nil {
+		return time.Time{}, m.databaseNowErr
+	}
 	if m.databaseNow != nil {
 		return m.databaseNow(), nil
 	}
@@ -1603,6 +1616,19 @@ func TestConcurrentOpensCannotExceedEitherLedgerCap(t *testing.T) {
 }
 
 func TestMarketDayWindowUsesNewYorkBoundaries(t *testing.T) {
+	winterBoundary := time.Date(2026, time.January, 15, 5, 0, 0, 0, time.UTC)
+	winterBefore, err := marketDayWindow(winterBoundary.Add(-time.Nanosecond), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winterAt, err := marketDayWindow(winterBoundary, "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if winterBefore.day.Format(time.DateOnly) != "2026-01-14" || winterAt.day.Format(time.DateOnly) != "2026-01-15" {
+		t.Fatalf("winter boundary before=%s at=%s", winterBefore.day, winterAt.day)
+	}
+
 	winter, err := marketDayWindow(time.Date(2026, time.January, 16, 0, 30, 0, 0, time.UTC), "America/New_York")
 	if err != nil {
 		t.Fatal(err)
@@ -1621,6 +1647,31 @@ func TestMarketDayWindowUsesNewYorkBoundaries(t *testing.T) {
 	}
 	if got := dstStart.end.Sub(dstStart.start); got != 23*time.Hour {
 		t.Fatalf("DST-start market day length=%s, want 23h", got)
+	}
+
+	summerBoundary := time.Date(2026, time.July, 17, 4, 0, 0, 0, time.UTC)
+	summerBefore, err := marketDayWindow(summerBoundary.Add(-time.Nanosecond), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summerAt, err := marketDayWindow(summerBoundary, "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summerBefore.day.Format(time.DateOnly) != "2026-07-16" || summerAt.day.Format(time.DateOnly) != "2026-07-17" {
+		t.Fatalf("summer boundary before=%s at=%s", summerBefore.day, summerAt.day)
+	}
+
+	dstEnd, err := marketDayWindow(time.Date(2026, time.November, 1, 16, 0, 0, 0, time.UTC), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dstEnd.end.Sub(dstEnd.start); got != 25*time.Hour {
+		t.Fatalf("DST-end market day length=%s, want 25h", got)
+	}
+
+	if _, err := marketDayWindow(time.Now(), "Not/A_Timezone"); err == nil {
+		t.Fatal("invalid market timezone accepted")
 	}
 }
 

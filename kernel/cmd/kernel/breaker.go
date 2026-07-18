@@ -4,9 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
-	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/store"
 )
 
@@ -28,17 +26,16 @@ func (s *server) postBreakerResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var state store.BreakerState
-	err := s.store.WithLedgerLock(input.Ledger == "shadow", time.Time{}, func(gate store.OperationGate) error {
-		now, err := gate.DatabaseNow()
+	err := s.store.WithLedgerLock(input.Ledger == "shadow", func(gate store.OperationGate) error {
+		window, err := s.databaseMarketWindow(gate)
 		if err != nil {
 			return err
 		}
-		window, err := marketDayWindow(now, config.Env("TZ_MARKET", "America/New_York"))
+		state, err = gate.ResumeBreaker(input.Ledger, input.Reason, window.day, window.asOf, authenticatedSubject(r))
 		if err != nil {
 			return err
 		}
-		state, err = gate.ResumeBreaker(input.Ledger, input.Reason, window.day, authenticatedSubject(r))
-		return err
+		return s.ensureMarketDay(gate, window)
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrBreakerNotActive) {

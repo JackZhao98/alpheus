@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,59 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 		if local != int64(units.MustMicros("-120")) || provider != int64(providerLower) || effective != int64(providerLower) {
 			t.Fatalf("persisted pnl=%d/%d/%d", local, provider, effective)
 		}
+		assertM3CEventObservation(t, s, "breaker", start.Add(time.Hour))
+		assertM3CEventObservation(t, s, "pnl_divergence", start.Add(time.Hour))
+	})
+
+	t.Run("rejects noncanonical market-day windows before writes", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			input DayRiskInput
+		}{
+			{
+				name: "date and window disagree",
+				input: DayRiskInput{
+					Ledger: "live", MarketDay: day.AddDate(0, 0, 1), Start: start, End: end,
+					ObservedAt: start.Add(time.Hour),
+				},
+			},
+			{
+				name: "DST spring day forced to 24 hours",
+				input: func() DayRiskInput {
+					dstDay := time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC)
+					dstStart, _, err := marketDayBounds(dstDay, "America/New_York")
+					if err != nil {
+						t.Fatal(err)
+					}
+					return DayRiskInput{
+						Ledger: "live", MarketDay: dstDay, Start: dstStart, End: dstStart.Add(24 * time.Hour),
+						ObservedAt: dstStart.Add(time.Hour),
+					}
+				}(),
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				resetM3CIntegrationData(t, s)
+				err := s.WithLedgerLock(false, func(gate OperationGate) error {
+					_, err := gate.EvaluateDayRisk(tc.input)
+					return err
+				})
+				if err == nil || !strings.Contains(err.Error(), "does not match configured timezone") {
+					t.Fatalf("noncanonical window err=%v", err)
+				}
+				var writes int
+				if err := s.DB.QueryRow(`SELECT
+					(SELECT count(*) FROM daily_pnl) +
+					(SELECT count(*) FROM breaker_override) +
+					(SELECT count(*) FROM events)`).Scan(&writes); err != nil {
+					t.Fatal(err)
+				}
+				if writes != 0 {
+					t.Fatalf("invalid market window produced %d durable writes", writes)
+				}
+			})
+		}
 	})
 
 	t.Run("daily loss latches for the market day", func(t *testing.T) {
@@ -117,6 +171,7 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 			units.MustMicros("220"), units.MustMicros("100"), 0, start.Add(time.Hour))
 		input := DayRiskInput{
 			Ledger: "live", MarketDay: day, Start: start, End: end,
+			ObservedAt:      start.Add(6 * time.Hour),
 			MaxDailyLossPct: units.MustPercent("40"), ConsecutiveLossDaysHalt: 5,
 			PnLReconciliationLimit: units.MustMicros("0.01"),
 		}
@@ -124,6 +179,17 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 		if !stats.Halted || stats.Reason != "daily_loss" {
 			t.Fatalf("initial latch stats=%+v", stats)
 		}
+		var breakerUpdatedAt, pnlUpdatedAt time.Time
+		if err := s.DB.QueryRow(`SELECT updated_at FROM breaker_state WHERE ledger='live'`).Scan(&breakerUpdatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.QueryRow(`SELECT updated_at FROM daily_pnl WHERE market_day=$1 AND ledger='live'`, day).Scan(&pnlUpdatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if !breakerUpdatedAt.Equal(input.ObservedAt) || !pnlUpdatedAt.Equal(input.ObservedAt) {
+			t.Fatalf("observation timestamp breaker=%s pnl=%s want=%s", breakerUpdatedAt, pnlUpdatedAt, input.ObservedAt)
+		}
+		assertM3CEventObservation(t, s, "breaker", input.ObservedAt)
 		seedPnLClose(t, s, "live", "LATCH-PROFIT", "equity", 1, units.MustQty("1"),
 			units.MustMicros("100"), units.MustMicros("230"), 0, start.Add(2*time.Hour))
 		stats = evaluateM3CDay(t, s, input, units.MustMicros("300"))
@@ -170,8 +236,8 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 
 	t.Run("loss streak resume is same-day only", func(t *testing.T) {
 		resetM3CIntegrationData(t, s)
-		if err := s.WithLedgerLock(false, day, func(gate OperationGate) error {
-			_, err := gate.ResumeBreaker("live", "loss_streak", day, "admin")
+		if err := s.WithLedgerLock(false, func(gate OperationGate) error {
+			_, err := gate.ResumeBreaker("live", "loss_streak", day, start.Add(time.Hour), "admin")
 			return err
 		}); !errors.Is(err, ErrBreakerNotActive) {
 			t.Fatalf("preemptive resume err=%v", err)
@@ -198,9 +264,9 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 			t.Fatalf("streak stats=%+v", stats)
 		}
 		var resumed BreakerState
-		if err := s.WithLedgerLock(false, day, func(gate OperationGate) error {
+		if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 			var err error
-			resumed, err = gate.ResumeBreaker("live", "loss_streak", day, "admin")
+			resumed, err = gate.ResumeBreaker("live", "loss_streak", day, start.Add(2*time.Hour), "admin")
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -208,6 +274,18 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 		if resumed.Halted {
 			t.Fatalf("resumed=%+v", resumed)
 		}
+		var overrideTS, breakerUpdatedAt time.Time
+		if err := s.DB.QueryRow(`SELECT ts FROM breaker_override
+			WHERE ledger='live' AND reason='loss_streak' AND market_day=$1`, day).Scan(&overrideTS); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.QueryRow(`SELECT updated_at FROM breaker_state WHERE ledger='live'`).Scan(&breakerUpdatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if want := start.Add(2 * time.Hour); !overrideTS.Equal(want) || !breakerUpdatedAt.Equal(want) {
+			t.Fatalf("resume timestamp override=%s breaker=%s want=%s", overrideTS, breakerUpdatedAt, want)
+		}
+		assertM3CEventObservation(t, s, "breaker", start.Add(2*time.Hour))
 		stats = evaluateM3CDay(t, s, DayRiskInput{
 			Ledger: "live", MarketDay: day, Start: start, End: end,
 			ConsecutiveLossDaysHalt: 5, PnLReconciliationLimit: units.MustMicros("0.01"),
@@ -231,13 +309,75 @@ func TestM3CRealizedPnLAndBreakersPostgres(t *testing.T) {
 			t.Fatalf("override leaked into next day: %+v", stats)
 		}
 	})
+
+	t.Run("stale prior-day daily loss cannot pre-authorize today", func(t *testing.T) {
+		resetM3CIntegrationData(t, s)
+		nextDay := day.AddDate(0, 0, 1)
+		nextStart, nextEnd, err := marketDayBounds(nextDay, "America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+		priorObservedAt := start.Add(2 * time.Hour)
+		if _, err := s.DB.Exec(`UPDATE breaker_state
+			SET halted=true,reason='daily_loss',updated_at=$2 WHERE ledger=$1`, "live", priorObservedAt); err != nil {
+			t.Fatal(err)
+		}
+		err = s.WithLedgerLock(false, func(gate OperationGate) error {
+			_, err := gate.ResumeBreaker("live", "daily_loss", nextDay, nextStart.Add(time.Hour), "admin")
+			return err
+		})
+		if !errors.Is(err, ErrBreakerNotActive) {
+			t.Fatalf("stale daily-loss resume err=%v", err)
+		}
+		var overrideCount, eventCount int
+		var halted bool
+		var reason string
+		var updatedAt time.Time
+		if err := s.DB.QueryRow(`SELECT count(*) FROM breaker_override`).Scan(&overrideCount); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.QueryRow(`SELECT count(*) FROM events`).Scan(&eventCount); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.QueryRow(`SELECT halted,reason,updated_at FROM breaker_state WHERE ledger='live'`).Scan(
+			&halted, &reason, &updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if overrideCount != 0 || eventCount != 0 || !halted || reason != "daily_loss" || !updatedAt.Equal(priorObservedAt) {
+			t.Fatalf("stale resume mutated state override=%d events=%d halted=%v reason=%q updated=%s",
+				overrideCount, eventCount, halted, reason, updatedAt)
+		}
+		stats := evaluateM3CDay(t, s, DayRiskInput{
+			Ledger: "live", MarketDay: nextDay, Start: nextStart, End: nextEnd,
+			MaxDailyLossPct: units.MustPercent("40"), ConsecutiveLossDaysHalt: 5,
+			PnLReconciliationLimit: units.MustMicros("0.01"),
+		}, units.MustMicros("300"))
+		if stats.Halted {
+			t.Fatalf("next-day evaluation did not clear stale halt: %+v", stats)
+		}
+	})
+}
+
+func assertM3CEventObservation(t *testing.T, s *Store, kind string, want time.Time) {
+	t.Helper()
+	var eventTS, payloadObservedAt time.Time
+	if err := s.DB.QueryRow(`SELECT ts,(payload->>'observed_at')::timestamptz
+		FROM events WHERE kind=$1 ORDER BY id DESC LIMIT 1`, kind).Scan(&eventTS, &payloadObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !eventTS.Equal(want) || !payloadObservedAt.Equal(want) {
+		t.Fatalf("%s event timestamp ts=%s payload=%s want=%s", kind, eventTS, payloadObservedAt, want)
+	}
 }
 
 func evaluateM3CDay(t *testing.T, s *Store, input DayRiskInput, equity units.Micros) DayRiskStats {
 	t.Helper()
+	if input.ObservedAt.IsZero() {
+		input.ObservedAt = input.Start.Add(time.Hour)
+	}
 	insertDayOpenForTest(t, s, input.MarketDay, input.Ledger, equity)
 	var stats DayRiskStats
-	if err := s.WithLedgerLock(input.Ledger == "shadow", input.MarketDay, func(gate OperationGate) error {
+	if err := s.WithLedgerLock(input.Ledger == "shadow", func(gate OperationGate) error {
 		var err error
 		stats, err = gate.EvaluateDayRisk(input)
 		return err
@@ -268,7 +408,7 @@ func seedPnLOpenOnly(t *testing.T, s *Store, ledger, symbol, kind string, multip
 	if ledger == "shadow" {
 		intent, clientID = "paper_place", "shadow:"+attemptID
 	}
-	if err := s.WithProposalLock(nil, ledger == "shadow", nil, func(gate OperationGate) error {
+	if err := s.WithProposalLock(nil, ledger == "shadow", false, func(gate OperationGate) error {
 		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
 			ID: attemptID, OperationID: operationID, Seq: 1, Intent: intent,
 			ClientOrderID: clientID, State: "settled", Qty: qty, Limit: units.MustMicros("1"),
@@ -314,7 +454,7 @@ func seedPnLClose(t *testing.T, s *Store, ledger, symbol, kind string, multiplie
 	if ledger == "shadow" {
 		intent, clientID = "paper_place", "shadow:"+attemptID
 	}
-	if err := s.WithProposalLock(nil, ledger == "shadow", nil, func(gate OperationGate) error {
+	if err := s.WithProposalLock(nil, ledger == "shadow", false, func(gate OperationGate) error {
 		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
 			ID: attemptID, OperationID: closeOperationID, Seq: 1, Intent: intent,
 			ClientOrderID: clientID, State: "settled", Qty: qty, Limit: exitPrice,

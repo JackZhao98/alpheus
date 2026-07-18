@@ -49,6 +49,7 @@ type server struct {
 	runtimeURL             string
 	runtimeHTTP            *http.Client
 	consoleOrigin          string
+	marketTZ               string
 	haltMu                 sync.RWMutex
 	halted                 bool
 	haltReason             string
@@ -62,8 +63,8 @@ type storeAPI interface {
 	InsertEvent(kind string, payload any) error
 	InsertEventWithID(kind string, payload any) (int64, error)
 	FindOperationByIdempotency(subject, key string) (*store.OperationRow, error)
-	WithProposalLock(identity *store.IdempotencyIdentity, shadow bool, marketDay *time.Time, fn func(store.OperationGate) error) error
-	WithLedgerLock(shadow bool, marketDay time.Time, fn func(store.OperationGate) error) error
+	WithProposalLock(identity *store.IdempotencyIdentity, shadow, lockLedger bool, fn func(store.OperationGate) error) error
+	WithLedgerLock(shadow bool, fn func(store.OperationGate) error) error
 	WithReviewLock(id string, fn func(store.OperationGate, *store.OperationRow) error) error
 	Event(kind string, payload any)
 	SetOperationStatus(id, status string, verdict any) error
@@ -104,6 +105,7 @@ type storeAPI interface {
 }
 
 type dayStateReader interface {
+	DatabaseNow() (time.Time, error)
 	CountTradesForDay(shadow bool, start, end time.Time) (int, error)
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
@@ -208,11 +210,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	marketTZ := config.Env("TZ_MARKET", "America/New_York")
 	st, err := store.Open(store.Config{
 		URL:           config.Env("DATABASE_URL", "postgresql://alpheus:alpheus@localhost:5432/alpheus?sslmode=disable"),
 		MigrationsDir: config.Env("MIGRATIONS_DIR", "../db/migrations"),
 		Timeout:       dbTimeout,
-		MarketTZ:      config.Env("TZ_MARKET", "America/New_York"),
+		MarketTZ:      marketTZ,
 	})
 	if err != nil {
 		log.Fatalf("store: %v", err)
@@ -269,6 +272,7 @@ func main() {
 		proposalTTL:   proposalTTL,
 		runtimeURL:    config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
 		consoleOrigin: consoleOrigin,
+		marketTZ:      marketTZ,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
@@ -399,6 +403,11 @@ func writeInternalError(w http.ResponseWriter, context string, err error) {
 }
 
 func writeStoreError(w http.ResponseWriter, context string, err error) {
+	if errors.Is(err, errMarketDayAdvanced) {
+		log.Printf("%s: %v", context, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market day advanced; retry"})
+		return
+	}
 	if errors.Is(err, store.ErrUnavailable) {
 		log.Printf("%s: %v", context, err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "database unavailable"})
@@ -431,10 +440,37 @@ func validUUID(id string) bool {
 type marketWindow struct {
 	day        time.Time
 	start, end time.Time
+	asOf       time.Time
 }
 
-func currentMarketWindow() (marketWindow, error) {
-	return marketDayWindow(time.Now(), config.Env("TZ_MARKET", "America/New_York"))
+type databaseClock interface {
+	DatabaseNow() (time.Time, error)
+}
+
+func (s *server) marketTimezone() string {
+	if s.marketTZ != "" {
+		return s.marketTZ
+	}
+	return config.Env("TZ_MARKET", "America/New_York")
+}
+
+func (s *server) databaseMarketWindow(clock databaseClock) (marketWindow, error) {
+	now, err := clock.DatabaseNow()
+	if err != nil {
+		return marketWindow{}, err
+	}
+	return marketDayWindow(now, s.marketTimezone())
+}
+
+func (s *server) ensureMarketDay(clock databaseClock, expected marketWindow) error {
+	current, err := s.databaseMarketWindow(clock)
+	if err != nil {
+		return err
+	}
+	if !current.day.Equal(expected.day) {
+		return errMarketDayAdvanced
+	}
+	return nil
 }
 
 func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
@@ -444,7 +480,9 @@ func marketDayWindow(now time.Time, tzName string) (marketWindow, error) {
 	}
 	localNow := now.In(loc)
 	day := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, loc)
-	return marketWindow{day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC()}, nil
+	return marketWindow{
+		day: day, start: day.UTC(), end: day.AddDate(0, 0, 1).UTC(), asOf: now.UTC(),
+	}, nil
 }
 
 // spendableBuyingPower treats the account provider's buying_power as the
@@ -478,14 +516,21 @@ func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, sha
 	if err != nil {
 		return risk.DayState{}, err
 	}
+	if err := s.ensureMarketDay(gate, window); err != nil {
+		return risk.DayState{}, err
+	}
 	stats, err := gate.EvaluateDayRisk(store.DayRiskInput{
 		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
+		ObservedAt:              window.asOf,
 		ProviderRealizedPnL:     providerPnL,
 		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
 		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
 		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
 	})
 	if err != nil {
+		return risk.DayState{}, err
+	}
+	if err := s.ensureMarketDay(gate, window); err != nil {
 		return risk.DayState{}, err
 	}
 	if !halted && stats.Halted {
@@ -510,7 +555,7 @@ func (s *server) providerRealizedPnL(ctx context.Context, shadow bool, marketDay
 		return nil, nil
 	}
 	providerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-	snapshot, err := provider.RealizedPnL(providerCtx, marketDay, config.Env("TZ_MARKET", "America/New_York"))
+	snapshot, err := provider.RealizedPnL(providerCtx, marketDay, s.marketTimezone())
 	cancel()
 	if err != nil || snapshot.AsOf.IsZero() {
 		return nil, fmt.Errorf("%w: realized PnL", errBrokerDataUnavailable)
@@ -555,50 +600,78 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account provider unavailable"})
 		return
 	}
-	acct, err := account.Account(r.Context())
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "account data unavailable"})
-		return
-	}
-	pos, err := account.Positions(r.Context())
+	brokerCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+	pos, err := account.Positions(brokerCtx)
+	cancel()
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": "position data unavailable"})
 		return
 	}
-	window, err := currentMarketWindow()
-	if err != nil {
-		writeInternalError(w, "derive market day", err)
-		return
-	}
-	orders, err := account.OpenOrders(r.Context())
+	brokerCtx, cancel = context.WithTimeout(r.Context(), s.brokerCallTimeout())
+	orders, err := account.OpenOrders(brokerCtx)
+	cancel()
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": "order data unavailable"})
 		return
 	}
-	fills, err := account.RecentFills(r.Context(), window.start)
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "fill data unavailable"})
-		return
-	}
 	halted, haltReason := s.haltSnapshot()
+	var acct broker.AccountState
+	var window marketWindow
 	var liveDay, shadowDay risk.DayState
-	if err := s.store.WithLedgerLock(false, window.day, func(gate store.OperationGate) error {
+	if err := s.store.WithLedgerLock(false, func(gate store.OperationGate) error {
+		accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
 		var err error
+		acct, err = account.Account(accountCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%w: account", errBrokerDataUnavailable)
+		}
+		window, err = s.databaseMarketWindow(gate)
+		if err != nil {
+			return err
+		}
 		liveDay, err = s.dayStateAtAccount(r.Context(), gate, false, acct, window, halted, haltReason)
 		return err
 	}); err != nil {
+		if errors.Is(err, errBrokerDataUnavailable) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "account data unavailable"})
+			return
+		}
 		writeStoreError(w, "get live day state", err)
 		return
 	}
-	if err := s.store.WithLedgerLock(true, window.day, func(gate store.OperationGate) error {
+	if err := s.store.WithLedgerLock(true, func(gate store.OperationGate) error {
 		shadowAccount, err := s.shadowAccountSnapshot(r.Context(), gate)
 		if err != nil {
 			return err
 		}
-		shadowDay, err = s.dayStateAtAccount(r.Context(), gate, true, shadowAccount, window, halted, haltReason)
+		shadowWindow, err := s.databaseMarketWindow(gate)
+		if err != nil {
+			return err
+		}
+		if !shadowWindow.day.Equal(window.day) {
+			return errMarketDayAdvanced
+		}
+		shadowDay, err = s.dayStateAtAccount(r.Context(), gate, true, shadowAccount, shadowWindow, halted, haltReason)
 		return err
 	}); err != nil {
 		writeStoreError(w, "get shadow day state", err)
+		return
+	}
+	brokerCtx, cancel = context.WithTimeout(r.Context(), s.brokerCallTimeout())
+	fills, err := account.RecentFills(brokerCtx, window.start)
+	cancel()
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": "fill data unavailable"})
+		return
+	}
+	// RecentFills is fetched after both ledger snapshots. Re-check the database
+	// clock before publishing so a request that crosses market midnight never
+	// combines a prior-day risk snapshot with next-day fills.
+	if err := s.store.WithLedgerLock(false, func(gate store.OperationGate) error {
+		return s.ensureMarketDay(gate, window)
+	}); err != nil {
+		writeStoreError(w, "verify state market day", err)
 		return
 	}
 	liveExecutionGate, err := s.store.GetLiveExecutionGate()
@@ -615,7 +688,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		"live_execution_gate": liveExecutionGate,
 		"mode":                s.tradingMode(),
 		"source":              "kernel",
-		"as_of":               time.Now().UTC(),
+		"as_of":               window.asOf,
 	})
 }
 
@@ -648,11 +721,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	if s.tradingMode() == config.ModeShadow {
 		op.Shadow = true
 	}
-	window, err := currentMarketWindow()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
+	var window marketWindow
 	var quote *broker.Quote
 	if op.Action == "open" || op.Action == "close" {
 		sym := op.Symbol
@@ -691,11 +760,13 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	var replay *store.OperationRow
 	var executionAttempt *store.ExecutionAttempt
 	var committedProposalError error
-	var marketDayLock *time.Time
-	if op.Action == "open" {
-		marketDayLock = &window.day
-	}
-	if err := s.store.WithProposalLock(identity, op.Shadow, marketDayLock, func(gate store.OperationGate) error {
+	if err := s.store.WithProposalLock(identity, op.Shadow, op.Action == "open", func(gate store.OperationGate) error {
+		verifyOpenMarketDay := func() error {
+			if op.Action != "open" {
+				return nil
+			}
+			return s.ensureMarketDay(gate, window)
+		}
 		if identity != nil {
 			existing, err := gate.FindOperationByIdempotency(identity.Subject, identity.Key)
 			if err != nil {
@@ -727,11 +798,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			// Derive the market day from an advancing database clock after the
 			// bounded account read. PostgreSQL now() is transaction-start time and
 			// would stamp the old day after a lock wait across midnight.
-			databaseNow, err := gate.DatabaseNow()
-			if err != nil {
-				return err
-			}
-			window, err = marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
+			window, err = s.databaseMarketWindow(gate)
 			if err != nil {
 				return err
 			}
@@ -892,7 +959,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if (v.Class != "A" && v.Class != "B") || op.Action == "tighten_stop" {
-			return nil
+			return verifyOpenMarketDay()
 		}
 		attempt := store.ExecutionAttempt{
 			ID: store.NewID(), OperationID: opID, Seq: 1, State: "pending",
@@ -961,7 +1028,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			attempt.Intent = "cancel"
 			attempt.TargetBrokerOrderID = op.BrokerOrderID
 		default:
-			return nil
+			return verifyOpenMarketDay()
 		}
 		if err := gate.InsertExecutionAttempt(attempt); err != nil {
 			return err
@@ -983,7 +1050,9 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		executionAttempt = &attempt
-		return nil
+		// Keep this as the final statement in the open transaction. If staging
+		// crossed market midnight, every entitlement row rolls back together.
+		return verifyOpenMarketDay()
 	}); err != nil {
 		if errors.Is(err, errIdempotencyKeyReused) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "idempotency_key_reused"})
@@ -1153,6 +1222,7 @@ var (
 	errInvalidClose                 = errors.New("invalid close")
 	errPaperExecutionFailed         = errors.New("paper execution failed")
 	errReviewGateRejected           = errors.New("review gate rejected")
+	errMarketDayAdvanced            = errors.New("market day advanced during locked decision")
 )
 
 func ledgerName(shadow bool) string {
@@ -2034,14 +2104,11 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return fmt.Errorf("%w: account", errBrokerDataUnavailable)
 		}
-		databaseNow, err := gate.DatabaseNow()
+		window, err := s.databaseMarketWindow(gate)
 		if err != nil {
 			return err
 		}
-		window, err := marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
-		if err != nil {
-			return err
-		}
+		databaseNow := window.asOf
 		day, err := s.dayStateAtAccount(r.Context(), gate, prepared.Shadow, account, window, halted, haltReason)
 		if err != nil {
 			return err
@@ -2082,9 +2149,14 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		if err := gate.SetOperationStatus(id, "approved", approval); err != nil {
 			return err
 		}
-		return gate.InsertEvent("operation_reviewed", map[string]any{
+		if err := gate.InsertEvent("operation_reviewed", map[string]any{
 			"operation_id": id, "approval": approval,
-		})
+		}); err != nil {
+			return err
+		}
+		// Approval and all of its entitlement rows share one database-derived
+		// market day or the review transaction is rolled back.
+		return s.ensureMarketDay(gate, window)
 	})
 	if errors.Is(err, store.ErrOperationNotPending) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not pending review"})

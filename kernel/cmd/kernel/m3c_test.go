@@ -16,11 +16,35 @@ import (
 
 type pnlAccountProvider struct {
 	broker.AccountProvider
-	pnl units.Micros
+	pnl    units.Micros
+	onRead func()
 }
 
 func (p *pnlAccountProvider) RealizedPnL(context.Context, time.Time, string) (broker.RealizedPnLSnapshot, error) {
+	if p.onRead != nil {
+		p.onRead()
+	}
 	return broker.RealizedPnLSnapshot{Total: p.pnl, Source: "test", AsOf: time.Now().UTC()}, nil
+}
+
+func TestStateRejectsProviderReadThatCrossesMarketDay(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	venue := newFake("300")
+	st := newMemoryStore()
+	databaseTime := time.Date(2026, 1, 16, 4, 59, 59, 0, time.UTC)
+	st.databaseNow = func() time.Time { return databaseTime }
+	account := &pnlAccountProvider{AccountProvider: venue}
+	account.onRead = func() {
+		databaseTime = time.Date(2026, 1, 16, 5, 0, 0, 0, time.UTC)
+	}
+	s := &server{limits: dualLedgerLimits(), account: account, broker: venue, store: st}
+	w := routeRequest(s.routes(), http.MethodGet, "/state", "", "kernel-secret")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "market day advanced") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if st.breakerStates["live"].Halted {
+		t.Fatalf("cross-day provider read changed breaker: %+v", st.breakerStates["live"])
+	}
 }
 
 func TestDailyLossBreakerRejectsOpenButNotCloseOrShadow(t *testing.T) {
@@ -104,6 +128,38 @@ func TestBreakerResumeSuppressesSameDayAndExpiresNextDay(t *testing.T) {
 	}
 }
 
+func TestBreakerResumeRejectsStalePriorDayDailyLoss(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	venue := newFake("300")
+	st := newMemoryStore()
+	dayOne := time.Date(2026, 7, 17, 16, 0, 0, 0, time.UTC)
+	dayTwo := dayOne.AddDate(0, 0, 1)
+	st.databaseNow = func() time.Time { return dayTwo }
+	st.breakerStates["live"] = store.BreakerState{
+		Ledger: "live", Halted: true, Reason: "daily_loss", UpdatedAt: dayOne,
+	}
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(),
+		account: venue, broker: venue, store: st,
+	}
+	w := routeRequest(s.routes(), http.MethodPost, "/breaker/resume",
+		`{"ledger":"live","reason":"daily_loss"}`, "admin-secret")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "breaker_not_active") {
+		t.Fatalf("stale resume status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(st.breakerOverrides) != 0 {
+		t.Fatalf("stale resume created override: %v", st.breakerOverrides)
+	}
+	if state := st.breakerStates["live"]; !state.Halted || state.Reason != "daily_loss" || !state.UpdatedAt.Equal(dayOne) {
+		t.Fatalf("stale resume changed breaker: %+v", state)
+	}
+	w = routeRequest(s.routes(), http.MethodGet, "/state", "", "kernel-secret")
+	if w.Code != http.StatusOK || st.breakerStates["live"].Halted {
+		t.Fatalf("next-day evaluation did not clear stale daily halt: status=%d body=%s state=%+v",
+			w.Code, w.Body.String(), st.breakerStates["live"])
+	}
+}
+
 func TestProviderPnLUsesMoreLossMakingValueAndDivergenceDoesNotBlockClose(t *testing.T) {
 	venue := newFake("300")
 	setQuote(venue, "DIVERGE", "9.90", "10", 1_000)
@@ -116,7 +172,7 @@ func TestProviderPnLUsesMoreLossMakingValueAndDivergenceDoesNotBlockClose(t *tes
 	st.realizedPnL["live"] = units.MustMicros("-10")
 	st.exposureQty[memoryExposureKey("live", "DIVERGE", "equity")] = units.MustQty("1")
 	s := &server{limits: dualLedgerLimits(), account: account, broker: venue, store: st}
-	window, err := currentMarketWindow()
+	window, err := s.databaseMarketWindow(st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +181,7 @@ func TestProviderPnLUsesMoreLossMakingValueAndDivergenceDoesNotBlockClose(t *tes
 		t.Fatal(err)
 	}
 	var day risk.DayState
-	if err := st.WithLedgerLock(false, window.day, func(gate store.OperationGate) error {
+	if err := st.WithLedgerLock(false, func(gate store.OperationGate) error {
 		var err error
 		day, err = s.dayStateAtAccount(context.Background(), gate, false, acct, window, false, "")
 		return err
@@ -136,7 +192,7 @@ func TestProviderPnLUsesMoreLossMakingValueAndDivergenceDoesNotBlockClose(t *tes
 		t.Fatalf("provider lag day=%+v", day)
 	}
 	account.pnl = units.MustMicros("-20")
-	if err := st.WithLedgerLock(false, window.day, func(gate store.OperationGate) error {
+	if err := st.WithLedgerLock(false, func(gate store.OperationGate) error {
 		var err error
 		day, err = s.dayStateAtAccount(context.Background(), gate, false, acct, window, false, "")
 		return err

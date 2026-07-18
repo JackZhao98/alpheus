@@ -79,6 +79,30 @@ func TestM4ApproveStagesOneAtomicEntitlementAndExecutes(t *testing.T) {
 	}
 }
 
+func TestM4ApprovalDoesNotExecuteWhenStagingCrossesMarketDay(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	s, st, venue := newM4Server()
+	id := proposeM4ClassC(t, s, venue, "M4-MIDNIGHT")
+	beforeMidnight := time.Date(2026, 1, 16, 4, 59, 59, 0, time.UTC)
+	afterMidnight := time.Date(2026, 1, 16, 5, 0, 0, 0, time.UTC)
+	clockCalls := 0
+	st.databaseNow = func() time.Time {
+		clockCalls++
+		if clockCalls >= 5 {
+			return afterMidnight
+		}
+		return beforeMidnight
+	}
+	response, body := reviewM4(s, id, "approved")
+	if response.Code != http.StatusServiceUnavailable || body["error"] != "market day advanced; retry" {
+		t.Fatalf("approval status=%d body=%v clock_calls=%d", response.Code, body, clockCalls)
+	}
+	fills, err := venue.RecentFills(context.Background(), time.Time{})
+	if err != nil || len(fills) != 0 {
+		t.Fatalf("cross-day approval reached broker fills=%v err=%v", fills, err)
+	}
+}
+
 func TestM4ApprovalAbsoluteFailureRollsBackAndRemainsReviewable(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mutate func(*memoryStore, *broker.Fake)
@@ -269,7 +293,7 @@ func TestM4CommittedApprovalRecoversAfterOriginalProposalTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	var attempt *store.ExecutionAttempt
-	if err := st.WithProposalLock(nil, false, nil, func(gate store.OperationGate) error {
+	if err := st.WithProposalLock(nil, false, false, func(gate store.OperationGate) error {
 		var err error
 		attempt, err = s.stageApprovedOpen(gate, operationID, op, time.Now().UTC())
 		return err

@@ -21,6 +21,7 @@ import (
 const reconcileBatchSize = 100
 
 type excludingDayStateReader interface {
+	DatabaseNow() (time.Time, error)
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
@@ -48,14 +49,21 @@ func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingD
 	if err != nil {
 		return risk.DayState{}, err
 	}
+	if err := s.ensureMarketDay(gate, window); err != nil {
+		return risk.DayState{}, err
+	}
 	stats, err := gate.EvaluateDayRisk(store.DayRiskInput{
 		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
+		ObservedAt:              window.asOf,
 		ProviderRealizedPnL:     providerPnL,
 		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
 		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
 		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
 	})
 	if err != nil {
+		return risk.DayState{}, err
+	}
+	if err := s.ensureMarketDay(gate, window); err != nil {
 		return risk.DayState{}, err
 	}
 	if !halted && stats.Halted {
@@ -299,7 +307,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 		}
 		halted, haltReason := s.haltSnapshot()
 		var verdict risk.Verdict
-		err = s.store.WithLedgerLock(op.Shadow, time.Time{}, func(gate store.OperationGate) error {
+		err = s.store.WithLedgerLock(op.Shadow, func(gate store.OperationGate) error {
 			var account broker.AccountState
 			var err error
 			if op.Shadow {
@@ -312,11 +320,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			if err != nil {
 				return err
 			}
-			databaseNow, err := gate.DatabaseNow()
-			if err != nil {
-				return err
-			}
-			window, err := marketDayWindow(databaseNow, config.Env("TZ_MARKET", "America/New_York"))
+			window, err := s.databaseMarketWindow(gate)
 			if err != nil {
 				return err
 			}
@@ -325,7 +329,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 				return err
 			}
 			verdict = risk.Classify(candidate, s.limits, day, &quote)
-			return nil
+			return s.ensureMarketDay(gate, window)
 		})
 		if err != nil {
 			return err
@@ -354,7 +358,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 		}
 		var positionOK bool
 		shadow := reservation.Ledger == "shadow"
-		err = s.store.WithProposalLock(nil, shadow, nil, func(gate store.OperationGate) error {
+		err = s.store.WithProposalLock(nil, shadow, false, func(gate store.OperationGate) error {
 			if err := gate.LockLedgerSymbol(reservation.Ledger, reservation.Symbol); err != nil {
 				return err
 			}
@@ -508,7 +512,7 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 	}
 	covered := false
 	shadow := reservation.Ledger == "shadow"
-	err = s.store.WithProposalLock(nil, shadow, nil, func(gate store.OperationGate) error {
+	err = s.store.WithProposalLock(nil, shadow, false, func(gate store.OperationGate) error {
 		if err := gate.LockLedgerSymbol(reservation.Ledger, reservation.Symbol); err != nil {
 			return err
 		}

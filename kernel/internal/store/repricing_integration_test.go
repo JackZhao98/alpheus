@@ -44,7 +44,7 @@ func TestM5BRepriceTransfersReservationAtomicallyPostgres(t *testing.T) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, marketDay, func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: "live", MarketDay: marketDay,
 			AuthorizedRisk: reserved, RiskSource: "computed",
@@ -248,7 +248,7 @@ func TestM5BCloseBuyEntitlementCanBeClaimedPostgres(t *testing.T) {
 	}, map[string]any{"class": "A"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, time.Now(), func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertCloseReservation(CloseReservation{
 			ID: reservationID, OperationID: operationID, Ledger: "live", Symbol: "SHORT",
 			OriginalQty: units.MustQty("1"), RemainingQty: units.MustQty("1"), State: "held",

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,29 +211,147 @@ func TestShadowCloseRecoveryUsesOnlyPaperBook(t *testing.T) {
 
 type recentSinceRecorder struct {
 	broker.AccountProvider
-	since time.Time
+	since        time.Time
+	accountCalls int
+	onRecent     func()
+}
+
+func (r *recentSinceRecorder) Account(ctx context.Context) (broker.AccountState, error) {
+	r.accountCalls++
+	return r.AccountProvider.Account(ctx)
 }
 
 func (r *recentSinceRecorder) RecentFills(_ context.Context, since time.Time) ([]broker.ReadFill, error) {
 	r.since = since
+	if r.onRecent != nil {
+		r.onRecent()
+	}
 	return nil, nil
 }
 
-func TestStateQueriesFillsFromCurrentMarketDay(t *testing.T) {
+func TestStateQueriesFillsFromDatabaseMarketDay(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
 	venue := newFake("300")
 	account := &recentSinceRecorder{AccountProvider: venue}
-	s := &server{limits: config.Limits{}, account: account, broker: venue, store: newMemoryStore()}
+	st := newMemoryStore()
+	databaseTime := time.Date(2026, 1, 16, 0, 30, 0, 0, time.UTC)
+	firstClockInsideLiveLock := false
+	clockCalls := 0
+	st.databaseNow = func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			if st.ledgerLocks[0].TryLock() {
+				st.ledgerLocks[0].Unlock()
+			} else {
+				firstClockInsideLiveLock = true
+			}
+		}
+		return databaseTime
+	}
+	s := &server{limits: config.Limits{}, account: account, broker: venue, store: st}
 	w := httptest.NewRecorder()
 	s.getState(w, httptest.NewRequest(http.MethodGet, "/state", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	window, err := currentMarketWindow()
+	window, err := marketDayWindow(databaseTime, "America/New_York")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if account.since.IsZero() || !account.since.Equal(window.start) {
 		t.Fatalf("recent fills since=%s want=%s", account.since, window.start)
+	}
+	if account.accountCalls != 1 || !firstClockInsideLiveLock {
+		t.Fatalf("account_calls=%d first_clock_inside_live_lock=%v", account.accountCalls, firstClockInsideLiveLock)
+	}
+}
+
+func TestStateFailsClosedWhenDatabaseClockUnavailable(t *testing.T) {
+	venue := newFake("300")
+	account := &recentSinceRecorder{AccountProvider: venue}
+	st := newMemoryStore()
+	st.databaseNowErr = store.ErrUnavailable
+	s := &server{limits: config.Limits{}, account: account, broker: venue, store: st}
+	w := httptest.NewRecorder()
+	s.getState(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "database unavailable") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !account.since.IsZero() {
+		t.Fatalf("recent fills queried with fallback market window: %s", account.since)
+	}
+}
+
+func TestStateRejectsRecentFillsThatCrossMarketDay(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	venue := newFake("300")
+	st := newMemoryStore()
+	databaseTime := time.Date(2026, 1, 16, 4, 59, 59, 0, time.UTC)
+	st.databaseNow = func() time.Time { return databaseTime }
+	account := &recentSinceRecorder{AccountProvider: venue}
+	account.onRecent = func() {
+		databaseTime = time.Date(2026, 1, 16, 5, 0, 0, 0, time.UTC)
+	}
+	s := &server{limits: config.Limits{}, account: account, broker: venue, store: st}
+	w := httptest.NewRecorder()
+	s.getState(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "market day advanced") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestStateRejectsLiveShadowMarketDaySplit(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	venue := newFake("300")
+	account := &recentSinceRecorder{AccountProvider: venue}
+	st := newMemoryStore()
+	liveTime := time.Date(2026, 1, 16, 4, 59, 59, 0, time.UTC)
+	shadowTime := time.Date(2026, 1, 16, 5, 0, 0, 0, time.UTC)
+	st.databaseNow = func() time.Time {
+		if st.ledgerLocks[1].TryLock() {
+			st.ledgerLocks[1].Unlock()
+			return liveTime
+		}
+		return shadowTime
+	}
+	s := &server{limits: config.Limits{}, account: account, broker: venue, store: st}
+	w := httptest.NewRecorder()
+	s.getState(w, httptest.NewRequest(http.MethodGet, "/state", nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "market day advanced") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !account.since.IsZero() {
+		t.Fatalf("recent fills queried for mixed-day state: %s", account.since)
+	}
+}
+
+func TestOpenProposalDoesNotExecuteWhenStagingCrossesMarketDay(t *testing.T) {
+	t.Setenv("TZ_MARKET", "America/New_York")
+	venue := newFake("300")
+	setQuote(venue, "MIDNIGHT", "0.99", "1", 1_000)
+	st := newMemoryStore()
+	beforeMidnight := time.Date(2026, 1, 16, 4, 59, 59, 0, time.UTC)
+	afterMidnight := time.Date(2026, 1, 16, 5, 0, 0, 0, time.UTC)
+	clockCalls := 0
+	st.databaseNow = func() time.Time {
+		clockCalls++
+		if clockCalls >= 4 {
+			return afterMidnight
+		}
+		return beforeMidnight
+	}
+	s := &server{limits: dualLedgerLimits(), account: venue, broker: venue, store: st}
+	response, body := postOperation(t, s, `{
+		"action":"open","kind":"equity","underlying":"MIDNIGHT","symbol":"MIDNIGHT",
+		"side":"buy","qty":1,
+		"plan":{"stop":"0.90","invalidation":"x","time_stop":"15:45","target":"1.20"}
+	}`)
+	if response.Code != http.StatusServiceUnavailable || body["error"] != "market day advanced; retry" {
+		t.Fatalf("status=%d body=%v clock_calls=%d", response.Code, body, clockCalls)
+	}
+	fills, err := venue.RecentFills(context.Background(), time.Time{})
+	if err != nil || len(fills) != 0 {
+		t.Fatalf("cross-day proposal reached broker fills=%v err=%v", fills, err)
 	}
 }
 

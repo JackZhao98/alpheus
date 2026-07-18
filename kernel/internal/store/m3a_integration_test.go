@@ -42,7 +42,7 @@ func TestM3AInvalidExecutionEntitlementCannotBeClaimedPostgres(t *testing.T) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, time.Now(), func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertOpenReservation(OpenReservation{
 			ID: reservationID, OperationID: operationID, Ledger: "live",
 			MarketDay: time.Now(), Symbol: "NO-GRANT", Kind: "equity",
@@ -170,7 +170,7 @@ func TestM3AExposureTransferAndFIFOAllocationPostgres(t *testing.T) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	err = s.WithLedgerLock(false, time.Now(), func(gate OperationGate) error {
+	err = s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: openOperationID, Ledger: "live", MarketDay: time.Now(),
 			AuthorizedRisk: units.MustMicros("30"), RiskSource: "computed",
@@ -265,7 +265,7 @@ func TestM3AExposureTransferAndFIFOAllocationPostgres(t *testing.T) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, time.Now(), func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: secondOpenOperationID, Ledger: "live", MarketDay: time.Now(),
 			AuthorizedRisk: units.MustMicros("11"), RiskSource: "computed",
@@ -317,7 +317,7 @@ func TestM3AExposureTransferAndFIFOAllocationPostgres(t *testing.T) {
 	}, map[string]any{"class": "A"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	err = s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+	err = s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
 		if err := gate.LockLedgerSymbol("live", "M3A"); err != nil {
 			return err
 		}
@@ -400,7 +400,7 @@ func TestM3AExposureTransferAndFIFOAllocationPostgres(t *testing.T) {
 	}
 }
 
-func TestStableLedgerLockSpansMarketDaysPostgres(t *testing.T) {
+func TestStableLedgerLockSerializesLiveAcrossConnectionsPostgres(t *testing.T) {
 	databaseURL := os.Getenv("ALPHEUS_TEST_M3A_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("ALPHEUS_TEST_M3A_DATABASE_URL is not set")
@@ -426,13 +426,11 @@ func TestStableLedgerLockSpansMarketDaysPostgres(t *testing.T) {
 	}
 	defer second.DB.Close()
 
-	dayOne := time.Date(2026, 1, 15, 23, 59, 59, 0, time.FixedZone("EST", -5*60*60))
-	dayTwo := dayOne.Add(2 * time.Second)
 	acquired := make(chan struct{})
 	release := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- first.WithLedgerLock(false, dayOne, func(OperationGate) error {
+		firstDone <- first.WithLedgerLock(false, func(OperationGate) error {
 			close(acquired)
 			<-release
 			return nil
@@ -447,7 +445,7 @@ func TestStableLedgerLockSpansMarketDaysPostgres(t *testing.T) {
 	secondAcquired := make(chan struct{})
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- second.WithLedgerLock(false, dayTwo, func(OperationGate) error {
+		secondDone <- second.WithLedgerLock(false, func(OperationGate) error {
 			close(secondAcquired)
 			return nil
 		})
@@ -455,13 +453,13 @@ func TestStableLedgerLockSpansMarketDaysPostgres(t *testing.T) {
 	select {
 	case <-secondAcquired:
 		close(release)
-		t.Fatal("opposite market days acquired different live ledger locks")
+		t.Fatal("second connection acquired the live ledger lock concurrently")
 	case <-time.After(150 * time.Millisecond):
 	}
 
 	shadowDone := make(chan error, 1)
 	go func() {
-		shadowDone <- second.WithLedgerLock(true, dayTwo, func(OperationGate) error { return nil })
+		shadowDone <- second.WithLedgerLock(true, func(OperationGate) error { return nil })
 	}()
 	select {
 	case err := <-shadowDone:
@@ -481,7 +479,7 @@ func TestStableLedgerLockSpansMarketDaysPostgres(t *testing.T) {
 	select {
 	case <-secondAcquired:
 	case <-time.After(time.Second):
-		t.Fatal("second market day did not acquire after live lock release")
+		t.Fatal("second connection did not acquire after live lock release")
 	}
 	if err := <-secondDone; err != nil {
 		t.Fatal(err)
@@ -499,7 +497,7 @@ func settleShadowOpen(t *testing.T, s *Store, symbol string) {
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(true, time.Now(), func(gate OperationGate) error {
+	if err := s.WithLedgerLock(true, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: "shadow", MarketDay: time.Now(),
 			AuthorizedRisk: units.MustMicros("1"), RiskSource: "computed",
@@ -603,7 +601,7 @@ func TestM3AActivationBackfillAndRollbackPostgres(t *testing.T) {
 		}, map[string]any{"class": "B"}, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.WithLedgerLock(true, time.Now(), func(gate OperationGate) error {
+		if err := s.WithLedgerLock(true, func(gate OperationGate) error {
 			return gate.InsertTradeGrant(TradeGrant{
 				OperationID: legacyShadowID, Ledger: "shadow", MarketDay: time.Now(),
 				AuthorizedRisk: units.MustMicros("1"), RiskSource: "computed",
@@ -689,7 +687,7 @@ func TestM3AActivationBackfillAndRollbackPostgres(t *testing.T) {
 		}, map[string]any{"class": "B"}, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.WithLedgerLock(true, time.Now(), func(gate OperationGate) error {
+		if err := s.WithLedgerLock(true, func(gate OperationGate) error {
 			return gate.InsertTradeGrant(TradeGrant{
 				OperationID: newShadowID, Ledger: "shadow", MarketDay: time.Now(),
 				AuthorizedRisk: units.MustMicros("1"), RiskSource: "computed",
@@ -874,7 +872,7 @@ func seedOrphanOpenReservation(t *testing.T, s *Store, symbol, attemptState, ord
 	}, map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithLedgerLock(false, time.Now(), func(gate OperationGate) error {
+	if err := s.WithLedgerLock(false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: "live", MarketDay: time.Now(),
 			AuthorizedRisk: units.MustMicros("10"), RiskSource: "computed",
@@ -938,7 +936,7 @@ func seedHistoricalOpen(t *testing.T, s *Store, symbol string, quantity, filled 
 	if state == "filled" {
 		attemptState = "settled"
 	}
-	if err := s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+	if err := s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
 		if err := gate.InsertTradeGrant(TradeGrant{
 			OperationID: operationID, Ledger: "live", MarketDay: fillTime,
 			AuthorizedRisk: risk, RiskSource: "computed",
@@ -981,7 +979,7 @@ func seedHistoricalClose(t *testing.T, s *Store, symbol string, quantity units.Q
 	}, map[string]any{"class": "A"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+	if err := s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
 		if err := gate.InsertCloseReservation(CloseReservation{
 			ID: reservationID, OperationID: operationID, Ledger: "live", Symbol: symbol,
 			OriginalQty: quantity, RemainingQty: quantity, State: "held",

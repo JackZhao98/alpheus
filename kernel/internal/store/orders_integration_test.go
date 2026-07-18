@@ -39,7 +39,7 @@ func TestM29OrderFillPersistencePostgres(t *testing.T) {
 		map[string]any{"class": "B"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+	if err := s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
 		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
 			ID: seedAttemptID, OperationID: seedOperationID, Seq: 1, Intent: "place",
 			ClientOrderID: seedClientID, State: "settled", Qty: 2,
@@ -81,7 +81,7 @@ func TestM29OrderFillPersistencePostgres(t *testing.T) {
 		map[string]any{"action": "close", "shadow": false}, map[string]any{"class": "A"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	err = s.WithProposalLock(nil, false, nil, func(gate OperationGate) error {
+	err = s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
 		if err := gate.InsertCloseReservation(CloseReservation{
 			ID: reservationID, OperationID: operationID, Ledger: "live", Symbol: "M29",
 			OriginalQty: 2, RemainingQty: 2, State: "held",
