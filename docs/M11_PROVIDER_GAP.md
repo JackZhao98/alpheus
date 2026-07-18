@@ -193,6 +193,15 @@ pretending that non-unique order attributes are a client identity.
   green against migration 0009. A clean-volume isolated Compose build/start
   and the full FakeBroker smoke suite are also green; the test stack and volume
   were removed afterward.
+- Candidate-adoption fault injection covers query failure, zero/multiple/
+  changed candidates, canonical-order failure, provider state drift, and 20
+  concurrent confirmation requests. Every failure retains the grant,
+  reservation, and unknown latch; concurrent confirmation has exactly one
+  winner. A separate PostgreSQL crash-window probe forces the adoption
+  transaction to roll back after an unknown attempt is claimed, then proves a
+  replacement worker can reclaim that same fenced attempt after lease expiry
+  while the unknown latch remains engaged. The isolated database and volume
+  were removed after the test.
 
 ## Remaining gates for M11
 

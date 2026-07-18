@@ -625,11 +625,14 @@ func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string,
 			}
 		}
 		allowed := false
+		recoveringUnknown := expectedState == "claimed" &&
+			m.liveUnknownAttemptID == id && m.liveActiveAttemptID == ""
 		switch expectedState {
 		case "pending":
 			allowed = m.liveActiveAttemptID == "" && m.liveUnknownAttemptID == "" && !unresolvedOther
 		case "claimed":
 			allowed = (m.liveActiveAttemptID == id && m.liveUnknownAttemptID == "") ||
+				recoveringUnknown ||
 				(m.liveActiveAttemptID == "" && m.liveUnknownAttemptID == "" && !unresolvedOther)
 		case "unknown":
 			allowed = (m.liveUnknownAttemptID == id && m.liveActiveAttemptID == "") ||
@@ -638,7 +641,7 @@ func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string,
 		if !allowed {
 			return nil, nil
 		}
-		if expectedState == "unknown" {
+		if expectedState == "unknown" || recoveringUnknown {
 			m.liveUnknownAttemptID = id
 		} else {
 			m.liveActiveAttemptID = id

@@ -412,6 +412,24 @@ func TestConcurrentHumanCandidateAdoptionHasOneWinner(t *testing.T) {
 	}
 }
 
+func TestUnknownRecoveryClaimSurvivesWorkerCrash(t *testing.T) {
+	_, st, _, attempt, _ := m11CandidateAwaitingApproval(t)
+	claimed, err := st.ClaimRecoverableAttemptLive(
+		attempt.ID, "first-recovery-worker", "unknown", attempt.Attempt, time.Now(),
+	)
+	if err != nil || claimed == nil {
+		t.Fatalf("initial recovery claim=%+v err=%v", claimed, err)
+	}
+	reclaimed, err := st.ClaimRecoverableAttemptLive(
+		claimed.ID, "replacement-recovery-worker", "claimed", claimed.Attempt, time.Now().Add(time.Second),
+	)
+	gate, gateErr := st.GetLiveExecutionGate()
+	if err != nil || reclaimed == nil || reclaimed.Attempt != claimed.Attempt+1 || gateErr != nil ||
+		gate.UnknownAttemptID != attempt.ID || gate.ActiveAttemptID != "" {
+		t.Fatalf("reclaimed=%+v gate=%+v err=%v gate_err=%v", reclaimed, gate, err, gateErr)
+	}
+}
+
 func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 	s, st, venue := m11Server("35")
 	setQuote(venue, "EQ", "9.99", "10", 0)

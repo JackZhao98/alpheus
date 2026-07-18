@@ -315,6 +315,7 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 	}
 	useLiveGate := liveGate && intent != "paper_place"
 	var activeAttemptID, unknownAttemptID sql.NullString
+	recoveringUnknown := false
 	if useLiveGate {
 		if err := tx.QueryRowContext(ctx, `SELECT active_attempt_id,unknown_attempt_id
 			FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeAttemptID, &unknownAttemptID); err != nil {
@@ -330,11 +331,14 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 			}
 		}
 		allowed := false
+		recoveringUnknown = expectedState == "claimed" &&
+			unknownAttemptID.String == id && !activeAttemptID.Valid
 		switch expectedState {
 		case "pending":
 			allowed = !activeAttemptID.Valid && !unknownAttemptID.Valid && !unresolvedOther
 		case "claimed":
 			allowed = (activeAttemptID.String == id && !unknownAttemptID.Valid) ||
+				recoveringUnknown ||
 				(!activeAttemptID.Valid && !unknownAttemptID.Valid && !unresolvedOther)
 		case "unknown":
 			allowed = (unknownAttemptID.String == id && !activeAttemptID.Valid) ||
@@ -370,7 +374,7 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 	}
 	if useLiveGate {
 		var query string
-		if expectedState == "unknown" {
+		if expectedState == "unknown" || recoveringUnknown {
 			query = `UPDATE live_execution_gate
 				SET unknown_attempt_id=$1,unknown_since=COALESCE(unknown_since,now()),updated_at=now()
 				WHERE singleton=true`

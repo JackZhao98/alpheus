@@ -112,6 +112,36 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 	if err != nil || recovery == nil {
 		t.Fatalf("recovery=%+v err=%v", recovery, err)
 	}
+	// A worker or its adoption transaction can die after claiming an unknown
+	// attempt. The durable unknown latch must remain engaged, but the same
+	// fenced attempt must become recoverable again after the claim lease.
+	updated, resolveErr := s.ResolveAttempt(recovery.ID, recovery.Attempt, AttemptResolution{
+		State: "placed", BrokerOrderID: NewID(),
+		OrderUpdate: &OrderUpdate{
+			ExecutionAttemptID: recovery.ID, BrokerOrderID: NewID(), State: "submitted",
+		},
+	})
+	if resolveErr == nil || updated {
+		t.Fatalf("injected adoption rollback updated=%v err=%v", updated, resolveErr)
+	}
+	current, err = s.GetExecutionAttempt(recovery.ID)
+	if err != nil || current.State != "claimed" || current.Attempt != recovery.Attempt {
+		t.Fatalf("rolled-back recovery=%+v err=%v", current, err)
+	}
+	gate, err = s.GetLiveExecutionGate()
+	if err != nil || gate.UnknownAttemptID != recovery.ID || gate.ActiveAttemptID != "" {
+		t.Fatalf("rolled-back gate=%+v err=%v", gate, err)
+	}
+	recovery, err = s.ClaimRecoverableAttemptLive(
+		current.ID, "recovery-after-crash", "claimed", current.Attempt, time.Now().Add(time.Second),
+	)
+	if err != nil || recovery == nil {
+		t.Fatalf("reclaim unknown worker=%+v err=%v", recovery, err)
+	}
+	gate, err = s.GetLiveExecutionGate()
+	if err != nil || gate.UnknownAttemptID != recovery.ID || gate.ActiveAttemptID != "" {
+		t.Fatalf("reclaimed gate=%+v err=%v", gate, err)
+	}
 	marked, err = s.MarkAttemptSent(recovery.ID, recovery.Attempt, true)
 	if err != nil || !marked {
 		t.Fatalf("replay marked=%v err=%v", marked, err)
