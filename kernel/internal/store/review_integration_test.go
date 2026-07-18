@@ -202,7 +202,7 @@ func TestReviewLockPostgresIsAtomicAndRollbackSafe(t *testing.T) {
 		(SELECT count(*) FROM execution_attempt WHERE operation_id=$1) +
 		(SELECT count(*) FROM orders WHERE operation_id=$1) +
 		(SELECT count(*) FROM events WHERE kind='proposal_should_rollback'
-		 AND payload->>'operation_id'=$1)`, proposalID).Scan(&proposalRows); err != nil {
+		 AND payload->>'operation_id'=$1::text)`, proposalID).Scan(&proposalRows); err != nil {
 		t.Fatal(err)
 	}
 	if proposalRows != 0 {
