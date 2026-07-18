@@ -485,6 +485,29 @@ func TestM5BTickRoundingNeverCrossesHardBounds(t *testing.T) {
 	}
 }
 
+func TestM11EquityTickScheduleRoundsOnBothSidesOfDollar(t *testing.T) {
+	instrument := broker.Instrument{
+		PriceTick: units.MustMicros("0.01"), BelowPriceTick: units.MustMicros("0.0001"),
+		TickCutoff: units.MustMicros("1"), QtyIncrement: units.MustQty("1"),
+	}
+	for _, test := range []struct {
+		value string
+		ceil  string
+		floor string
+	}{
+		{value: "13.501", ceil: "13.51", floor: "13.50"},
+		{value: "1.000001", ceil: "1.01", floor: "1"},
+		{value: "0.50001", ceil: "0.5001", floor: "0.5"},
+	} {
+		value := units.MustMicros(test.value)
+		ceil, err := ceilPriceForInstrument(value, instrument)
+		floor := floorPriceForInstrument(value, instrument)
+		if err != nil || ceil != units.MustMicros(test.ceil) || floor != units.MustMicros(test.floor) {
+			t.Fatalf("value=%s ceil=%s floor=%s err=%v", test.value, ceil, floor, err)
+		}
+	}
+}
+
 func requestOperationID(st *memoryStore) string {
 	for operationID := range st.operationRows {
 		return operationID

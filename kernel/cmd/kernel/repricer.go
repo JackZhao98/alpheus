@@ -278,11 +278,12 @@ func (s *server) boundedReplacementLimit(ctx context.Context, op risk.Operation,
 	instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	instrument, err := provider.Instrument(instrumentCtx, order.Symbol)
 	cancel()
-	if err != nil || instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 ||
+	if err != nil || !instrument.PrecisionSane() ||
 		instrument.Kind != order.Kind || instrument.Multiplier != order.Multiplier {
 		return 0, fmt.Errorf("instrument tick unavailable for repricing")
 	}
-	if quote.Bid%instrument.PriceTick != 0 || quote.Ask%instrument.PriceTick != 0 ||
+	if !instrument.SupportsPrice(quote.Bid) || !instrument.SupportsPrice(quote.Ask) ||
+		!instrument.SupportsPrice(order.Limit) ||
 		order.Qty%instrument.QtyIncrement != 0 {
 		return 0, fmt.Errorf("quote or quantity violates instrument increments")
 	}
@@ -292,20 +293,26 @@ func (s *server) boundedReplacementLimit(ctx context.Context, op risk.Operation,
 		if op.Action == "close" {
 			cap = *op.Limit
 		}
-		return nextBoundedBuyLimit(order.Limit, quote.Ask, cap, instrument.PriceTick)
+		return nextBoundedBuyLimitForInstrument(order.Limit, quote.Ask, cap, instrument)
 	}
-	return nextBoundedSellLimit(order.Limit, quote.Bid, *op.Limit, instrument.PriceTick)
+	return nextBoundedSellLimitForInstrument(order.Limit, quote.Bid, *op.Limit, instrument)
 }
 
 func nextBoundedBuyLimit(previous, ask, cap, tick units.Micros) (units.Micros, error) {
-	if previous <= 0 || ask <= 0 || cap <= 0 || tick <= 0 {
+	return nextBoundedBuyLimitForInstrument(previous, ask, cap, broker.Instrument{
+		PriceTick: tick, QtyIncrement: units.MustQty("1"),
+	})
+}
+
+func nextBoundedBuyLimitForInstrument(previous, ask, cap units.Micros, instrument broker.Instrument) (units.Micros, error) {
+	if previous <= 0 || ask <= 0 || cap <= 0 || !instrument.PrecisionSane() {
 		return 0, fmt.Errorf("invalid buy reprice inputs")
 	}
-	marketTarget, err := ceilPriceToTick(ask, tick)
+	marketTarget, err := ceilPriceForInstrument(ask, instrument)
 	if err != nil {
 		return 0, err
 	}
-	allowableCap := floorPriceToTick(cap, tick)
+	allowableCap := floorPriceForInstrument(cap, instrument)
 	if allowableCap <= 0 {
 		return 0, fmt.Errorf("buy cap has no valid price tick")
 	}
@@ -318,7 +325,7 @@ func nextBoundedBuyLimit(previous, ask, cap, tick units.Micros) (units.Micros, e
 	}
 	distance := target - previous
 	raw := previous + distance/2 + distance%2
-	next, err := ceilPriceToTick(raw, tick)
+	next, err := ceilPriceForInstrument(raw, instrument)
 	if err != nil {
 		return 0, err
 	}
@@ -329,11 +336,17 @@ func nextBoundedBuyLimit(previous, ask, cap, tick units.Micros) (units.Micros, e
 }
 
 func nextBoundedSellLimit(previous, bid, minimum, tick units.Micros) (units.Micros, error) {
-	if previous <= 0 || bid <= 0 || minimum <= 0 || tick <= 0 {
+	return nextBoundedSellLimitForInstrument(previous, bid, minimum, broker.Instrument{
+		PriceTick: tick, QtyIncrement: units.MustQty("1"),
+	})
+}
+
+func nextBoundedSellLimitForInstrument(previous, bid, minimum units.Micros, instrument broker.Instrument) (units.Micros, error) {
+	if previous <= 0 || bid <= 0 || minimum <= 0 || !instrument.PrecisionSane() {
 		return 0, fmt.Errorf("invalid sell reprice inputs")
 	}
-	marketTarget := floorPriceToTick(bid, tick)
-	allowableMinimum, err := ceilPriceToTick(minimum, tick)
+	marketTarget := floorPriceForInstrument(bid, instrument)
+	allowableMinimum, err := ceilPriceForInstrument(minimum, instrument)
 	if err != nil {
 		return 0, err
 	}
@@ -346,11 +359,33 @@ func nextBoundedSellLimit(previous, bid, minimum, tick units.Micros) (units.Micr
 	}
 	distance := previous - target
 	raw := previous - distance/2 - distance%2
-	next := floorPriceToTick(raw, tick)
+	next := floorPriceForInstrument(raw, instrument)
 	if next < target {
 		next = target
 	}
 	return next, nil
+}
+
+func ceilPriceForInstrument(value units.Micros, instrument broker.Instrument) (units.Micros, error) {
+	if !instrument.PrecisionSane() {
+		return 0, fmt.Errorf("instrument precision is invalid")
+	}
+	result, err := ceilPriceToTick(value, instrument.TickForPrice(value))
+	if err != nil || !instrument.SupportsPrice(result) {
+		return 0, fmt.Errorf("price is outside the instrument tick schedule")
+	}
+	return result, nil
+}
+
+func floorPriceForInstrument(value units.Micros, instrument broker.Instrument) units.Micros {
+	if !instrument.PrecisionSane() {
+		return 0
+	}
+	result := floorPriceToTick(value, instrument.TickForPrice(value))
+	if !instrument.SupportsPrice(result) {
+		return 0
+	}
+	return result
 }
 
 func ceilPriceToTick(value, tick units.Micros) (units.Micros, error) {

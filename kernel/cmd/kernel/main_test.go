@@ -1950,7 +1950,7 @@ func TestComputedRiskCannotBeUnderDeclared(t *testing.T) {
 			if !ok || persisted.DerivedMaxRisk != units.MustMicros("300") ||
 				persisted.RequiredCash != units.MustMicros("300") ||
 				persisted.ApprovedPriceCap != units.MustMicros("3") ||
-				persisted.WorkingPrice != units.MustMicros("2.995") ||
+				persisted.WorkingPrice != units.MustMicros("2.99") ||
 				persisted.Qty != units.MustQty("1") || persisted.Multiplier != 100 {
 				t.Fatalf("persisted=%+v", persisted)
 			}

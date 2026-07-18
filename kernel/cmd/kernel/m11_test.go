@@ -14,6 +14,7 @@ import (
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/marketdata"
 	"alpheus/kernel/internal/rhmcp"
+	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
 )
@@ -27,6 +28,10 @@ type candidateExecution struct {
 	findErr    error
 	getErr     error
 }
+
+type equityOnlyExecution struct{ broker.ExecutionProvider }
+
+func (equityOnlyExecution) SupportsOrderKind(kind string) bool { return kind == "equity" }
 
 func (c *candidateExecution) PlaceLimitOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
 	c.mu.Lock()
@@ -627,5 +632,24 @@ func TestClassCApprovalRechecksCanaryAndStaysPending(t *testing.T) {
 	}
 	if !containsString(st.events, "live_canary_refused") {
 		t.Fatalf("canary refusal event missing: %v", st.events)
+	}
+}
+
+func TestLiveOpenRejectsProviderOrderKindBeforeGrant(t *testing.T) {
+	venue := broker.NewFake(units.MustMicros("300"))
+	s := &server{
+		mode: protectedMode(config.ModeLive), limits: dualLedgerLimits(), broker: venue,
+		execution: equityOnlyExecution{ExecutionProvider: venue}, store: newMemoryStore(),
+	}
+	quote := broker.Quote{
+		Symbol: "option-id", Bid: units.MustMicros("0.34"), Ask: units.MustMicros("0.35"),
+		AsOf: time.Now().UTC(), OpenInterest: 1000,
+	}
+	op := s.deriveOpenOperation(context.Background(), risk.Operation{
+		Action: "open", Kind: "option", Symbol: "option-id", Underlying: "SPY",
+		Side: "buy", Qty: units.MustQty("1"),
+	}, &quote)
+	if op.RejectReason != "unsupported_contract" {
+		t.Fatalf("reject_reason=%q", op.RejectReason)
 	}
 }

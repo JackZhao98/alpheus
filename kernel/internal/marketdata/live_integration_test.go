@@ -52,6 +52,13 @@ func TestRobinhoodLiveReadContract(t *testing.T) {
 	if _, err := provider.Bars(context.Background(), "SPY", 7); err != nil {
 		t.Fatalf("bars: %v", err)
 	}
+	equity, err := provider.Instrument(context.Background(), "SPY")
+	if err != nil || equity.Kind != "equity" || equity.Multiplier != 1 ||
+		equity.InstrumentID == "" || equity.PriceTick != units.MustMicros("0.01") ||
+		equity.BelowPriceTick != units.MustMicros("0.0001") ||
+		equity.TickCutoff != units.MustMicros("1") || equity.QtyIncrement != units.MustQty("1") {
+		t.Fatalf("equity instrument contract failed: instrument=%+v err=%v", equity, err)
+	}
 	expirations, err := provider.Expirations(context.Background(), "SPY")
 	if err != nil || len(expirations) == 0 {
 		t.Fatalf("expirations=%d err=%v", len(expirations), err)
@@ -74,5 +81,35 @@ func TestRobinhoodLiveReadContract(t *testing.T) {
 	instrument, err := provider.Instrument(context.Background(), chain[0].Instrument.InstrumentID)
 	if err != nil || instrument.InstrumentID != chain[0].Instrument.InstrumentID || instrument.Multiplier != 100 {
 		t.Fatalf("instrument contract failed: %v", err)
+	}
+}
+
+func TestRobinhoodLiveEquityInstrumentContract(t *testing.T) {
+	if os.Getenv("RH_MCP_INTEGRATION") != "1" {
+		t.Skip("set RH_MCP_INTEGRATION=1 for the authenticated read-only contract")
+	}
+	tokenFile := os.Getenv("RH_MCP_TOKEN_FILE")
+	if tokenFile == "" {
+		t.Fatal("RH_MCP_TOKEN_FILE is required")
+	}
+	client, err := rhmcp.New(rhmcp.Config{
+		TokenFile: tokenFile, AllowedTools: RobinhoodReadTools,
+		CallTimeout: 30 * time.Second, ConnectWait: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	provider, err := NewRobinhoodProvider(client, client, "live-equity-contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	equity, err := provider.Instrument(context.Background(), "SPY")
+	if err != nil || equity.Kind != "equity" || equity.Multiplier != 1 ||
+		equity.InstrumentID != "8f92e76f-1e0e-4478-8580-16a6ffcfaef5" ||
+		equity.PriceTick != units.MustMicros("0.01") ||
+		equity.BelowPriceTick != units.MustMicros("0.0001") ||
+		equity.TickCutoff != units.MustMicros("1") || equity.QtyIncrement != units.MustQty("1") {
+		t.Fatalf("equity instrument contract failed: instrument=%+v err=%v", equity, err)
 	}
 }

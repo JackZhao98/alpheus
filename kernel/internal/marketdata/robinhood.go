@@ -20,7 +20,7 @@ var RobinhoodReadTools = []string{
 	"get_accounts", "get_portfolio", "get_equity_positions", "get_option_positions",
 	"get_equity_orders", "get_option_orders", "get_equity_quotes", "get_option_quotes",
 	"get_equity_tradability", "get_equity_price_book", "get_option_chains", "get_option_instruments", "get_equity_historicals",
-	"get_realized_pnl", "get_pnl_trade_history",
+	"get_realized_pnl", "get_pnl_trade_history", "search",
 }
 
 type RobinhoodProvider struct {
@@ -448,9 +448,7 @@ func (p *RobinhoodProvider) normalizedInstrument(record optionInstrumentRecord, 
 
 func (p *RobinhoodProvider) Instrument(ctx context.Context, symbol string) (InstrumentSpec, error) {
 	if !looksLikeUUID(symbol) {
-		// The live schemas prove fractional-equity eligibility, but not one exact
-		// quantity increment and price-tick rule for every equity/order type.
-		return InstrumentSpec{}, p.dataError("equity instrument precision is not documented by the provider")
+		return p.equityInstrument(ctx, strings.ToUpper(strings.TrimSpace(symbol)))
 	}
 	id := strings.ToLower(symbol)
 	instruments, err := p.loadOptionInstruments(ctx, map[string]any{"ids": id, "state": "active", "tradability": "tradable"})
@@ -475,6 +473,58 @@ func (p *RobinhoodProvider) Instrument(ctx context.Context, symbol string) (Inst
 		return InstrumentSpec{}, p.dataError("non-standard option contract is unsupported")
 	}
 	return p.normalizedInstrument(instruments[0], chains[0], tick)
+}
+
+type equitySearchRecord struct {
+	InstrumentID string `json:"instrument_id"`
+	Symbol       string `json:"symbol"`
+	Name         string `json:"name"`
+}
+
+func (p *RobinhoodProvider) equityInstrument(ctx context.Context, symbol string) (InstrumentSpec, error) {
+	if symbol == "" {
+		return InstrumentSpec{}, p.dataError("equity instrument symbol is empty")
+	}
+	raw, err := p.caller.Call(ctx, "search", map[string]any{"query": symbol, "limit": 10})
+	if err != nil {
+		return InstrumentSpec{}, p.dataError("equity instrument identity unavailable")
+	}
+	var data struct {
+		Results []*equitySearchRecord `json:"results"`
+	}
+	if err := p.decodeData(raw, &data); err != nil {
+		return InstrumentSpec{}, err
+	}
+	var match *equitySearchRecord
+	for _, result := range data.Results {
+		if result == nil || result.InstrumentID == "" || result.Symbol == "" || result.Name == "" {
+			return InstrumentSpec{}, p.schemaError("equity instrument search schema drift")
+		}
+		if result.Symbol != symbol {
+			continue
+		}
+		if match != nil {
+			return InstrumentSpec{}, p.schemaError("equity instrument identity is ambiguous")
+		}
+		match = result
+	}
+	if match == nil || !looksLikeUUID(match.InstrumentID) {
+		return InstrumentSpec{}, p.dataError("equity instrument identity is not exact")
+	}
+	quote, err := p.equityQuote(ctx, symbol)
+	if err != nil {
+		return InstrumentSpec{}, err
+	}
+	instrument := InstrumentSpec{
+		Symbol: symbol, InstrumentID: strings.ToLower(match.InstrumentID), Kind: "equity", Multiplier: 1,
+		PriceTick: units.MustMicros("0.01"), BelowPriceTick: units.MustMicros("0.0001"),
+		TickCutoff: units.MustMicros("1"), QtyIncrement: units.MustQty("1"),
+		Source: robinhoodSource, AsOf: quote.AsOf,
+	}
+	if !instrument.SupportsPrice(quote.Bid) || !instrument.SupportsPrice(quote.Ask) {
+		return InstrumentSpec{}, p.dataError("equity quote violates certified tick schedule")
+	}
+	return instrument, nil
 }
 
 func containsDate(values []string, wanted string) bool {

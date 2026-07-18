@@ -104,8 +104,21 @@ func emptyOrdersFixture() json.RawMessage {
 }
 
 func equityOrderFixture() json.RawMessage {
-	return json.RawMessage(fmt.Sprintf(`{"data":{"order":{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"filled","quantity":"1","cumulative_quantity":"1","price":"100.1","average_price":"100.1","reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","executions":[{"id":"%s","quantity":"1","price":"100.1","fees":"0.01","timestamp":"2026-07-17T20:00:01Z"}]}},"guide":"fixture"}`,
-		executionOrderID, executionEquity, executionFillID))
+	return json.RawMessage(fmt.Sprintf(`{"data":{"order":{"id":"%s"}},"guide":"fixture"}`, executionOrderID))
+}
+
+func equityOrdersFixture(quantity, price, state string) json.RawMessage {
+	filled := "0"
+	executions := ""
+	average := "null"
+	if state == "filled" {
+		filled = quantity
+		average = `"` + price + `"`
+		executions = fmt.Sprintf(`{"id":"%s","quantity":%q,"price":%q,"fees":"0.01","timestamp":"2026-07-17T20:00:01Z"}`,
+			executionFillID, quantity, price)
+	}
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":%q,"quantity":%q,"dollar_based_amount":null,"cumulative_quantity":%q,"price":%q,"stop_price":null,"average_price":%s,"reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"limit","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[%s]}],"next":""},"guide":"fixture"}`,
+		executionOrderID, executionEquity, state, quantity, filled, price, average, executions))
 }
 
 func newExecutionFixture(t *testing.T, mutation *recordingMutation, orderState string) (*RobinhoodExecution, *Robinhood) {
@@ -123,7 +136,7 @@ func newExecutionFixture(t *testing.T, mutation *recordingMutation, orderState s
 		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
 		Source: robinhoodSource, AsOf: time.Now().UTC(),
 	}}
-	adapter, err := NewRobinhoodExecution(read, mutation, instruments)
+	adapter, err := newRobinhoodExecution(read, mutation, instruments, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +150,30 @@ func TestRobinhoodExecutionRequiresEveryMutationCapability(t *testing.T) {
 	}
 	if _, err := NewRobinhoodExecution(read, &recordingMutation{}, nil); err == nil {
 		t.Fatal("execution adapter constructed without instrument metadata")
+	}
+}
+
+func TestRobinhoodProductionExecutionAllowsOnlyCertifiedEquityMutations(t *testing.T) {
+	mutation := &recordingMutation{}
+	offline, _ := newExecutionFixture(t, mutation, "filled")
+	production, err := NewRobinhoodExecution(offline.read, mutation, offline.instruments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !production.SupportsOrderKind("equity") || production.SupportsOrderKind("option") {
+		t.Fatal("production mutation capability is not equity-only")
+	}
+	_, err = production.PlaceLimitOrder(context.Background(), PlaceRequest{
+		ClientOrderID: executionRefID, Symbol: executionOption, Side: "buy", PositionEffect: "open",
+		Qty: units.MustQty("1"), Limit: units.MustMicros("0.35"), Kind: "option",
+	})
+	if err == nil {
+		t.Fatal("uncertified option mutation was accepted")
+	}
+	mutation.mu.Lock()
+	defer mutation.mu.Unlock()
+	if len(mutation.calls) != 0 {
+		t.Fatalf("uncertified option reached mutation transport: calls=%d", len(mutation.calls))
 	}
 }
 
@@ -187,7 +224,11 @@ func TestRobinhoodEquityPlaceUsesExactProductionShape(t *testing.T) {
 	mutation := &recordingMutation{responses: map[string]json.RawMessage{
 		"place_equity_order": equityOrderFixture(),
 	}}
-	adapter, _ := newExecutionFixture(t, mutation, "filled")
+	adapter, read := newExecutionFixture(t, mutation, "filled")
+	read.caller = fixtureCaller{
+		"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": equityOrdersFixture("1", "100.1", "filled"),
+	}
 	adapter.instruments = executionInstrument{instrument: Instrument{
 		Symbol: "SPY", InstrumentID: executionEquity, Kind: "equity", Multiplier: 1,
 		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
@@ -210,6 +251,38 @@ func TestRobinhoodEquityPlaceUsesExactProductionShape(t *testing.T) {
 	if len(mutation.calls) != 1 || mutation.calls[0].tool != "place_equity_order" ||
 		mutation.calls[0].args["limit_price"] != "100.1" || mutation.calls[0].args["symbol"] != "SPY" {
 		t.Fatalf("calls=%+v", mutation.calls)
+	}
+}
+
+func TestRobinhoodEquityLimitPrecisionFailsBeforeMutation(t *testing.T) {
+	for name, request := range map[string]PlaceRequest{
+		"sub-micro tick": {
+			ClientOrderID: executionRefID, Symbol: "SPY", Side: "buy", PositionEffect: "open",
+			Qty: units.MustQty("1"), Limit: units.MustMicros("0.50001"), Kind: "equity",
+		},
+		"fractional limit quantity": {
+			ClientOrderID: executionRefID, Symbol: "SPY", Side: "buy", PositionEffect: "open",
+			Qty: units.MustQty("0.5"), Limit: units.MustMicros("13.50"), Kind: "equity",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mutation := &recordingMutation{}
+			adapter, _ := newExecutionFixture(t, mutation, "filled")
+			adapter.instruments = executionInstrument{instrument: Instrument{
+				Symbol: "SPY", InstrumentID: executionEquity, Kind: "equity", Multiplier: 1,
+				PriceTick: units.MustMicros("0.01"), BelowPriceTick: units.MustMicros("0.0001"),
+				TickCutoff: units.MustMicros("1"), QtyIncrement: units.MustQty("1"),
+			}}
+			if _, err := adapter.PlaceLimitOrder(context.Background(), request); err == nil {
+				t.Fatal("unsupported equity precision reached the provider")
+			}
+			mutation.mu.Lock()
+			calls := len(mutation.calls)
+			mutation.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("mutation calls=%d", calls)
+			}
+		})
 	}
 }
 

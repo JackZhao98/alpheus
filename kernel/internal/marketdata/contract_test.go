@@ -134,6 +134,41 @@ func TestRobinhoodInstrumentFailsClosedUntilDiscovery(t *testing.T) {
 	}
 }
 
+func TestRobinhoodEquityInstrumentUsesCertifiedLimitPrecision(t *testing.T) {
+	asOf := time.Now().UTC().Format(time.RFC3339Nano)
+	caller := contractCaller{
+		"search": json.RawMessage(`{"data":{"results":[` +
+			`{"instrument_id":"55555555-5555-4555-8555-555555555555","symbol":"SPY","name":"SPDR S&P 500 ETF Trust"},` +
+			`{"instrument_id":"66666666-6666-4666-8666-666666666666","symbol":"SPYX","name":"SPYX"}` +
+			`]},"guide":"fixture"}`),
+		"get_equity_quotes": json.RawMessage(`{"data":{"results":[{"quote":` +
+			`{"symbol":"SPY","bid_price":"742.44","ask_price":"743.00","venue_bid_time":"` + asOf +
+			`","venue_ask_time":"` + asOf + `","has_traded":true,"state":"active"}}]},"guide":"fixture"}`),
+	}
+	provider, err := NewRobinhoodProvider(caller, contractStatus{}, "fixture-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instrument, err := provider.Instrument(context.Background(), "spy")
+	if err != nil || instrument.Symbol != "SPY" ||
+		instrument.InstrumentID != "55555555-5555-4555-8555-555555555555" ||
+		instrument.Kind != "equity" || instrument.Multiplier != 1 ||
+		instrument.PriceTick != units.MustMicros("0.01") ||
+		instrument.BelowPriceTick != units.MustMicros("0.0001") ||
+		instrument.TickCutoff != units.MustMicros("1") ||
+		instrument.QtyIncrement != units.MustQty("1") {
+		t.Fatalf("instrument=%+v err=%v", instrument, err)
+	}
+	for value, supported := range map[string]bool{
+		"13.50": true, "13.501": false, "1.01": true,
+		"1": true, "0.5001": true, "0.50001": false,
+	} {
+		if got := instrument.SupportsPrice(units.MustMicros(value)); got != supported {
+			t.Fatalf("price %s supported=%v, want %v", value, got, supported)
+		}
+	}
+}
+
 type trackingStatus struct {
 	drift bool
 	data  bool

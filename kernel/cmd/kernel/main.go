@@ -152,9 +152,6 @@ func main() {
 		account, execution = simVenue, simVenue
 		market = marketdata.NewFakeProvider(simVenue)
 	case "robinhood":
-		if mode.TradingMode == config.ModeLive {
-			log.Fatalf("broker: production execution remains unavailable pending M11 provider-contract certification")
-		}
 		if mode.LiveAccountID == "" {
 			log.Fatalf("broker: LIVE_ACCOUNT_ID is required for Robinhood reads")
 		}
@@ -172,20 +169,37 @@ func main() {
 			_ = client.Close()
 			log.Fatalf("broker: capability snapshot validation failed: %v", err)
 		}
-		account, err = broker.NewRobinhood(client, mode.LiveAccountID)
+		robinhoodAccount, err := broker.NewRobinhood(client, mode.LiveAccountID)
 		if err != nil {
 			_ = client.Close()
 			log.Fatalf("broker: %v", err)
 		}
+		account = robinhoodAccount
 		mcpLab, err = newMCPReadLab(client, mode.LiveAccountID, snapshot)
 		if err != nil {
 			_ = client.Close()
 			log.Fatalf("broker: %v", err)
 		}
-		market, err = marketdata.NewRobinhoodProvider(client, client, snapshot.Version)
+		robinhoodMarket, err := marketdata.NewRobinhoodProvider(client, client, snapshot.Version)
 		if err != nil {
 			_ = client.Close()
 			log.Fatalf("broker: %v", err)
+		}
+		market = robinhoodMarket
+		if mode.TradingMode == config.ModeLive {
+			mutation, mutationErr := rhmcp.NewMutation(rhmcp.Config{
+				TokenFile: config.Env("RH_MCP_TOKEN_FILE", ""),
+			}, mode.LiveAccountID)
+			if mutationErr != nil {
+				_ = client.Close()
+				log.Fatalf("broker: %v", mutationErr)
+			}
+			execution, err = broker.NewRobinhoodExecution(robinhoodAccount, mutation, robinhoodMarket)
+			if err != nil {
+				_ = mutation.Close()
+				_ = client.Close()
+				log.Fatalf("broker: %v", err)
+			}
 		}
 	default:
 		log.Fatalf("broker: unknown BROKER %q", brokerName)
@@ -250,10 +264,11 @@ func main() {
 		mcpLab: mcpLab, simVenue: simVenue, broker: simVenue, store: st,
 		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
-		providerDedupeVerified: brokerName == "fake",
-		proposalTTL:            proposalTTL,
-		runtimeURL:             config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
-		consoleOrigin:          consoleOrigin,
+		providerDedupeVerified: brokerName == "fake" ||
+			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive),
+		proposalTTL:   proposalTTL,
+		runtimeURL:    config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		consoleOrigin: consoleOrigin,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
@@ -1272,6 +1287,13 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 	if err := json.Unmarshal(row.Payload, &op); err != nil {
 		return nil, fmt.Errorf("decode persisted operation: %w", err)
 	}
+	if s.tradingMode() == config.ModeLive && attempt.Intent == "place" && !supportsOrderKind(execution, op.Kind) {
+		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+			State: "failed", LastError: "provider order kind is not certified",
+			ProviderErrorCode: "unsupported_order_kind", OperationStatus: "failed", ReleaseReservation: true,
+		})
+		return nil, errors.Join(fmt.Errorf("provider order kind is not certified"), resolveErr)
+	}
 	if op.Action == "close" && attempt.CloseReservationID == "" {
 		return nil, fmt.Errorf("refusing close without reservation")
 	}
@@ -1712,6 +1734,11 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 	if symbol == "" {
 		symbol = op.Underlying
 	}
+	var precision *broker.Instrument
+	if s.tradingMode() == config.ModeLive && !op.Shadow && !supportsOrderKind(s.executionProvider(), op.Kind) {
+		op.RejectReason = "unsupported_contract"
+		return op
+	}
 
 	switch op.Kind {
 	case "equity":
@@ -1721,25 +1748,27 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 			instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
 			cancel()
 			if err != nil || instrument.Kind != "equity" || instrument.Multiplier != 1 ||
-				instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 {
+				!instrument.PrecisionSane() {
 				op.RejectReason = "unsupported_contract"
 				return op
 			}
 			op.InstrumentID = instrument.InstrumentID
 			op.QtyIncrement = instrument.QtyIncrement
+			precision = &instrument
 		}
 	case "option":
 		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
 		cancel()
 		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 ||
-			instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 {
+			!instrument.PrecisionSane() {
 			op.RejectReason = "unsupported_contract"
 			return op
 		}
 		op.Multiplier = instrument.Multiplier
 		op.InstrumentID = instrument.InstrumentID
 		op.QtyIncrement = instrument.QtyIncrement
+		precision = &instrument
 	default:
 		op.RejectReason = "unsupported_contract"
 		return op
@@ -1756,6 +1785,22 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 	}
 	if op.WorkingPrice > op.ApprovedPriceCap {
 		op.WorkingPrice = op.ApprovedPriceCap
+	}
+	if precision != nil {
+		cap := floorPriceForInstrument(op.ApprovedPriceCap, *precision)
+		working := floorPriceForInstrument(op.WorkingPrice, *precision)
+		if cap <= 0 || working <= 0 {
+			op.RejectReason = "unsupported_contract"
+			return op
+		}
+		if working > cap {
+			working = cap
+		}
+		if !precision.SupportsPrice(cap) || !precision.SupportsPrice(working) {
+			op.RejectReason = "unsupported_contract"
+			return op
+		}
+		op.ApprovedPriceCap, op.WorkingPrice = cap, working
 	}
 
 	// Required cash rounds up, against the account, so fractional micro-dollars
@@ -1786,6 +1831,13 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 	op.DerivedMaxRisk = required
 
 	return op
+}
+
+func supportsOrderKind(execution broker.ExecutionProvider, kind string) bool {
+	if support, ok := execution.(broker.OrderKindSupport); ok {
+		return support.SupportsOrderKind(kind)
+	}
+	return true
 }
 
 func addRiskFacts(response map[string]any, op risk.Operation) {

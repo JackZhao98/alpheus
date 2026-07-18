@@ -12,22 +12,35 @@ import (
 	"alpheus/kernel/internal/units"
 )
 
-// RobinhoodExecution is a dormant, contract-tested execution adapter. Main
-// does not construct or wire it until the M11 recovery path is certified.
+// RobinhoodExecution is the live-only production mutation capability. It is
+// constructed separately from the retrying read client and is never present in
+// shadow or read-only modes.
 type RobinhoodExecution struct {
 	read        *Robinhood
 	mutation    rhmcp.MutationCaller
 	instruments InstrumentReader
+	allowOption bool
 }
 
 func NewRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader) (*RobinhoodExecution, error) {
+	return newRobinhoodExecution(read, mutation, instruments, false)
+}
+
+func newRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader, allowOption bool) (*RobinhoodExecution, error) {
 	if read == nil || mutation == nil || instruments == nil {
 		return nil, fmt.Errorf("Robinhood execution provider requires mutation and instrument capabilities")
 	}
-	return &RobinhoodExecution{read: read, mutation: mutation, instruments: instruments}, nil
+	return &RobinhoodExecution{read: read, mutation: mutation, instruments: instruments, allowOption: allowOption}, nil
+}
+
+func (r *RobinhoodExecution) SupportsOrderKind(kind string) bool {
+	return kind == "equity" || (kind == "option" && r.allowOption)
 }
 
 func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error) {
+	if !r.SupportsOrderKind(req.Kind) {
+		return OrderResult{}, fmt.Errorf("provider order kind is not certified for live mutation")
+	}
 	if _, err := r.read.selectedAccount(ctx); err != nil {
 		return OrderResult{}, err
 	}
@@ -63,17 +76,30 @@ func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceReque
 	}
 	if req.Kind == "equity" {
 		var data struct {
-			Order equityReadOrder `json:"order"`
+			Order struct {
+				ID string `json:"id"`
+			} `json:"order"`
 		}
 		if err := decodeRobinhoodData(r.mutation, raw, &data); err != nil {
 			return OrderResult{}, err
 		}
-		if data.Order.Symbol != req.Symbol || data.Order.InstrumentID != instrument.InstrumentID ||
-			data.Order.Side != req.Side || data.Order.Quantity == nil || *data.Order.Quantity != req.Qty ||
-			data.Order.Price == nil || *data.Order.Price != req.Limit {
-			return OrderResult{}, robinhoodSchemaError(r.mutation, "equity placement echo drift")
+		if !looksLikeCanonicalUUID(data.Order.ID) {
+			return OrderResult{}, robinhoodSchemaError(r.mutation, "equity placement identity drift")
 		}
-		result, err := normalizeEquityOrder(r.mutation, data.Order)
+		orders, err := r.readEquityOrder(ctx, data.Order.ID)
+		if err != nil || len(orders) != 1 {
+			return OrderResult{}, fmt.Errorf("canonical equity placement unavailable")
+		}
+		order := orders[0]
+		if order.Symbol != req.Symbol || order.InstrumentID != instrument.InstrumentID ||
+			order.Side != req.Side || order.Quantity == nil || *order.Quantity != req.Qty ||
+			order.DollarBasedAmount != nil || order.Price == nil || *order.Price != req.Limit ||
+			!order.StopPrice.Present || order.StopPrice.Known || order.Type != "limit" ||
+			order.Trigger != "immediate" || order.TimeInForce != "gfd" ||
+			order.MarketHours != "regular_hours" || order.PlacedAgent != "agentic" {
+			return OrderResult{}, robinhoodSchemaError(r.mutation, "canonical equity placement drift")
+		}
+		result, err := normalizeEquityOrder(r.mutation, order)
 		if err != nil {
 			return OrderResult{}, err
 		}
@@ -116,8 +142,8 @@ func (r *RobinhoodExecution) validatePlaceRequest(ctx context.Context, req Place
 	if req.Kind == "option" {
 		identityMatches = strings.EqualFold(instrument.InstrumentID, req.Symbol)
 	}
-	if !identityMatches || instrument.Kind != req.Kind || instrument.PriceTick <= 0 || instrument.QtyIncrement <= 0 ||
-		req.Limit%instrument.PriceTick != 0 || req.Qty%instrument.QtyIncrement != 0 ||
+	if !identityMatches || instrument.Kind != req.Kind || !instrument.PrecisionSane() ||
+		!instrument.SupportsPrice(req.Limit) || req.Qty%instrument.QtyIncrement != 0 ||
 		(req.Kind == "equity" && instrument.Multiplier != 1) ||
 		(req.Kind == "option" && instrument.Multiplier != 100) {
 		return Instrument{}, fmt.Errorf("persisted order does not match provider instrument metadata")
@@ -132,6 +158,9 @@ func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID stri
 	}
 	if current.State != "submitted" && current.State != "partially_filled" {
 		return current, nil
+	}
+	if !r.SupportsOrderKind(kind) {
+		return OrderResult{}, fmt.Errorf("provider order kind is not certified for live mutation")
 	}
 	tool := "cancel_equity_order"
 	if kind == "option" {
@@ -433,3 +462,4 @@ func looksLikeCanonicalUUID(value string) bool {
 }
 
 var _ ExecutionProvider = (*RobinhoodExecution)(nil)
+var _ OrderKindSupport = (*RobinhoodExecution)(nil)

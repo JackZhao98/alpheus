@@ -46,14 +46,38 @@ func (q Quote) Usable(maxAgeSec int, now time.Time) bool {
 }
 
 type Instrument struct {
-	Symbol       string       `json:"symbol"`
-	InstrumentID string       `json:"instrument_id"`
-	Kind         string       `json:"kind"`
-	Multiplier   int64        `json:"multiplier"`
-	PriceTick    units.Micros `json:"price_tick"`
-	QtyIncrement units.Qty    `json:"qty_increment"`
-	Source       string       `json:"source"`
-	AsOf         time.Time    `json:"as_of"`
+	Symbol         string       `json:"symbol"`
+	InstrumentID   string       `json:"instrument_id"`
+	Kind           string       `json:"kind"`
+	Multiplier     int64        `json:"multiplier"`
+	PriceTick      units.Micros `json:"price_tick"`
+	BelowPriceTick units.Micros `json:"below_price_tick,omitempty"`
+	TickCutoff     units.Micros `json:"tick_cutoff,omitempty"`
+	QtyIncrement   units.Qty    `json:"qty_increment"`
+	Source         string       `json:"source"`
+	AsOf           time.Time    `json:"as_of"`
+}
+
+// TickForPrice returns the exact provider tick for a price. A zero below-tick
+// and cutoff mean the instrument has one fixed tick at every supported price.
+func (i Instrument) TickForPrice(price units.Micros) units.Micros {
+	if i.BelowPriceTick > 0 && i.TickCutoff > 0 && price <= i.TickCutoff {
+		return i.BelowPriceTick
+	}
+	return i.PriceTick
+}
+
+func (i Instrument) PrecisionSane() bool {
+	if i.PriceTick <= 0 || i.QtyIncrement <= 0 {
+		return false
+	}
+	variable := i.BelowPriceTick != 0 || i.TickCutoff != 0
+	return !variable || (i.BelowPriceTick > 0 && i.TickCutoff > 0)
+}
+
+func (i Instrument) SupportsPrice(price units.Micros) bool {
+	tick := i.TickForPrice(price)
+	return i.PrecisionSane() && price > 0 && tick > 0 && price%tick == 0
 }
 
 type Position struct {
@@ -147,6 +171,13 @@ type ExactPlaceCandidateQuery struct {
 
 type ExactPlaceCandidateProvider interface {
 	FindExactPlaceCandidates(ctx context.Context, query ExactPlaceCandidateQuery) ([]OrderResult, error)
+}
+
+// OrderKindSupport lets a production adapter expose a narrower mutation
+// surface than its read provider. The kernel consults it before persisting a
+// live grant and again before marking a provider call sent.
+type OrderKindSupport interface {
+	SupportsOrderKind(kind string) bool
 }
 
 // InstrumentReader is the minimum read capability an execution adapter needs
