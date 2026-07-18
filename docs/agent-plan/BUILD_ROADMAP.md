@@ -1389,14 +1389,15 @@ ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS
 AUTHORIZED_FOR_AP0: WITHHELD
 ```
 
-The remaining release blockers are outside the corrected Agent architecture:
+The Kernel database/process market-day blocker was closed by `66b0281` and
+recertified at `d2605b9` with the complete isolated M9 gate green. The three
+remaining release blockers are outside the corrected Agent architecture:
 
-1. repair and recertify the Kernel's split database/process market-day clock;
-2. freeze and pass M11 rollback acceptance, execute only the separately
+1. freeze and pass M11 rollback acceptance, execute only the separately
    confirmed one-share canary, and mark M11 `LANDED` with evidence;
-3. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
+2. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
    closeout; and
-4. run the digest-pinned audit release check and only then issue the exact
+3. run the digest-pinned audit release check and only then issue the exact
    `AUTHORIZED_FOR_AP0` token.
 
 Until that token exists, no Agent Platform code, persistence, migration, service,

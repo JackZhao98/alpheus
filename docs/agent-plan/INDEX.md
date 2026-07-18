@@ -1,7 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
 > Status: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS — `AUTHORIZED_FOR_AP0`
-> withheld pending Kernel/M11 and Charter closeout**
+> withheld pending M11 and Charter closeout**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -56,7 +56,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
 | Agent Platform Build Roadmap | Corrected and frozen through AP15; governed autonomous Live is the destination; AP0 authorization withheld pending recorded pre-AP0 gates | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md) |
-| Final cross-module architecture audit | Complete with architecture findings closed and four release blockers; exact AP0 token not issued | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
+| Final cross-module architecture audit | Complete with architecture findings closed; Kernel clock blocker closed, three release blockers remain, and exact AP0 token not issued | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
 
@@ -77,16 +77,14 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Repair the Kernel market-day time-source split and restore the complete race/
-   vet suite to green.
-2. Freeze M11 rollback acceptance, complete only the separately confirmed
+1. Freeze M11 rollback acceptance, complete only the separately confirmed
    one-share canary and rollback proof, then mark M11 `LANDED` if it passes.
-3. Land the post-M11 Charter amendment and run the digest-pinned audit release
+2. Land the post-M11 Charter amendment and run the digest-pinned audit release
    check. Record owner acceptance plus independent review in committed
    `AP0_RELEASE.md`; implement AP0 only when that record explicitly issues
    `AUTHORIZED_FOR_AP0`.
-4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
+3. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
    data and a signed Calibration Pack before AP9 implementation.
-5. Continue stage by stage with non-Live foundations first. GRACE and
+4. Continue stage by stage with non-Live foundations first. GRACE and
    Delegation cannot affect autonomous Live until their independent acceptance
    boundaries pass.

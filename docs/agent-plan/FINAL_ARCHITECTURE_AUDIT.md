@@ -33,10 +33,11 @@ GRACE score, or Delegation proposal can directly mutate a broker or manufacture
 Kernel permission. The architecture findings discovered during this audit were
 closed in the same document revision.
 
-AP0 is nevertheless not authorized. M11 is still in progress, current Kernel
-certification is not green, the required M11 rollback acceptance/evidence is
-not complete, and the post-M11 Charter amendment has not landed. These are hard
-release gates, not optional follow-up work.
+AP0 is nevertheless not authorized. The Kernel clock blocker is closed and its
+complete certification is green, but M11 is still in progress, the required
+M11 rollback acceptance/evidence is not complete, and the post-M11 Charter
+amendment has not landed. These are hard release gates, not optional follow-up
+work.
 
 ## 2. Scope and method
 
@@ -53,8 +54,8 @@ The audit covered:
   GRACE, Delegation, Kernel, Provider, and BlobStore boundaries;
 - AP0-AP15 dependencies, certification, canary isolation, and steady-state
   autonomy; and
-- current repository status and the reproducible Kernel test failure described
-  in section 6.
+- current repository status and the Kernel closure/recertification evidence
+  described in section 6.
 
 Three independent review passes challenged authority/security, schema/failure
 semantics, and roadmap/release gates. No Live mode, production credential, MCP
@@ -191,31 +192,34 @@ human approval cannot waive a mandatory review. Event consumer identity remains
 stable across deployment, and inbox dedupe/tombstones outlive the producer's
 maximum replay horizon.
 
-## 6. Open release blockers
+## 6. Release blockers and closure status
 
-### R-01 — Kernel market-day clock is split and certification is red
+### R-01 — CLOSED: Kernel market-day clock and certification
 
-The following current command fails reproducibly:
+Closed on 2026-07-18 by production repair `66b0281` and test-only PostgreSQL
+query fix `d2605b9`. Security-relevant market-day decisions now use the
+advancing PostgreSQL clock under the stable ledger transaction lock; the
+configured market timezone is frozen once and shared by Kernel, Store,
+watchdog, and provider PnL reads.
 
-```sh
-cd kernel
-GOCACHE=/tmp/alpheus-go-cache \
-  go test ./cmd/kernel \
-  -run '^TestBreakerResumeSuppressesSameDayAndExpiresNextDay$' -count=1
-```
+Closure evidence includes:
 
-`m3c_test.go` injects database time for the breaker/resume path, but
-`currentMarketWindow()` derives `/state` market day from process `time.Now()`.
-On 2026-07-18 the test's fixed 2026-07-17 same-day override is therefore treated
-as expired and the daily-loss breaker reappears. Merely changing the hard-coded
-test date would hide the split.
+- the original fixed-date breaker regression passes without changing its date;
+- database/process disagreement, live/shadow day split, provider-PnL and
+  RecentFills midnight crossings fail closed with no broker effect;
+- proposal, approval, recovery, repricer, state, and breaker-resume paths
+  perform a final in-transaction market-day check;
+- canonical New York windows cover winter/summer boundaries and 23/25-hour DST
+  days, while malformed date/TZ windows fail before durable writes;
+- breaker state, override, daily PnL, event row, and payload share the exact
+  authoritative observation time; and
+- `./scripts/certify-m9.sh` completed `M9 CERTIFICATION PASS` on an isolated
+  PostgreSQL 16/FakeBroker project, including live/shadow barriers, smoke,
+  paused-DB honesty, PostgreSQL replacement recovery, `unknown=0`, and
+  `unsafe_orphans=0`.
 
-Required closure:
-
-- use one injectable/database-authoritative time source for the security-
-  relevant market-day decision;
-- test database/process clock disagreement and market-day/DST boundaries; and
-- rerun the complete Kernel race/vet suite with no skipped test.
+The production Robinhood deployment remained read-only and was neither joined
+nor restarted. R-01 is no longer an open release blocker.
 
 ### R-02 — M11 canary and rollback evidence are incomplete
 
@@ -246,7 +250,7 @@ database, Provider, and authority boundaries from this plan.
 
 ### R-04 — AP0 release token has not been issued
 
-After R-01 through R-03 close, a narrow release check must verify the M11
+After R-02 and R-03 close, a narrow release check must verify the M11
 evidence, Charter, roadmap, corrected architecture commit, and audit digests and
 confirm no new authority/fail-open finding. An owner authorization and an
 independent architecture-review attestation must then land in a separate,
@@ -287,7 +291,7 @@ closes:
 The corrected sequence is valid:
 
 ```text
-Kernel clock/M11 closeout
+M11 closeout
 -> pre-AP0 Charter closeout and audit release check
 -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
@@ -312,8 +316,7 @@ AUTHORIZED_FOR_AP0: WITHHELD
 ```
 
 No Agent Platform implementation should begin from this audit alone. The next
-implementation module is the Kernel market-day time-source repair, committed
-and pushed independently. The second module is the M11 v1.7 rollback-acceptance
-documentation amendment, also committed and pushed independently. The third is
-the separately confirmed one-share canary, rollback evidence, and M11 landing
-commit; the canary is never implied by either documentation module.
+module is the M11 v1.7 rollback-acceptance documentation amendment, committed
+and pushed independently. Only after that amendment is reviewed may the
+separately confirmed one-share canary, rollback evidence, and M11 landing commit
+proceed; the canary is never implied or authorized by the documentation module.
