@@ -6,6 +6,13 @@
 > final milestone and is gated by every listed precondition. Progress is tracked
 > only in `INDEX.md`.
 
+> Amendment v1.5 records an owner-authorized production equity `ref_id` A/B
+> probe and defines a bounded same-ref replay plus exact pull-based candidate
+> recovery contract. It supersedes the frozen M11 no-live-probe/default-retry
+> wording only for equity recovery; the frozen text remains below for audit
+> history. See `INDEX.md` and `../M11_PROVIDER_GAP.md`. Option mutations remain
+> blocked.
+
 <!-- BEGIN FROZEN SPEC -->
 
 ## Milestone 9 — Pre-live certification (fault injection)
@@ -126,3 +133,11 @@ grant is created, and forcing that attempt to fail does not restore the allowanc
 
 
 <!-- END FROZEN SPEC -->
+
+## Amendment v1.5 implementation status
+
+The bounded equity recovery alternative is implemented offline in migration
+0009, the execution/reconciliation store, the Robinhood exact-candidate reader,
+and the Admin Cockpit adoption flow. It does not enable production execution.
+See `../M11_PROVIDER_GAP.md` for the acceptance evidence and remaining
+provider-metadata/option blockers.

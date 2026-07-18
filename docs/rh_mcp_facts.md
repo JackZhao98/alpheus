@@ -52,7 +52,7 @@ Primary sources:
 | Buying-power source | `get_portfolio.buying_power.buying_power` is the normalized and authoritative hard-capacity source; `cash` is recorded separately for display only |
 | Stable order and fill identifiers | Equity and option order IDs plus execution IDs are UUIDs; option executions are nested under legs |
 | Cumulative-fill behavior | Equity uses `cumulative_quantity`; options use `processed_quantity`, with per-fill quantities under executions |
-| Client-supplied id query/deduplication | Both place schemas accept UUID `ref_id` and explicitly document retry deduplication. Read-order schemas do not expose/query it, so live proof and automatic replacement remain disabled |
+| Client-supplied id query/deduplication | Both place schemas accept UUID `ref_id` and document retry deduplication. An owner-authorized $1 equity A/B probe verified that an identical same-ref replay created no duplicate while a fresh ref created a distinct order. Read-order schemas still do not expose/query `ref_id`; the replay returned an unknown outcome rather than the original order. A separately authorized reviewed option limit attempt plus one same-ref replay both returned unknown and produced zero orders, so option dedupe remains unproven and sanitized provider error capture is required before another probe. |
 
 Additional authenticated findings:
 
@@ -84,6 +84,14 @@ for every supported equity order type.
   capacity. Durable local reservations close the pre-broker concurrency window;
   exact provider-hold add-back remains an M11 optimization and must never use
   approximate matching.
-- Keep `ref_id` replacement/recovery disabled until M11 can prove the behavior
-  with a human-approved canary. Discovery placed, reviewed, cancelled and
-  replaced no orders.
+- Plan amendment v1.5 permits at most one byte-identical same-ref equity replay
+  after an uncertain outcome. Pull-based reconciliation requires an exact,
+  unique provider-visible fingerprint and remains human-gated unless an
+  audited exclusive-writer mode is active. A fresh ref is always a new order;
+  option automatic recovery remains disabled.
+- The v1.5 recovery path is now implemented offline: durable account-level
+  unknown latch, canonical provider intent/fingerprint/time window, exact
+  paged equity candidate matching, and human-only sole-candidate adoption with
+  a mandatory re-pull. Production execution remains unwired because exact
+  equity limit tick/increment metadata is still undocumented and option
+  mutations remain blocked.
