@@ -1,6 +1,6 @@
 # Robinhood MCP production-shape facts
 
-Last reviewed: 2026-07-16. This document is secret-free and may be committed.
+Last reviewed: 2026-07-17. This document is secret-free and may be committed.
 Authenticated discovery was completed against the explicitly selected Agentic
 account. OAuth state and raw responses remain outside the repository in 0600
 files; the committed capability snapshot and fixtures contain no account data.
@@ -45,8 +45,8 @@ Primary sources:
 | Spendable-funds behavior | `get_portfolio.buying_power.buying_power` is Alpheus's sole hard funds capacity under owner-approved amendment v1.4. The gate uses that exact value minus durable local reservations; `cash`, `pending_deposits` and unleveraged buying power are informational only. |
 | Options approval level | Verified `option_level_2` |
 | Exact supported order types and time-in-force values | Equity and single-leg options: market, limit, stop-market and stop-limit; GFD/GTC, subject to the session restrictions in the committed schemas |
-| Equity/option quantity increments | Options are positive whole contracts. Equity decimals are documented only for regular-hours market orders; there is no single proven equity increment across order types, so the equity `Instrument` precision capability fails closed |
-| Price ticks and sub-penny behavior | SPY option chain/instruments expose a fixed 0.01 tick. The schema supports above/below-cutoff tick rules; variable schedules fail closed. No exact equity tick field is exposed |
+| Equity/option quantity increments | Options are positive whole contracts. For the equity limit shape Alpheus sends, an owner-authorized live A/B probe proved a one-share increment: one share was accepted and 0.5 share was rejected before order creation. This evidence is not generalized to equity market or dollar-based orders. |
+| Price ticks and sub-penny behavior | SPY option chain/instruments expose a fixed 0.01 tick. Owner-authorized equity reviews proved the limit schedule Alpheus uses: $0.01 above $1 and $0.0001 at or below $1. A 0.5001 limit passed precision validation; 0.50001 and 1.001 were rejected. |
 | Live `quote_max_age_sec` value | Human approved at 15 seconds for the read-only Robinhood session; startup still refuses zero |
 | Option multiplier and non-standard deliverables | Standard SPY chain verified exact `100`, one underlying and null cash component. Anything else is unsupported |
 | Buying-power source | `get_portfolio.buying_power.buying_power` is the normalized and authoritative hard-capacity source; `cash` is recorded separately for display only |
@@ -56,10 +56,11 @@ Primary sources:
 
 Additional authenticated findings:
 
-- The current catalog has 49 tools. Alpheus registers 34 reviewed
+- The committed capability snapshot has 49 tools. A 2026-07-17 live discovery
+  returned one additional read tool, `get_option_historicals`; the four order
+  schemas were unchanged. Alpheus still registers only its 34 reviewed
   no-state-change tools: 32 data queries plus the two order-review simulations.
-  The remaining 15 place/cancel/watchlist/scanner mutations are absent from the
-  client allowlist and cannot be selected by the Cockpit.
+  Unreviewed and state-changing tools are absent from the Cockpit allowlist.
 - Equity quotes have independent `venue_bid_time` and `venue_ask_time`; the
   normalized timestamp is the older of the two. Option quotes use
   `updated_at`. Both paths reject zero, locked, crossed and malformed markets.
@@ -72,11 +73,19 @@ Additional authenticated findings:
 - Provider option prices may contain eight fractional digits with only trailing
   zeros. Alpheus accepts them only when exactly representable at micro-dollar
   scale; non-zero precision beyond six digits is schema drift, never rounded.
+- Exact-symbol `search` supplies the equity instrument UUID. Alpheus requires
+  exactly one exact uppercase-symbol result and rejects missing, duplicate or
+  lookalike-only results.
+- An accepted equity placement may echo only the broker order ID rather than
+  every canonical field. Alpheus immediately reads that order ID and validates
+  exact identity, side, whole-share quantity, limit, trigger, GFD session,
+  `regular_hours` and `placed_agent=agentic`. Missing canonical visibility is
+  post-send uncertainty, never permission to resend with a fresh ref.
 
 The option `Instrument` capability now works for an exact option UUID backed by
-the chain and instrument records. Equity `Instrument` precision still fails
-closed because the provider does not expose one exact tick/increment contract
-for every supported equity order type.
+the chain and instrument records. Equity `Instrument` now supports only the
+certified limit-order contract above. The live execution constructor remains
+equity-only; option read metadata does not authorize an option mutation.
 
 ## Downstream decisions exposed by M8A
 
@@ -89,9 +98,10 @@ for every supported equity order type.
   unique provider-visible fingerprint and remains human-gated unless an
   audited exclusive-writer mode is active. A fresh ref is always a new order;
   option automatic recovery remains disabled.
-- The v1.5 recovery path is now implemented offline: durable account-level
+- The v1.5 recovery path is implemented: durable account-level
   unknown latch, canonical provider intent/fingerprint/time window, exact
   paged equity candidate matching, and human-only sole-candidate adoption with
-  a mandatory re-pull. Production execution remains unwired because exact
-  equity limit tick/increment metadata is still undocumented and option
+  a mandatory re-pull. Commit `319f657` adds the exact v1.6 equity limit
+  contract and live-only Provider wiring. The deployed stack remains read-only,
+  the first Alpheus canary still requires a separate confirmation, and option
   mutations remain blocked.

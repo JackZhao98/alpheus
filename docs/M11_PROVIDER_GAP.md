@@ -1,17 +1,19 @@
 # M11 Robinhood provider gap
 
-Status: **EQUITY RECOVERY IMPLEMENTED OFFLINE; LIVE DISABLED; OPTION MUTATIONS BLOCKED**
-(provider lookup absent; equity placement dedupe verified under explicit owner
-authorization on 2026-07-17)
+Status: **EQUITY PROVIDER CONTRACT VERIFIED AND WIRED; DEPLOYMENT REMAINS READ-ONLY; OPTION MUTATIONS BLOCKED**
+(provider lookup absent; equity placement dedupe and exact limit precision
+verified under explicit owner authorization on 2026-07-17)
 
 The frozen M11 baseline requires a provider-supported implementation of
 `FindOrderByClientID(client_order_id)` before a Robinhood mutation adapter can
 be wired into live mode. The current MCP surface does not provide that recovery
 primitive. Plan amendment v1.5 permits a bounded equity-only alternative after
 production dedupe evidence. That alternative is implemented and certified
-against FakeBroker plus isolated PostgreSQL, but live wiring remains closed
-because no production-supported asset class currently satisfies every order
-contract below.
+against FakeBroker plus isolated PostgreSQL. Owner-authorized v1.6 evidence now
+also establishes the exact equity limit quantity and price contract Alpheus
+uses, so the equity-only execution adapter is wired behind the existing
+`TRADING_MODE=live` and `LIVE_TRADING_ENABLED=true` startup gates. The deployed
+Robinhood stack remains `read_only`; option placement remains unsupported.
 
 ## Verified facts
 
@@ -22,6 +24,9 @@ contract below.
   but cannot filter by `ref_id`, and their order records do not return `ref_id`.
 - Symbol, quantity, side, time, and `placed_agent` are not a unique recovery
   identity. Alpheus must not guess from those fields after a lost response.
+- Exact-symbol `search` results expose the stable equity instrument UUID.
+- For the equity limit shape Alpheus sends, quantity is positive whole shares;
+  prices above $1 use a $0.01 tick and prices at or below $1 use a $0.0001 tick.
 - A live `ListTools` discovery on 2026-07-17 returned 50 tools. The only tool
   not present in the committed 49-tool snapshot was
   `get_option_historicals`; the four order schemas below were unchanged.
@@ -59,6 +64,32 @@ Before another option probe, Alpheus must retain a sanitized provider error
 category/code for audit while continuing to classify the money-path outcome as
 unknown and while never logging credentials or raw transport secrets.
 
+The owner subsequently authorized a separate, bounded equity-limit precision
+probe on Ford (`F`) after the exact ticket and live quote were reviewed:
+
+1. A one-share buy limit at $13.50, GFD and regular-hours only, was accepted as
+   one queued broker order. A canonical `get_equity_orders(order_id)` read
+   matched the symbol, instrument UUID, side, quantity, limit and session. The
+   order was immediately cancelled, its final state was `cancelled`, and its
+   cumulative filled quantity remained zero.
+2. The otherwise identical 0.5-share limit was definitively rejected before an
+   order existed with provider HTTP 400 detail
+   `Limit order quantity cannot include fractional shares.`
+3. Read-only reviews established the price boundary: $1.001 was rejected
+   because prices above $1 cannot use sub-penny increments; $0.5001 passed
+   precision validation; and $0.50001 was rejected because prices cannot have
+   more than four decimal places.
+4. Exact-symbol `search` returned one `F` identity and its instrument UUID.
+   Lookalike results are never accepted as identity evidence.
+
+The accepted placement response reliably supplied the new broker order ID but
+did not supply every canonical order field. The execution adapter therefore
+uses that ID only to perform an immediate canonical order read, then validates
+every persisted provider-visible field before resolving success. If the
+canonical read is unavailable or drifts, the already-sent attempt becomes
+`unknown`; it is never treated as not-sent or retried with a fresh ref. The
+post-probe order pull showed no working `F` order and no fill.
+
 Canonical input+output schema SHA-256:
 
 | Tool | SHA-256 |
@@ -68,10 +99,15 @@ Canonical input+output schema SHA-256:
 | `get_equity_orders` | `337255fd23e466b740aa22090923ff162d51cf68d07293a84f43a7af769b84f1` |
 | `get_option_orders` | `5959fbc62f85298f99450317817e52b0960d4f27b771f951e07324e9d80b6915` |
 
-## Enforced behavior while blocked
+## Enforced production boundary
 
-- Robinhood production execution remains unavailable at startup.
-- The read client rejects mutation tools.
+- Robinhood execution is constructed only in explicit `live` mode after all
+  existing account, secret, canary and `LIVE_TRADING_ENABLED` gates pass.
+  `read_only` and `shadow` construct no execution provider. The currently
+  deployed stack remains `read_only`.
+- The read client always rejects mutation tools. Live mode constructs a second,
+  no-retry MCP session whose capability is restricted to four reviewed order
+  mutation tools and the exact bound Agentic account.
 - The separate mutation transport has a fixed four-tool allowlist, no response
   cache, SDK reconnect retries disabled, and exactly one `CallTool` invocation.
   Its constructor binds one account number, every call must match it exactly,
@@ -81,15 +117,17 @@ Canonical input+output schema SHA-256:
   errors are sanitized `rejected`; transport/protocol/response ambiguity is
   `unknown`. Only a genuine post-send unknown engages recovery, and no transport
   layer automatically retries it.
-- The dormant execution adapter exposes a separate exact-candidate capability
-  instead of pretending Robinhood implements client-id lookup. It revalidates exact instrument identity,
-  multiplier, price tick and quantity increment before mutation; requires an
-  explicit option `position_effect`; validates the provider's order echo; and
-  normalizes only reviewed order states and stable execution IDs/fills.
+- The execution adapter exposes a separate exact-candidate capability instead
+  of pretending Robinhood implements client-id lookup. It revalidates exact
+  instrument identity, multiplier, the variable equity tick schedule and
+  whole-share quantity increment before mutation. A successful equity mutation
+  is resolved only after a canonical order-id read validates every visible
+  field. Only equity mutations are certified in the production constructor;
+  options fail before a live grant and before mutation transport.
 - The first live grant of each market day must use exactly one provider-reported
-  quantity increment. Missing increment metadata fails before the grant; with
-  today's provider facts, this permits a one-contract option canary and keeps
-  equity live trading closed until its exact increment/tick contract exists.
+  quantity increment. Missing or inconsistent metadata fails before the grant;
+  the certified equity canary increment is one share. Option canaries remain
+  disabled despite their read-only instrument metadata.
 - Canary limit revisions have an immutable database audit trail. Tightening is
   immediate; widening requires the greater of the old/new clean-day thresholds,
   that many completed live-ledger days, no PnL-divergence event on those days,
@@ -217,20 +255,26 @@ improvement:
    proven without real-money effects, plus a production lookup with the same
    stable identity.
 
-The v1.5 bounded recovery component now satisfies the offline equity recovery
-requirement without weakening it to loose field matching. Live remains a
-no-ship for separate reasons:
+The v1.5 bounded recovery component satisfies the offline equity recovery
+requirement without weakening it to loose field matching. The v1.6 evidence
+closes the equity-limit metadata gate and commit `319f657` wires the equity-only
+adapter behind explicit live startup controls. M11 is not yet marked landed:
 
-1. Robinhood's current schemas do not document one exact quantity increment and
-   price-tick rule for the equity limit order shape Alpheus would send. The live
-   market-data adapter therefore rejects equity instruments before any grant.
-2. Option placement produced only unknown/zero-order negative evidence; option
-   mutation and recovery remain closed pending structured error visibility and
-   separate dedupe proof.
-3. Production construction remains deliberately unwired until one asset class
-   satisfies its exact metadata contract and the full M11 deployment
-   certification is rerun. No additional real-money probe is authorized by
-   this implementation.
+1. Rerun the complete isolated M11 deployment certification with the production
+   construction in `live` mode, an empty test database and no agent proposal.
+   This proves startup/account binding without authorizing an order.
+2. The first Alpheus-routed live canary remains a separate human-confirmed
+   action. Its ticket must be exactly one share and remain within the immutable
+   daily canary risk cap. Direct MCP evidence is not silently treated as that
+   acceptance order.
+3. The currently running Robinhood deployment remains `read_only`; do not
+   change its mode or restart it as part of documentation work.
+4. Option placement produced only unknown/zero-order negative evidence. The
+   production constructor is equity-only; option placement and recovery remain
+   closed pending separate evidence and certification.
+
+No additional real-money probe is authorized by this implementation or by the
+completion of the earlier bounded evidence ticket.
 
 Verified placement deduplication prevents a second broker effect when the exact
 same ref and intent are replayed, but it does not by itself solve accounting:

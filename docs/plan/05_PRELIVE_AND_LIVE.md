@@ -140,4 +140,18 @@ The bounded equity recovery alternative is implemented offline in migration
 0009, the execution/reconciliation store, the Robinhood exact-candidate reader,
 and the Admin Cockpit adoption flow. It does not enable production execution.
 See `../M11_PROVIDER_GAP.md` for the acceptance evidence and remaining
-provider-metadata/option blockers.
+recovery and option blockers as they stood at v1.5.
+
+## Amendment v1.6 implementation status
+
+Under a separately reviewed and owner-confirmed live ticket, one-share equity
+limit placement was accepted and canonically observed, then cancelled with zero
+fill; the otherwise identical 0.5-share order was rejected before creation.
+Read-only boundary reviews established a $0.01 tick above $1 and $0.0001 tick at
+or below $1. Commit `319f657` encodes that exact limit-only contract, requires
+exact-symbol instrument identity, validates a canonical order-id read after a
+successful mutation, and wires the production execution capability only in
+explicit live mode. The production constructor is equity-only; option grants
+and mutations remain blocked. The deployed Robinhood stack remains read-only,
+and the first Alpheus-routed live canary still requires separate human
+confirmation after isolated live-mode startup certification.
