@@ -19,8 +19,8 @@ one PostgreSQL deployment. Co-location does not grant shared ownership.
 
 ### Presentation and user authority
 
-- Web/CLI displays read models and submits typed user requests or exact
-  confirmation tickets.
+- Web/CLI displays read models and submits typed user requests plus
+  display/confirmation receipt commands for Kernel-created exact tickets.
 - It owns no trading, rating, Strategy, Memory, or workflow truth.
 - Authentication proves the user/session; ordinary prose does not prove
   authorization.
@@ -88,8 +88,9 @@ User / Web
 Decision Artifact
   -> accepted GRACE intake / EvaluationTicket acknowledgement for new risk
   -> deterministic Proposal Validator
-  -> exact human ticket OR active DelegationGrant
-  -> Kernel hard-risk/reconciliation path
+  -> active DelegationGrant -> Kernel autonomous admission
+     OR Kernel non-effectful ticket -> exact human receipt -> Kernel admission
+  -> Kernel hard-risk/reservation/reconciliation path
   -> Provider
   -> Robinhood
 
@@ -114,7 +115,7 @@ from reconciling, cancelling, closing, or enforcing breakers.
 
 | Record/fact | Sole write owner | Other modules |
 |---|---|---|
-| Conversation/UserRequest/confirmation binding | User Input service | Read/reference under policy |
+| Conversation/UserRequest/ticket-display and confirmation conversation-receipt binding | User Input service | Read/reference under policy |
 | Run/Task/Attempt/Message/Artifact/Checkpoint | Agent Control Plane | Read/reference only |
 | BehaviorEvent and decision graph | Agent Control Plane through validated Artifact commit | GRACE consumes immutable copy/reference |
 | Tool call/effect/reconciliation | Tool Gateway | Agent references; Control Plane handles task state |
@@ -124,7 +125,8 @@ from reconciling, cancelling, closing, or enforcing breakers.
 | EvaluationProfile/Contract and Calibration Pack | GRACE privileged human/model-risk path | Engine and Validator consume immutable revision |
 | EvaluationTicket/TicketState/ModelBindingState | GRACE | Agent Control Plane receives intake acknowledgement; other modules read |
 | MaturedBehaviorOutcome/AtomicEvaluation/ScoreSnapshot | GRACE | Delegation and Agents read permitted publication class |
-| Delegation policy/proposal/grant | Delegation privileged path | Kernel validates; Agents read scoped status |
+| Delegation policy/template/budget revisions; proposal/ProposalStateHead; attestations/candidates; grant/ScopeHead/PoolHead/HealthLease | Delegation roles and privileged paths exactly as specified in `DELEGATION_POLICY.md` | Kernel validates; Agents read scoped status |
+| OperationConfirmationTicket/TicketStateHead; OperationAuthorityBinding/charge/dispatch/reduction proof | Kernel | User Input submits receipt commands; other modules read scoped publication |
 | Account/operation/reservation/order/fill/position/breaker | Kernel | Other modules read canonical publication |
 | Broker request/effect/reconciliation | Kernel Provider | No Agent-plane access |
 
@@ -174,7 +176,8 @@ broker execution. Safety comes from ordered committed records:
 
 ## New-risk path
 
-Only Decision Desk may produce Agent new-risk intent. Before Kernel receives it:
+Only Decision Desk may produce Agent new-risk intent. Before Kernel receives a
+candidate:
 
 - required Evidence, Strategy, Challenge, decision graph, and BehaviorEvent
   references are committed;
@@ -183,13 +186,25 @@ Only Decision Desk may produce Agent new-risk intent. Before Kernel receives it:
   bootstrap-unassigned or unsupported;
 - deterministic Proposal Validator checks schema, freshness, revision and
   authority-envelope compatibility;
-- autonomous flow references one current scoped `DelegationGrant`;
-- human-review flow references one exact current confirmation ticket;
 - proposal and authority references use stable idempotency identities.
 
-Kernel then independently recomputes account state, risk, reservations,
-position effect, prices, limits, settled Provider facts, and breaker state. It
-does not trust Agent sizing, GRACE scores, copied grant limits, or Web state.
+The authority routes then diverge:
+
+- autonomous flow presents one current scoped `DelegationGrant` to Kernel's
+  admission gate;
+- human-review flow presents a non-effectful candidate with
+  `authority_mode=exact_confirmation`; Kernel canonicalizes it and creates the
+  pending operation plus immutable OperationConfirmationTicket; only a later
+  exact User Input receipt may be atomically consumed into an entitlement; and
+- the two routes are exclusive and never stacked or silently substituted.
+
+Before any Provider effect, Kernel independently recomputes account state,
+risk, reservations, position effect, prices, limits, fresh canonical Provider
+account/buying-power, position, order and reservation facts, and breaker state,
+then atomically creates the applicable authority binding, charges,
+`trade_grant`, reservation, and attempt. There is no independent
+`settled_cash` authority field. It does not trust Agent sizing, GRACE scores,
+copied grant limits, or Web state.
 
 ## Risk-reducing path
 

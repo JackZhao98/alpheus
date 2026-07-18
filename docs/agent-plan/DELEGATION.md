@@ -2,9 +2,9 @@
 
 > Status: **FROZEN ARCHITECTURE — GRACE/authorization separation, authority
 > sources, scoped grants, fail-closed enforcement, and promotion/demotion
-> direction are authoritative. Exact tiers, thresholds, numerical envelopes,
-> human-override policy, and Live rollout remain unspecified and are not
-> authorized for implementation.**
+> direction are authoritative. The exact v1 policy, capability templates,
+> grants, human-authority boundary, Kernel Gate, and rollout are frozen in
+> `DELEGATION_POLICY.md`. Autonomous Live remains disabled.**
 
 ## Purpose
 
@@ -17,6 +17,9 @@ Delegation answers a question that GRACE intentionally does not answer:
 The answer is produced by deterministic policy code. A score is evidence, not
 permission. An Agent cannot authorize itself, and profitable output cannot
 directly become buying power.
+
+Read `DELEGATION_POLICY.md` before implementing or changing any authority
+route, policy mapping, grant, confirmation, budget, or Kernel Gate behavior.
 
 ## System boundary
 
@@ -48,10 +51,12 @@ The system does not collapse all authority into one score-derived number:
    is actually risk reducing; it is not blocked by a low GRACE score or absent
    autonomous grant.
 
-Exact human confirmation is not a GRACE upgrade. Whether a human-confirmed
-operation may exceed an autonomous grant while remaining inside Kernel and
-human absolute limits is itself a human-owned policy choice and must be frozen
-explicitly before implementation.
+Exact human confirmation is not a GRACE upgrade. Under the frozen v1 policy it
+is an exclusive one-operation authority route that substitutes for, rather
+than stacks with, an autonomous grant. It may accept only Kernel-defined
+reviewable Class-C exceptions and cannot exceed the separately frozen Kernel
+absolutes, mode/capability gates, canary, account capacity, or reconciliation
+barriers.
 
 ## Frozen invariants
 
@@ -78,7 +83,8 @@ explicitly before implementation.
 10. Risk-reducing classification is derived by Kernel from canonical state,
     never trusted from an Agent or grant label.
 11. Delegation changes are fully versioned, expiring, reversible, and
-    attributable to their ScoreSnapshot and human policy inputs.
+    attributable to their complete ScoreSnapshotBinding set and human policy
+    inputs.
 12. A profitable policy violation cannot support an upgrade and may trigger an
     immediate suspension or review under frozen policy.
 
@@ -90,8 +96,9 @@ The Delegation Policy Engine consumes fields equivalent to:
 request/proposal id, policy revision, and evaluation time
 account, ledger, deployment mode, and user-owned policy revision
 target AgentRevision, RoleContract, StrategyVersion, and decision pipeline
-approved GRACE ScoreSnapshot and Champion model revision
-GRACE scope, effective exposure, uncertainty, staleness, and limitation flags
+complete required GRACE ScoreSnapshotBinding set, Champion/Profile/Calibration
+revisions, categorical plane floors, and source-head manifest
+GRACE scopes, effective exposure, uncertainty, staleness, and limitation flags
 current grant, canary, Strategy, product, and operational envelopes
 Kernel-published breaker, reconciliation, Provider-health, and ledger state
 required human review/promotion burden
@@ -113,10 +120,11 @@ equivalent to:
 
 ```text
 authorization_proposal_id and policy revision
-source ScoreSnapshot, GRACE model, and complete input-manifest references
+source ScoreSnapshotBinding set, GRACE model/Profile/Calibration, and complete
+input-manifest references
 target account, ledger, deployment mode, AgentRevision/Role, Strategy, and
 decision-pipeline scope
-current and proposed authorization tier
+current and proposed AuthorizationTemplateRevision/display stage
 allowed operation classes, products, instruments/universe, and session scope
 per-operation, aggregate open-risk, loss, concentration, frequency, and
 duration envelopes
@@ -135,7 +143,8 @@ broker or treated as an active grant.
 
 After required validation and human approval, the privileged path may create
 an immutable `DelegationGrant`. The grant pins the exact proposal, policy,
-GRACE model/ScoreSnapshot, scope, envelope, effective time, expiry, and rollback
+complete ScoreSnapshotBinding set, GRACE model/Profile/Calibration Pack/
+Champion manifest, scope, envelope, effective time, expiry, and rollback
 target. Replacement is atomic; concurrent promotion cannot create overlapping
 ambiguous active grants for the same scope.
 
@@ -155,10 +164,9 @@ Kernel resolves the canonical grant by id and validates its digest and scope.
 It does not trust an Agent-supplied copy of limits or a label claiming that the
 operation is authorized.
 
-## Tier direction
+## Capability and display-stage direction
 
-Exact names and numerical rules remain future policy, but the lifecycle must
-distinguish at least:
+The lifecycle distinguishes at least these human-readable stages:
 
 1. research only;
 2. Shadow only;
@@ -167,25 +175,34 @@ distinguish at least:
 5. a higher but still human-capped trusted tier only if later evidence and
    policy justify it.
 
-One transition cannot skip required tiers. A Strategy, Agent, or model revision
-does not inherit a tier without an explicit compatibility and credibility-
-transfer decision. A tier is not an account balance and cannot be spent outside
-its scoped envelope.
+Machine policy does not treat these labels as one scalar ladder. It uses the
+versioned capability-template lattice in `DELEGATION_POLICY.md`; a transition
+exists only on an explicit reviewed graph edge. One transition cannot skip a
+required edge. A Strategy, Agent, product, universe, or model revision does not
+inherit capability without an explicit directional compatibility and
+credibility-transfer decision. A display stage is not an account balance and
+cannot be spent outside its exact scoped envelope.
 
 ## Effective authorization and Kernel enforcement
 
-Kernel enforces the strictest applicable limit:
+Kernel first requires exactly one legal authority route: an active autonomous
+grant, one exact confirmation, a Kernel-verified reduction, or a separately
+originated user/Kernel emergency reduction. Grant and exact confirmation are
+never stacked. It then enforces the strictest applicable dimension:
 
 ```text
-effective authorization = minimum of
+effective authorization = dimension-wise intersection of
   human-owned absolute policy,
   Kernel hard risk and reservation rules,
   active Live canary,
-  active DelegationGrant,
+  exactly one applicable grant OR exact confirmation where new risk is allowed,
   Strategy-specific envelope,
-  operation-specific exact confirmation where applicable,
   remaining ledger capacity
 ```
+
+Set, time, revision, health, and predicate dimensions use the exact
+intersection algebra in `DELEGATION_POLICY.md`; they are not reduced to one
+numeric `minimum`.
 
 Kernel Gate fails closed when a required grant is absent, stale, expired,
 revoked, corrupt, unsupported, or mismatched to account, ledger, deployment,
@@ -193,17 +210,19 @@ Agent/Role, Strategy, product, action, or GRACE/policy revision. It also rejects
 an envelope that cannot be resolved to canonical state.
 
 Kernel independently recomputes quantity, exposure, risk, position effect,
-close normalization, settled Provider facts, reservations, and breaker state.
-A valid grant is necessary for autonomous new risk but never sufficient for
-execution.
+close normalization, fresh canonical Provider account/buying-power, position,
+order and reservation facts, and breaker state. There is no independent
+`settled_cash` authority field. A valid grant is necessary for autonomous new
+risk but never sufficient for execution.
 
 ## Upgrade, downgrade, and decay
 
-- Upgrade requires a compatible GRACE snapshot with sufficient credible
-  exposure, acceptable downside/tail evidence, calibration, operational
-  integrity, matching regime/coverage, and every human-owned promotion gate.
-- An increase moves at most one tier and remains inside a human-owned change
-  budget and cooldown.
+- Upgrade requires a complete compatible GRACE ScoreSnapshotBinding
+  constellation with sufficient credible exposure, acceptable downside/tail
+  evidence, calibration, operational integrity, matching regime/coverage, and
+  every human-owned promotion gate.
+- An increase moves across at most one declared capability-template edge and
+  remains inside a human-owned change budget and cooldown.
 - Downgrade/suspension may follow deterioration, drawdown, rule violation,
   unresolved unknown, Provider divergence, model invalidation, missing required
   monitoring, or incompatible regime.
@@ -211,8 +230,10 @@ execution.
   or validated coverage no longer applies.
 - Losses never trigger martingale sizing or a larger envelope intended to win
   back credibility.
-- A downgrade cannot strand risk reduction: Kernel-validated close/cancel/
-  tighten paths remain available.
+- A downgrade cannot strand fact-proven risk reduction: Kernel-validated
+  close/cancel/tighten paths remain available only when the exact action is
+  reducing under canonical state and the Provider unknown/reconciliation latch
+  permits that mutation. A closing-order cancel is not reduction by name.
 
 The Delegation Engine never edits a grant in place. Every change creates a new
 proposal and, if approved or automatically permitted by frozen downgrade
@@ -239,15 +260,17 @@ it is not an Agent feature.
 - Delegation Engine or Validator unavailable: no new or expanded grant.
 - Activation ambiguity or concurrent update: no new active revision; retain
   the last unambiguous valid state or fail closed.
-- Grant missing/expired/mismatched: autonomous new risk rejected or routed to
-  exact human review; never silently broadened.
+- Grant missing/expired/mismatched: autonomous new risk is rejected. Exact
+  human review is possible only through an explicit new proposal revision and
+  Kernel ticket; the denied route is never silently broadened or rerouted.
 - Kernel unavailable: no broker effect regardless of grant state.
 - Agent Runtime unavailable: existing Kernel safety and human-authorized risk
   reduction remain independent.
 - Position monitoring requirement unavailable: block monitor-dependent new
   autonomous risk and surface the condition.
-- GRACE model rollback/incompatibility: suspend affected grants or return them
-  to the last explicitly compatible conservative state.
+- GRACE model rollback/incompatibility: suspend affected grants. A conservative
+  replacement requires a newly evaluated current proposal; rollback never
+  revives an expired, revoked, stale, or now-incompatible prior grant.
 
 ## Persistence and audit
 
@@ -257,9 +280,11 @@ Schemas must preserve immutable or append-only records equivalent to:
 - authorization input manifests and proposals;
 - Validator and human approval/rejection artifacts;
 - active, expired, revoked, suspended, and superseded grants;
-- authority envelopes presented to Kernel and Gate decisions;
+- fenced ScopeHead generations with append-only transition history, authority
+  bindings, budget charges, dispatch authorizations, authority envelopes, and
+  Kernel Gate decisions;
 - upgrade, downgrade, decay, review, rollback, and failure events;
-- exact GRACE ScoreSnapshot and Kernel policy references.
+- exact GRACE ScoreSnapshotBinding set and Kernel policy references.
 
 Agent and GRACE database roles cannot write active grants. Only the privileged
 activation role may transition them, and Kernel receives read/validation access
@@ -277,7 +302,7 @@ Delegation cannot authorize autonomous Live risk until acceptance proves:
 - one lucky outcome, Shadow-only evidence, or profitable violation cannot
   cause promotion;
 - Strategy/Agent/Role/model changes cannot silently inherit authority;
-- upgrade is one-tier, cooldown-bound, and human-approved as specified;
+- upgrade is one-template-edge, cooldown-bound, and human-approved as specified;
 - qualifying deterioration/violation/unknown causes deterministic suspension
   or downgrade;
 - concurrency cannot produce multiple active grants or oversubscribe an
@@ -288,17 +313,23 @@ Delegation cannot authorize autonomous Live risk until acceptance proves:
   risk;
 - Kernel independently applies the strictest limit and rejects unresolved
   authority state;
-- rollback restores the exact preceding compatible grant and policy revision;
+- rollback re-evaluates current facts and, only when still compatible, creates
+  a new proposal/grant with the preceding conservative policy/template
+  semantics; it never restores the old grant instance;
 - observe-only, Shadow, and tightly capped Live canary stages pass independent
   adversarial review.
 
-## Required later specification
+## Detailed specification and remaining boundary
 
-Before implementation, freeze the exact policy schema, compatibility matrix,
-grant subject/scope model, tier and envelope fields, GRACE-to-delegation mapping,
-human confirmation/override policy, promotion/demotion state machines,
-concurrency control, persistence ownership, Kernel Gate contract, rollout, and
-acceptance probes.
+`DELEGATION_POLICY.md` freezes the exact policy schema, compatibility and
+capability-template lattice, scope/partition model, GRACE mapping, human
+authority classes, grant/ticket/use state machines, concurrency, Kernel Gate,
+rollout, and adversarial acceptance probes.
 
-Until that specification is reviewed, no GRACE score grants authority and the
-Kernel must behave as if no autonomous delegation increase exists.
+Implementation may proceed only in that order and initially through non-Live,
+Shadow, exact-confirmation, and observe-only stages. Autonomous Live remains
+disabled until the signed GRACE Calibration Pack/model-risk review, exact
+machine schemas and security review, PostgreSQL fault suite, final cross-module
+audit, and explicit production PolicyRevision activation pass. Until then, no
+GRACE score grants Live authority and Kernel behaves as if no autonomous Live
+DelegationGrant exists.

@@ -113,8 +113,15 @@ risk terms and cannot substitute for Kernel review.
 
 Exact confirmation is a one-ticket authority path under `DELEGATION.md`; it is
 not a GRACE score change or a general autonomous grant. Confirming one operation
-cannot raise an Agent/Strategy tier, approve later proposals, or waive Kernel
-invariants.
+cannot raise an Agent/Strategy capability template, approve later proposals,
+or waive Kernel invariants.
+
+For trading, `DELEGATION_POLICY.md` freezes the Kernel-owned
+OperationConfirmationTicket, User Input-owned TicketDisplayReceipt and
+ConfirmationReceipt, exclusive authority route, expiry/consumption sequence,
+and separation from grant activation, breaker resume, canary widening,
+unknown-effect resolution, and emergency reduction. This file remains
+authoritative for conversational binding and ambiguity behavior.
 
 ## Attachments and external text
 
@@ -133,8 +140,10 @@ authoritative; an LLM-produced IntentDraft never replaces it.
 
 ## Required later specification
 
-Before implementation, freeze the `UserRequest`, `IntentDraft`, question,
-interrupt, supersession, and confirmation state machines; define explicit
-critical-effect classes; and add acceptance probes for ambiguous acknowledgement,
-multiple pending confirmations, stale revisions, mid-run correction, duplicate
-delivery, attachment injection, and cancellation after Kernel submission.
+Before general User Input implementation, freeze the `UserRequest`,
+`IntentDraft`, question, interrupt, and supersession state machines plus the
+non-trading confirmation schemas. Trading confirmation's money-authority subset
+is already frozen by `DELEGATION_POLICY.md`. Add acceptance probes for ambiguous
+acknowledgement, multiple pending confirmations, stale revisions, mid-run
+correction, duplicate delivery, attachment injection, and cancellation after
+Kernel submission.

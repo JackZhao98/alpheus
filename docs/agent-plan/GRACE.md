@@ -52,16 +52,18 @@ scoreable, or activate a GRACE model revision.
 
 GRACE does **not** contain the authorization system:
 
-- the separate **Delegation Policy Engine** maps an approved `ScoreSnapshot`
-  plus human-owned policy into an `AuthorizationProposal`;
+- the separate **Delegation Policy Engine** maps a complete compatible
+  `ScoreSnapshotBinding` set plus human-owned policy into an
+  `AuthorizationProposal`;
 - a privileged approval path creates an active authorization revision;
 - the **Kernel Delegation Gate** validates and enforces that revision together
   with all stricter Kernel limits;
 - GRACE never signs a grant, changes an account limit, approves an order, or
   decides that a risk-creating operation may execute.
 
-Those downstream responsibilities are frozen separately in `DELEGATION.md`.
-A GRACE rating is evidence for authorization policy; it is not authority.
+Those downstream responsibilities are frozen separately in `DELEGATION.md`
+and `DELEGATION_POLICY.md`. A GRACE rating is evidence for authorization
+policy; it is not authority.
 
 ## Frozen invariants
 
@@ -489,7 +491,7 @@ GRACE separates human choices from estimable quantities:
 |---|---|---:|
 | Human-owned evaluation policy | eligible behavior classes, prohibited uses, required horizons, model-risk burden | Never |
 | Kernel invariants | reservation, reconciliation, ambiguity, and broker mutation rules | Never |
-| Downstream delegation policy | autonomous tiers, product permissions, risk envelopes, rating-to-authority mapping | Never by GRACE |
+| Downstream delegation policy | capability templates, product permissions, fixed risk envelopes, categorical evidence-to-eligibility mapping | Never by GRACE |
 | Approved GRACE model form | likelihood, prior family, hierarchical pooling, attribution, transfer and decay form | No; revision requires model-risk review |
 | Empirical parameters | exposure, calibrated frequency/severity, execution and outcome distributions | Challenger only |
 | LLM interpretation | narrative attribution, hypotheses, explanations, candidate lessons | Never authoritative |
@@ -654,9 +656,10 @@ than automatic compensating weight changes.
 
 ## Downstream delegation boundary
 
-`DELEGATION.md` owns the policy that turns an approved ScoreSnapshot into a
-bounded autonomous envelope. That policy may define research-only, Shadow,
-human-review, and autonomous Live tiers, but GRACE does not.
+`DELEGATION.md` and `DELEGATION_POLICY.md` own the policy that uses a complete
+compatible ScoreSnapshotBinding set to determine eligibility for a bounded
+human-owned capability template. That policy may define research-only, Shadow,
+human-review, and autonomous Live display stages, but GRACE does not.
 
 GRACE may publish deterioration, staleness, invalid-model, or requalification
 flags. The Delegation Policy Engine determines their policy consequence under

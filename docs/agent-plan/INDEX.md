@@ -18,8 +18,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
    real outcomes, attribution, or Post Mortem boundaries. Then read
    `GRACE_QUANTITATIVE.md` for schemas, scoring rules, statistical models,
    ratings, maturity, and model validation.
-4. Read `DELEGATION.md` when work concerns autonomous authority, score-to-tier
-   mapping, grants, human confirmation interaction, or Kernel authorization.
+4. Read `DELEGATION.md` and then `DELEGATION_POLICY.md` when work concerns
+   autonomous authority, GRACE eligibility mapping, capability templates,
+   grants, human confirmation interaction, budgets, or Kernel authorization.
 5. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
    cross-module APIs, Provider access, or failure behavior.
 6. Read the frozen Kernel plan only when defining or implementing a Kernel
@@ -35,10 +36,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 |---|---|---|
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
-| Delegation policy and risk authorization | Architecture frozen; exact policy, grants, human override, Kernel Gate, and rollout specification required | [`DELEGATION.md`](DELEGATION.md) |
+| Delegation policy and risk authorization | Architecture and exact v1 specification frozen; autonomous Live disabled pending GRACE/model-risk, machine-schema, security, fault-suite, and rollout acceptance | [`DELEGATION.md`](DELEGATION.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
 | Complete module graph and trust boundaries | Architecture frozen; exact transport, persistence roles, cross-module schemas, and probes required | [`SYSTEM_BOUNDARIES.md`](SYSTEM_BOUNDARIES.md) |
 | Durable Agent Runtime | Architecture frozen; detailed state machines and implementation specification required | [`RUNTIME.md`](RUNTIME.md) |
-| User query, Intent, interruption, and confirmation | Architecture frozen; schemas and UI transport required | [`USER_INPUT.md`](USER_INPUT.md) |
+| User query, Intent, interruption, and confirmation | Architecture frozen; trading money-confirmation subset frozen by Delegation; remaining schemas and UI transport required | [`USER_INPUT.md`](USER_INPUT.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
 | Skills, Tools, and Capability Registry | Architecture frozen; metadata, taxonomy, Gateway, and validators required | [`SKILLS_TOOLS.md`](SKILLS_TOOLS.md) |
 | Task planning and typed Agent collaboration | Architecture frozen; state schemas, Scheduler, and limits required | [`COLLABORATION.md`](COLLABORATION.md) |
 | Research and data plane | Architecture frozen; Evidence schemas, Providers, source policy, and acceptance required | [`RESEARCH_DATA.md`](RESEARCH_DATA.md) |
@@ -68,8 +69,9 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 1. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
    data and a signed Calibration Pack before authorizing implementation.
-2. Freeze Delegation's exact policy/grant/Kernel Gate specification against the
-   proposed non-compensatory `ScoreSnapshot` contract.
-3. Derive detailed state schemas, threat models, milestones, rollout gates, and
-   acceptance probes only after the architecture closes.
-4. Run one final cross-module architecture audit before authorizing code work.
+2. Derive the Agent Build Roadmap: exact machine schemas, service/database
+   boundaries, implementation milestones, threat models, rollout gates, and
+   acceptance commands from the frozen module contracts.
+3. Run one final cross-module architecture audit before authorizing code work.
+4. Implement non-Live foundations first; GRACE and Delegation cannot affect
+   autonomous Live until their independent acceptance boundaries pass.

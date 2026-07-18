@@ -108,6 +108,8 @@ The UI may show the interpreted scope, mode, assumptions, missing information,
 budget, and planned work before or during execution. Read-only research can run
 under policy without trading confirmation. A money or other critical effect
 requires the exact binding in `USER_INPUT.md` and `DELEGATION.md`.
+Trading and privileged authority views also follow the distinct effect classes,
+ticket/receipt fields, and deadlines in `DELEGATION_POLICY.md`.
 
 Pause, resume, correction, cancel, and supersede are typed commands against a
 specific current object. Closing a browser, editing visible text, or sending a
@@ -131,6 +133,12 @@ Any material backend change invalidates the visible confirmation and requires a
 new ticket. A generic `Confirm` action cannot bind multiple pending objects,
 activate a general autonomous grant, or approve a different proposal.
 
+Successful rendering creates the User Input-owned immutable
+`TicketDisplayReceipt` defined by `DELEGATION_POLICY.md`; only after Kernel has
+CAS-attached that receipt to the current TicketStateHead may the UI submit a
+confirmation/rejection receipt. Browser-local visibility or button state is
+not the ticket state.
+
 ## Provenance and truth labels
 
 Every material value or conclusion exposes an owner and `as_of`/freshness state.
@@ -145,8 +153,10 @@ The visual design may vary, but the semantic classes remain distinct:
 - `STALE / UNKNOWN / UNRECONCILED`: unusable or limited state.
 
 Research market data cannot be rendered as execution truth. Counterfactual
-market outcomes cannot be labeled realized PnL. GRACE ScoreSnapshot and active
-DelegationGrant must appear as different objects.
+market outcomes cannot be labeled realized PnL. GRACE ScoreSnapshot,
+AuthorizationProposal, DelegationGrant, OperationConfirmationTicket,
+ConfirmationReceipt, breaker resume, canary revision, and unknown-effect
+resolution must appear as different objects and commands.
 
 ## Read and command architecture
 
