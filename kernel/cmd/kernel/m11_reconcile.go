@@ -70,6 +70,8 @@ func (s *server) adoptExecutionCandidate(w http.ResponseWriter, r *http.Request)
 		code := "candidate_zero"
 		if len(candidates) > 1 {
 			code = "candidate_ambiguous"
+		} else if len(candidates) == 1 {
+			code = "candidate_mismatch"
 		}
 		_ = s.keepAttemptUnknown(claimed, "candidate approval no longer has one exact match", code, "")
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate is not uniquely verified"})

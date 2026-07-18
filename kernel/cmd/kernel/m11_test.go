@@ -19,11 +19,18 @@ import (
 )
 
 type candidateExecution struct {
+	mu         sync.Mutex
 	candidates []broker.OrderResult
 	placeCalls int
+	findCalls  int
+	getCalls   int
+	findErr    error
+	getErr     error
 }
 
 func (c *candidateExecution) PlaceLimitOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.placeCalls++
 	return broker.OrderResult{}, &rhmcp.MutationError{Kind: rhmcp.ErrMutationOutcomeUnknown, Code: "call_failed"}
 }
@@ -33,6 +40,12 @@ func (c *candidateExecution) CancelOrder(context.Context, string) (broker.OrderR
 }
 
 func (c *candidateExecution) GetOrder(_ context.Context, brokerOrderID string) (broker.OrderResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getCalls++
+	if c.getErr != nil {
+		return broker.OrderResult{}, c.getErr
+	}
 	for _, candidate := range c.candidates {
 		if candidate.BrokerOrderID == brokerOrderID {
 			return candidate, nil
@@ -42,7 +55,37 @@ func (c *candidateExecution) GetOrder(_ context.Context, brokerOrderID string) (
 }
 
 func (c *candidateExecution) FindExactPlaceCandidates(context.Context, broker.ExactPlaceCandidateQuery) ([]broker.OrderResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.findCalls++
+	if c.findErr != nil {
+		return nil, c.findErr
+	}
 	return append([]broker.OrderResult(nil), c.candidates...), nil
+}
+
+func (c *candidateExecution) setCandidates(candidates ...broker.OrderResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.candidates = append([]broker.OrderResult(nil), candidates...)
+}
+
+func (c *candidateExecution) setFindError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.findErr = err
+}
+
+func (c *candidateExecution) setGetError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getErr = err
+}
+
+func (c *candidateExecution) callCounts() (place, find, get int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.placeCalls, c.findCalls, c.getCalls
 }
 
 const m11Plan = `{"stop":"-30%","invalidation":"x","time_stop":"15:45 ET","target":"+50%"}`
@@ -147,9 +190,9 @@ func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
 		t.Fatalf("attempt=%+v", attempt)
 	}
 	brokerOrderID := "77777777-7777-4777-8777-777777777777"
-	execution.candidates = []broker.OrderResult{{
+	execution.setCandidates(broker.OrderResult{
 		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
-	}}
+	})
 	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, time.Now())
 	if err != nil || claimed == nil {
 		t.Fatalf("candidate claim=%+v err=%v", claimed, err)
@@ -162,9 +205,12 @@ func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
 		t.Fatalf("candidate attempt=%+v err=%v", current, err)
 	}
 	body := fmt.Sprintf(`{"confirm_attempt_id":%q,"confirm_broker_order_id":%q}`, attempt.ID, brokerOrderID)
-	execution.candidates = append(execution.candidates, broker.OrderResult{
-		BrokerOrderID: "88888888-8888-4888-8888-888888888888", ClientOrderID: attempt.ClientOrderID, State: "submitted",
-	})
+	execution.setCandidates(
+		broker.OrderResult{BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted"},
+		broker.OrderResult{
+			BrokerOrderID: "88888888-8888-4888-8888-888888888888", ClientOrderID: attempt.ClientOrderID, State: "submitted",
+		},
+	)
 	ambiguous := routeRequest(handler, http.MethodPost, "/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
 	if ambiguous.Code != http.StatusConflict {
 		t.Fatalf("ambiguous status=%d body=%s", ambiguous.Code, ambiguous.Body.String())
@@ -174,7 +220,9 @@ func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
 	if current.State != "unknown" || gate.UnknownAttemptID != attempt.ID {
 		t.Fatalf("ambiguous current=%+v gate=%+v", current, gate)
 	}
-	execution.candidates = execution.candidates[:1]
+	execution.setCandidates(broker.OrderResult{
+		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
+	})
 	adopted := routeRequest(handler, http.MethodPost, "/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
 	if adopted.Code != http.StatusOK || !strings.Contains(adopted.Body.String(), `"attempt_state":"placed"`) {
 		t.Fatalf("adopt status=%d body=%s", adopted.Code, adopted.Body.String())
@@ -183,6 +231,184 @@ func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
 	gate, _ = st.GetLiveExecutionGate()
 	if current.State != "placed" || current.BrokerOrderID != brokerOrderID || gate.ActiveAttemptID != "" || gate.UnknownAttemptID != "" {
 		t.Fatalf("current=%+v gate=%+v", current, gate)
+	}
+}
+
+func m11CandidateAwaitingApproval(t *testing.T) (*server, *memoryStore, *candidateExecution, store.ExecutionAttempt, string) {
+	t.Helper()
+	s, st, venue := m11Server("35")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "EQ", InstrumentID: "55555555-5555-4555-8555-555555555555",
+		Kind: "equity", Multiplier: 1, PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
+	execution := &candidateExecution{}
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = execution
+	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-fault-candidate")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("propose status=%d body=%s", response.Code, response.Body.String())
+	}
+	st.mu.Lock()
+	var attempt store.ExecutionAttempt
+	for _, candidate := range st.attempts {
+		attempt = candidate
+	}
+	st.mu.Unlock()
+	if attempt.ID == "" || attempt.State != "unknown" {
+		t.Fatalf("attempt=%+v", attempt)
+	}
+	brokerOrderID := "77777777-7777-4777-8777-777777777777"
+	execution.setCandidates(broker.OrderResult{
+		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
+	})
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("candidate claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); err != nil {
+		t.Fatal(err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	if err != nil || current.State != "unknown" || current.CandidateBrokerOrderID != brokerOrderID {
+		t.Fatalf("candidate attempt=%+v err=%v", current, err)
+	}
+	body := fmt.Sprintf(`{"confirm_attempt_id":%q,"confirm_broker_order_id":%q}`, current.ID, brokerOrderID)
+	return s, st, execution, *current, body
+}
+
+func TestHumanCandidateAdoptionFaultsKeepLiveLatch(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*candidateExecution, store.ExecutionAttempt)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "candidate query fails",
+			configure: func(execution *candidateExecution, _ store.ExecutionAttempt) {
+				execution.setFindError(fmt.Errorf("injected query failure"))
+			},
+			wantStatus: http.StatusBadGateway,
+			wantCode:   "candidate_query_failed",
+		},
+		{
+			name: "candidate disappears",
+			configure: func(execution *candidateExecution, _ store.ExecutionAttempt) {
+				execution.setCandidates()
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "candidate_zero",
+		},
+		{
+			name: "candidate becomes ambiguous",
+			configure: func(execution *candidateExecution, attempt store.ExecutionAttempt) {
+				execution.setCandidates(
+					broker.OrderResult{BrokerOrderID: attempt.CandidateBrokerOrderID, State: "submitted"},
+					broker.OrderResult{BrokerOrderID: "88888888-8888-4888-8888-888888888888", State: "submitted"},
+				)
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "candidate_ambiguous",
+		},
+		{
+			name: "unique candidate identity changes",
+			configure: func(execution *candidateExecution, _ store.ExecutionAttempt) {
+				execution.setCandidates(broker.OrderResult{
+					BrokerOrderID: "88888888-8888-4888-8888-888888888888", State: "submitted",
+				})
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "candidate_mismatch",
+		},
+		{
+			name: "canonical order query fails",
+			configure: func(execution *candidateExecution, _ store.ExecutionAttempt) {
+				execution.setGetError(fmt.Errorf("injected canonical query failure"))
+			},
+			wantStatus: http.StatusBadGateway,
+			wantCode:   "candidate_order_unavailable",
+		},
+		{
+			name: "canonical order state is unknown",
+			configure: func(execution *candidateExecution, attempt store.ExecutionAttempt) {
+				execution.setCandidates(broker.OrderResult{
+					BrokerOrderID: attempt.CandidateBrokerOrderID, State: "provider_added_state",
+				})
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "candidate_state_unknown",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s, st, execution, attempt, body := m11CandidateAwaitingApproval(t)
+			test.configure(execution, attempt)
+			response := routeRequest(s.routes(), http.MethodPost,
+				"/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			current, err := st.GetExecutionAttempt(attempt.ID)
+			gate, gateErr := st.GetLiveExecutionGate()
+			if err != nil || gateErr != nil || current.State != "unknown" ||
+				current.ProviderErrorCode != test.wantCode || gate.UnknownAttemptID != attempt.ID ||
+				gate.ActiveAttemptID != "" {
+				t.Fatalf("attempt=%+v gate=%+v err=%v gate_err=%v", current, gate, err, gateErr)
+			}
+			st.mu.Lock()
+			reservation := st.openReservations[attempt.OpenReservationID]
+			grantCount := len(st.grants)
+			st.mu.Unlock()
+			if reservation.ResourceState != "held" || grantCount != 1 {
+				t.Fatalf("reservation=%+v grants=%d", reservation, grantCount)
+			}
+		})
+	}
+}
+
+func TestConcurrentHumanCandidateAdoptionHasOneWinner(t *testing.T) {
+	s, st, execution, attempt, body := m11CandidateAwaitingApproval(t)
+	handler := s.routes()
+	const workers = 20
+	responses := make(chan int, workers)
+	var start sync.WaitGroup
+	start.Add(1)
+	var wait sync.WaitGroup
+	for range workers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			start.Wait()
+			response := routeRequest(handler, http.MethodPost,
+				"/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
+			responses <- response.Code
+		}()
+	}
+	start.Done()
+	wait.Wait()
+	close(responses)
+	winners, conflicts := 0, 0
+	for status := range responses {
+		switch status {
+		case http.StatusOK:
+			winners++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("unexpected status=%d", status)
+		}
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	_, findCalls, getCalls := execution.callCounts()
+	if winners != 1 || conflicts != workers-1 || err != nil || gateErr != nil ||
+		current.State != "placed" || gate.ActiveAttemptID != "" || gate.UnknownAttemptID != "" ||
+		findCalls != 2 || getCalls != 1 {
+		t.Fatalf("winners=%d conflicts=%d attempt=%+v gate=%+v find=%d get=%d err=%v gate_err=%v",
+			winners, conflicts, current, gate, findCalls, getCalls, err, gateErr)
 	}
 }
 
@@ -200,8 +426,9 @@ func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 	s.providerDedupeVerified = true
 	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
 	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-one-replay")
-	if response.Code != http.StatusBadGateway || execution.placeCalls != 1 {
-		t.Fatalf("initial status=%d calls=%d body=%s", response.Code, execution.placeCalls, response.Body.String())
+	placeCalls, _, _ := execution.callCounts()
+	if response.Code != http.StatusBadGateway || placeCalls != 1 {
+		t.Fatalf("initial status=%d calls=%d body=%s", response.Code, placeCalls, response.Body.String())
 	}
 	st.mu.Lock()
 	var attempt store.ExecutionAttempt
@@ -221,8 +448,9 @@ func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 		_ = s.reconcileLivePlaceAttempt(context.Background(), execution, claimed)
 	}
 	current, _ := st.GetExecutionAttempt(attempt.ID)
-	if execution.placeCalls != 2 || current.ReplayCount != 1 || current.State != "unknown" {
-		t.Fatalf("calls=%d attempt=%+v", execution.placeCalls, current)
+	placeCalls, _, _ = execution.callCounts()
+	if placeCalls != 2 || current.ReplayCount != 1 || current.State != "unknown" {
+		t.Fatalf("calls=%d attempt=%+v", placeCalls, current)
 	}
 }
 
