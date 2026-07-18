@@ -256,6 +256,47 @@ pretending that non-unique order attributes are a client identity.
 
 ## Remaining gates for M11
 
+### v1.7 recovery hardening found by cross-module review
+
+The verified upstream `ref_id` behavior remains sufficient for duplicate-effect
+containment, but the local implementation is not yet the complete recovery
+contract:
+
+- the first send persists one fixed candidate window, while replay currently
+  advances only `replay_count` without proving it is still inside that window;
+  a delayed replay can therefore create an order that exact recovery can never
+  discover;
+- the account gate prevents a second Provider mutation but currently allows new
+  Live operations, grants, reservations and pending attempts to be staged while
+  the account is active or unknown;
+- the in-memory Halt check is not serialized with every background send path,
+  so a recovered pending attempt, replacement or replay can cross a committed
+  Halt; and
+- changing the deployment to `read_only` removes the execution adapter and the
+  Admin adoption route, so it cannot be the first response to an unresolved
+  attempt.
+
+Plan v1.7 makes the persisted original `send_window_end` the immutable replay
+deadline, with an atomic database-time check, and requires a transactional pre-
+entitlement Live admission check. It also serializes the database-backed Halt
+cut with every Live open send authorization. It deliberately reuses the
+existing account latch, Halt, exact matcher and two-step adoption. No second
+send window, configurable replay TTL, `recovery_only` mode, retry framework or
+automatic heuristic adoption is introduced.
+
+The canary completion artifact is named **M11 Canary Stop and Recovery
+Acceptance**. It records real broker facts and returns the deployment to
+`read_only` only after reconciliation is clean. It never claims that a fill can
+be rolled back.
+
+In the v1.5 contract, "read-only Provider pulls continue" means non-mutating
+queries performed while the deployment remains `TRADING_MODE=live` and Halt is
+committed. It does not mean switching the deployment to `read_only`, because
+that mode intentionally constructs no execution adapter and disables adoption.
+The v1.5 verified same-ref behavior supersedes only the frozen M11 requirements
+for `FindOrderByClientID` and for zero live dedupe evidence; it does not waive
+any other M11 gate.
+
 A documented, schema-stable lookup remains the preferred long-term provider
 improvement:
 
@@ -265,11 +306,12 @@ improvement:
    proven without real-money effects, plus a production lookup with the same
    stable identity.
 
-The v1.5 bounded recovery component satisfies the offline equity recovery
-requirement without weakening it to loose field matching. The v1.6 evidence
-closes the equity-limit metadata gate and commit `319f657` wires the equity-only
-adapter behind explicit live startup controls. The isolated no-order live-mode
-startup certification now passes. M11 is not yet marked landed:
+The v1.5 bounded recovery design remains the correct identity model without
+weakening it to loose field matching. The v1.6 evidence closes the equity-limit
+metadata gate and commit `319f657` wires the equity-only adapter behind explicit
+live startup controls. The isolated no-order live-mode startup certification
+passes. The v1.7 local recovery hardening above and its acceptance evidence must
+land before a canary. M11 is not yet marked landed:
 
 1. The first Alpheus-routed live canary remains a separate human-confirmed
    action. Its ticket must be exactly one share and remain within the immutable

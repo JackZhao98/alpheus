@@ -159,3 +159,102 @@ cap and five clean days before widening. A fresh-volume, no-agent, no-proposal
 live-mode startup certification then passed exact account binding and health;
 all operation, grant, attempt, order and fill counts remained zero, and the
 isolated stack was removed.
+
+## Amendment v1.7 — bounded replay completion and canary recovery
+
+The v1.5 identity and latch design remains authoritative and supersedes only
+the frozen M11 clauses that required `FindOrderByClientID` and prohibited the
+separately owner-authorized live dedupe probe. All other M11 safety boundaries
+remain in force. This amendment closes three implementation gaps without
+introducing another execution mode, retry framework or recovery service.
+
+### Ambiguous placement
+
+- The one permitted equity replay still requires the exact same `ref_id`, bound
+  account and byte-identical canonical Provider intent. It may be consumed only
+  while database time is strictly before the already-persisted
+  `send_window_end`, only after an exact pull of that window returns zero
+  candidates, and only while the global Halt is not committed. The comparison
+  and irreversible `replay_count` advance occur atomically under the existing
+  Live execution gate.
+- At or after `send_window_end`, zero candidates never authorizes another
+  placement. Non-mutating Provider matching may continue without a time limit,
+  while the attempt, grant, reservations and account latch remain held. The
+  original window is both the candidate window and replay deadline; do not add
+  a second window or a configurable replay duration.
+
+### Halt-to-send serialization
+
+`POST /halt` and every Live open-placement send authorization -- initial,
+recovered pending, replacement and same-ref replay -- serialize through the
+same database control lock. A send may durably cross the cut only when the
+database-backed global Halt is clear, and its sent marker is committed under
+that lock before the Provider call. A send already marked before the Halt cut
+is in-flight work that must be reconciled; Halt cannot pretend to revoke or
+roll it back. No attempt may cross from unsent to send-authorized after the cut.
+
+The HTTP Halt result records the cut and exposes any pre-cut in-flight attempt;
+the canary stop procedure drains or latches that work before declaring a clean
+stop. In-memory `haltMu` remains a local optimization, not the authority. Do not
+add a new service or hold an ordinary database transaction open across a
+Provider network call.
+
+### Admission while the account gate is occupied
+
+For Live effects, idempotent lookup of an already committed request happens
+first. A genuinely new request then checks the account execution gate inside
+the same database transaction that would create its operation entitlement:
+
+- `unknown_attempt_id` present -> refuse `live_execution_suspended`;
+- another active attempt present -> refuse retryably as `live_execution_busy`;
+- either refusal creates no new trade grant, open/close reservation, execution
+  attempt or typed order; and
+- Shadow work and reads remain independent.
+
+This complements the Provider-send latch. It prevents a later latch clear from
+silently releasing a queue of stale, already charged Live effects.
+
+### Canary stop and recovery, not transaction rollback
+
+The first Alpheus-routed canary uses the existing controls in this order:
+
+1. stop Agent emission and commit the database-fenced `POST /halt`, preventing
+   new Live open admission and send authorization while the live execution
+   capability remains constructed; reconcile any explicitly reported pre-cut
+   in-flight attempt;
+2. let the Kernel pull and reconcile the exact attempt; if a unique placement
+   candidate exists, complete the existing Admin adoption flow before any
+   cancel;
+3. if the adopted order is working, cancel by canonical broker order ID and
+   pull until terminal; if partially filled, ingest the fills and cancel only
+   the remainder; if filled, ingest order, fills, position and PnL;
+4. require the live gate to be empty and prove no unresolved unknown attempt,
+   unsafe reservation, orphaned grant, duplicate broker order or unexplained
+   position/PnL divergence; then
+5. and only then restart the deployment as `read_only` if the canary runbook
+   calls for it.
+
+If deterministic recovery cannot establish the broker fact, the deployment
+stays in `TRADING_MODE=live` with global Halt committed so its non-mutating
+Provider reads and Admin adoption capability remain available. Here and in the
+v1.5 unknown-latch text, "read-only pulls" describes the effect of a query; it
+does not mean switching the deployment to `TRADING_MODE=read_only`, which would
+remove the execution adapter and adoption/cancel capability. During ordinary
+Halt, canonical cancel and verified reduction remain available; while a
+Provider-unknown latch is unresolved, automatic mutations remain blocked until
+ownership is canonically resolved. A real fill is not undone by a software
+"rollback"; any later reduction is a separately authorized, Kernel-verified
+trade.
+
+**Acceptance:** fault-injected tests cover a replay before the original window
+ends, refusal at deadline equality and after expiry, a lost replay response, 20
+concurrent recovery workers and 20 new admissions while active/unknown. Exactly
+one same-ref replay may occur and it remains discoverable in the original
+window; all refused admissions create zero entitlements. A process-restart test
+preserves the unknown latch and recovery evidence. Halt-race tests cover every
+Live open-placement path and prove that no unsent attempt crosses the committed
+database cut; pre-cut sent work is explicitly reported and reconciled. A non-
+money end-to-end canary harness proves
+halt -> adopt/query -> cancel or fill reconciliation -> clean gate -> read-only
+ordering. No test intentionally creates a production network ambiguity and no
+real order is authorized by this amendment.

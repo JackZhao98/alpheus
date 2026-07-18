@@ -197,6 +197,27 @@ violated, and severity.
   raw transport payloads and secret paths must not appear in HTML, API responses
   or browser diagnostics. Every successful lab query emits only tool name and
   authenticated subject to the audit log, never arguments or result data.
+- **I15 Ambiguous-send containment and canary recovery.** In an isolated Live-
+  shaped Fake Provider, lose the first placement response. Verify a zero-
+  candidate recovery may consume exactly one byte-identical same-`ref_id`
+  replay only while database time is strictly before the original persisted
+  `send_window_end`; inject another lost response and require the replay order
+  to remain discoverable in that same window. At deadline equality and on every
+  later scan there is no replay. Release 20 recovery workers from one barrier:
+  one Provider replay at most. Race `POST /halt` against initial, recovered-
+  pending, replacement and replay sends; the database cut must prevent every
+  not-yet-authorized send, and pre-cut in-flight attempts must be reported for
+  reconciliation rather than called rolled back. While the live gate is active
+  and again while it is unknown, release
+  20 distinct new Live proposals: all are refused before creating a grant,
+  reservation, attempt or order, while idempotent replay of the original HTTP
+  request returns its existing identity. Restart the Kernel with the unknown
+  attempt and prove the latch, replay consumption and original window survive.
+  Finally exercise the non-money canary sequence: Halt first, keep the Live
+  capability available, adopt/query the exact candidate, cancel a working
+  remainder or ingest a partial/full fill, prove clean accounting and gate, and
+  only then restart `read_only`. A filled order is never reported as rolled
+  back, and the certification harness must never invoke a production mutation.
 
 ## Suppression list — known, tracked, NOT findings
 
