@@ -4,33 +4,27 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
+	"time"
 
 	"alpheus/kernel/internal/rhmcp"
 	"alpheus/kernel/internal/units"
 )
 
-// ClientOrderLookup is deliberately mandatory. Robinhood's current MCP does
-// not implement it, so the production execution adapter cannot be constructed
-// until the provider exposes a stable ref_id lookup.
-type ClientOrderLookup interface {
-	FindByClientOrderID(ctx context.Context, accountNumber, clientOrderID string) (OrderResult, error)
-}
-
 // RobinhoodExecution is a dormant, contract-tested execution adapter. Main
-// does not construct or wire it while the M11 provider gap remains open.
+// does not construct or wire it until the M11 recovery path is certified.
 type RobinhoodExecution struct {
 	read        *Robinhood
 	mutation    rhmcp.MutationCaller
 	instruments InstrumentReader
-	lookup      ClientOrderLookup
 }
 
-func NewRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader, lookup ClientOrderLookup) (*RobinhoodExecution, error) {
-	if read == nil || mutation == nil || instruments == nil || lookup == nil {
-		return nil, fmt.Errorf("Robinhood execution provider requires mutation, instrument, and client-id lookup capabilities")
+func NewRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader) (*RobinhoodExecution, error) {
+	if read == nil || mutation == nil || instruments == nil {
+		return nil, fmt.Errorf("Robinhood execution provider requires mutation and instrument capabilities")
 	}
-	return &RobinhoodExecution{read: read, mutation: mutation, instruments: instruments, lookup: lookup}, nil
+	return &RobinhoodExecution{read: read, mutation: mutation, instruments: instruments}, nil
 }
 
 func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error) {
@@ -172,6 +166,56 @@ func (r *RobinhoodExecution) GetOrder(ctx context.Context, brokerOrderID string)
 	return result, err
 }
 
+func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query ExactPlaceCandidateQuery) ([]OrderResult, error) {
+	intent := query.Intent
+	if query.AccountID != r.read.accountID || !looksLikeCanonicalUUID(query.ClientOrderID) ||
+		query.WindowStart.IsZero() || query.WindowEnd.IsZero() || query.WindowEnd.Before(query.WindowStart) {
+		return nil, fmt.Errorf("invalid exact candidate query")
+	}
+	if intent.Kind != "equity" {
+		return nil, fmt.Errorf("exact option candidate recovery is not enabled")
+	}
+	if intent.InstrumentID == "" || strings.TrimSpace(intent.Symbol) == "" ||
+		(intent.Side != "buy" && intent.Side != "sell") || intent.Qty <= 0 || intent.Limit <= 0 ||
+		intent.OrderType != "limit" || intent.Trigger != "immediate" ||
+		intent.TimeInForce != "gfd" || intent.MarketHours != "regular_hours" {
+		return nil, fmt.Errorf("unsupported exact equity candidate intent")
+	}
+	orders, err := readOrderPages[equityReadOrder](ctx, r.read, "get_equity_orders", map[string]any{
+		"created_at_gte": query.WindowStart.UTC().Format(time.RFC3339Nano),
+		"placed_agent":   "agentic",
+		"symbol":         intent.Symbol,
+	})
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]OrderResult, 0, 1)
+	for _, order := range orders {
+		createdAt, parseErr := parseProviderTime(order.CreatedAt)
+		if parseErr != nil || !order.StopPrice.Present || order.Type == "" || order.TimeInForce == "" ||
+			order.MarketHours == "" || order.Trigger == "" || order.PlacedAgent == "" {
+			return nil, robinhoodSchemaError(r.read.caller, "equity candidate schema drift")
+		}
+		if createdAt.Before(query.WindowStart) || createdAt.After(query.WindowEnd) ||
+			order.InstrumentID != intent.InstrumentID || order.Symbol != intent.Symbol || order.Side != intent.Side ||
+			order.Quantity == nil || *order.Quantity != intent.Qty || order.DollarBasedAmount != nil ||
+			order.Price == nil || *order.Price != intent.Limit ||
+			order.StopPrice.Known || order.Type != intent.OrderType || order.Trigger != intent.Trigger ||
+			order.TimeInForce != intent.TimeInForce || order.MarketHours != intent.MarketHours ||
+			order.PlacedAgent != "agentic" {
+			continue
+		}
+		result, normalizeErr := normalizeEquityOrder(r.read.caller, order)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		result.ClientOrderID = query.ClientOrderID
+		candidates = append(candidates, result)
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].BrokerOrderID < candidates[j].BrokerOrderID })
+	return candidates, nil
+}
+
 func (r *RobinhoodExecution) getOrder(ctx context.Context, brokerOrderID string) (OrderResult, string, error) {
 	if !looksLikeCanonicalUUID(brokerOrderID) {
 		return OrderResult{}, "", ErrNotFound
@@ -239,25 +283,6 @@ func (r *RobinhoodExecution) readOptionOrder(ctx context.Context, brokerOrderID 
 		return nil, robinhoodSchemaError(r.read.caller, "option order lookup drift")
 	}
 	return data.Orders, nil
-}
-
-func (r *RobinhoodExecution) FindOrderByClientID(ctx context.Context, clientOrderID string) (OrderResult, error) {
-	if !looksLikeCanonicalUUID(clientOrderID) {
-		return OrderResult{}, ErrNotFound
-	}
-	found, err := r.lookup.FindByClientOrderID(ctx, r.read.accountID, clientOrderID)
-	if err != nil {
-		return OrderResult{}, err
-	}
-	if found.ClientOrderID != clientOrderID || !looksLikeCanonicalUUID(found.BrokerOrderID) {
-		return OrderResult{}, fmt.Errorf("client-id lookup identity mismatch")
-	}
-	canonical, err := r.GetOrder(ctx, found.BrokerOrderID)
-	if err != nil {
-		return OrderResult{}, err
-	}
-	canonical.ClientOrderID = clientOrderID
-	return canonical, nil
 }
 
 func normalizeEquityOrder(caller rhmcp.Caller, order equityReadOrder) (OrderResult, error) {

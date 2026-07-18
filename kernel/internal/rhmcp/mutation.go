@@ -5,11 +5,65 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
 
-var ErrMutationOutcomeUnknown = errors.New("provider mutation outcome unknown")
+var (
+	ErrMutationNotSent        = errors.New("provider mutation was not sent")
+	ErrMutationRejected       = errors.New("provider mutation rejected")
+	ErrMutationOutcomeUnknown = errors.New("provider mutation outcome unknown")
+)
+
+type MutationError struct {
+	Kind   error
+	Code   string
+	Detail string
+}
+
+func (e *MutationError) Error() string {
+	if e == nil || e.Kind == nil {
+		return "provider mutation failed"
+	}
+	message := e.Kind.Error()
+	if e.Code != "" {
+		message += " (" + e.Code + ")"
+	}
+	if e.Detail != "" {
+		message += ": " + e.Detail
+	}
+	return message
+}
+
+func (e *MutationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Kind
+}
+
+func mutationError(kind error, code, detail string) error {
+	return &MutationError{Kind: kind, Code: sanitizeProviderCode(code), Detail: sanitizeProviderDetail(detail)}
+}
+
+func MutationErrorFacts(err error) (kind, code, detail string, ok bool) {
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) {
+		return "", "", "", false
+	}
+	switch {
+	case errors.Is(mutationErr, ErrMutationNotSent):
+		kind = "not_sent"
+	case errors.Is(mutationErr, ErrMutationRejected):
+		kind = "rejected"
+	case errors.Is(mutationErr, ErrMutationOutcomeUnknown):
+		kind = "unknown"
+	default:
+		return "", "", "", false
+	}
+	return kind, mutationErr.Code, mutationErr.Detail, true
+}
 
 type MutationCaller interface {
 	Caller
@@ -48,10 +102,10 @@ func (c *MutationClient) MutationBoundary() {}
 
 func (c *MutationClient) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
 	if !IsMutationTool(tool) {
-		return nil, fmt.Errorf("provider tool is not mutation-allowlisted")
+		return nil, mutationError(ErrMutationNotSent, "tool_not_allowlisted", "")
 	}
 	if err := validateMutationArguments(tool, args, c.accountNumber); err != nil {
-		return nil, err
+		return nil, mutationError(ErrMutationNotSent, "invalid_local_arguments", err.Error())
 	}
 	c.client.mu.Lock()
 	defer c.client.mu.Unlock()
@@ -59,11 +113,11 @@ func (c *MutationClient) Call(ctx context.Context, tool string, args map[string]
 	defer cancel()
 	if err := c.client.limiter.Wait(callCtx); err != nil {
 		c.client.setError("mutation rate limit wait timed out")
-		return nil, ErrMutationOutcomeUnknown
+		return nil, mutationError(ErrMutationNotSent, "local_rate_limit_timeout", "")
 	}
 	if err := c.client.connectLocked(callCtx); err != nil {
 		c.client.setError("provider mutation connect failed")
-		return nil, ErrMutationOutcomeUnknown
+		return nil, mutationError(ErrMutationNotSent, "provider_connect_failed", "")
 	}
 
 	// Exactly one invocation. StreamableClientTransport is also constructed
@@ -71,8 +125,9 @@ func (c *MutationClient) Call(ctx context.Context, tool string, args map[string]
 	raw, err := callMutationOnce(callCtx, tool, args, c.client.callTool)
 	if err != nil {
 		_ = c.client.closeSessionLocked()
-		c.client.setError("provider mutation outcome unknown")
-		return nil, ErrMutationOutcomeUnknown
+		kind, code, _, _ := MutationErrorFacts(err)
+		c.client.setError("provider mutation " + kind + " (" + code + ")")
+		return nil, err
 	}
 	c.client.lastUsed = time.Now()
 	c.client.setConnected(true)
@@ -122,9 +177,42 @@ func callMutationOnce(
 ) (json.RawMessage, error) {
 	raw, err := invoke(ctx, tool, args)
 	if err != nil {
-		return nil, ErrMutationOutcomeUnknown
+		var rejected *toolResultError
+		if errors.As(err, &rejected) {
+			return nil, mutationError(ErrMutationRejected, "tool_error", rejected.detail)
+		}
+		return nil, mutationError(ErrMutationOutcomeUnknown, "call_failed", "")
 	}
 	return raw, nil
+}
+
+var (
+	providerAuthorizationPattern = regexp.MustCompile(`(?i)(authorization)\s*[:=]?\s*(bearer\s+)?[^\s,;]+`)
+	providerSecretPattern        = regexp.MustCompile(`(?i)(bearer|access[_-]?token|refresh[_-]?token)\s*[:=]?\s*[^\s,;]+`)
+	providerAccountPattern       = regexp.MustCompile(`\b[0-9]{8,12}\b`)
+	providerURLPattern           = regexp.MustCompile(`https?://[^\s]+`)
+	providerCodePattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,63}$`)
+)
+
+func sanitizeProviderCode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if !providerCodePattern.MatchString(value) {
+		return "provider_error"
+	}
+	return value
+}
+
+func sanitizeProviderDetail(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	value = providerAuthorizationPattern.ReplaceAllString(value, "$1=[redacted]")
+	value = providerSecretPattern.ReplaceAllString(value, "$1=[redacted]")
+	value = providerAccountPattern.ReplaceAllString(value, "[account]")
+	value = providerURLPattern.ReplaceAllString(value, "[url]")
+	const maxDetailBytes = 256
+	if len(value) > maxDetailBytes {
+		value = value[:maxDetailBytes]
+	}
+	return strings.TrimSpace(value)
 }
 
 var _ MutationCaller = (*MutationClient)(nil)

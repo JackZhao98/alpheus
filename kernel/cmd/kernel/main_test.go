@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,42 +36,44 @@ type memoryFill struct {
 }
 
 type memoryStore struct {
-	mu                  sync.Mutex
-	idempotencyMu       sync.Mutex
-	symbolMu            sync.Mutex
-	ledgerLocks         [2]sync.Mutex
-	idempotencyLocks    map[string]*sync.Mutex
-	symbolLocks         map[string]*sync.Mutex
-	statuses            map[string]string
-	classes             map[string]string
-	shadows             map[string]bool
-	operations          map[string]risk.Operation
-	operationRows       map[string]store.OperationRow
-	grants              map[string]store.TradeGrant
-	reservations        map[string]store.CloseReservation
-	openReservations    map[string]store.OpenReservation
-	shadowAccount       store.ShadowAccount
-	shadowPositions     map[string]store.ShadowPosition
-	exposureQty         map[string]units.Qty
-	firstExposureOp     map[string]string
-	attempts            map[string]store.ExecutionAttempt
-	orders              map[string]store.Order
-	fills               map[string]memoryFill
-	verdicts            map[string]json.RawMessage
-	journals            []journalEntry
-	events              []string
-	blackboards         map[string]json.RawMessage
-	journalErr          error
-	halted              bool
-	haltReason          string
-	proposalLockErr     error
-	m3aActive           bool
-	databaseNow         func() time.Time
-	dayOpenEquity       map[string]units.Micros
-	realizedPnL         map[string]units.Micros
-	breakerStates       map[string]store.BreakerState
-	breakerOverrides    map[string]bool
-	consecutiveLossDays map[string]int
+	mu                   sync.Mutex
+	idempotencyMu        sync.Mutex
+	symbolMu             sync.Mutex
+	ledgerLocks          [2]sync.Mutex
+	idempotencyLocks     map[string]*sync.Mutex
+	symbolLocks          map[string]*sync.Mutex
+	statuses             map[string]string
+	classes              map[string]string
+	shadows              map[string]bool
+	operations           map[string]risk.Operation
+	operationRows        map[string]store.OperationRow
+	grants               map[string]store.TradeGrant
+	reservations         map[string]store.CloseReservation
+	openReservations     map[string]store.OpenReservation
+	shadowAccount        store.ShadowAccount
+	shadowPositions      map[string]store.ShadowPosition
+	exposureQty          map[string]units.Qty
+	firstExposureOp      map[string]string
+	attempts             map[string]store.ExecutionAttempt
+	orders               map[string]store.Order
+	fills                map[string]memoryFill
+	verdicts             map[string]json.RawMessage
+	journals             []journalEntry
+	events               []string
+	blackboards          map[string]json.RawMessage
+	journalErr           error
+	halted               bool
+	haltReason           string
+	proposalLockErr      error
+	m3aActive            bool
+	databaseNow          func() time.Time
+	dayOpenEquity        map[string]units.Micros
+	realizedPnL          map[string]units.Micros
+	breakerStates        map[string]store.BreakerState
+	breakerOverrides     map[string]bool
+	consecutiveLossDays  map[string]int
+	liveActiveAttemptID  string
+	liveUnknownAttemptID string
 }
 
 func newMemoryStore() *memoryStore {
@@ -267,6 +270,7 @@ func (m *memoryStore) ListControlWarnings(pendingBefore, claimBefore time.Time, 
 		warning := store.ControlWarning{
 			Kind: "execution_attempt", ID: attempt.ID, OperationID: attempt.OperationID,
 			State: attempt.State, CreatedAt: attempt.CreatedAt, Detail: attempt.LastError,
+			ProviderErrorCode: attempt.ProviderErrorCode, CandidateBrokerOrderID: attempt.CandidateBrokerOrderID,
 		}
 		if reservation := m.openReservations[attempt.OpenReservationID]; attempt.OpenReservationID != "" {
 			warning.Ledger, warning.Symbol = reservation.Ledger, reservation.Symbol
@@ -591,6 +595,114 @@ func (m *memoryStore) ClaimRecoverableAttempt(id, instance, expectedState string
 	return m.claimMemoryAttempt(id, instance, expectedState, expectedToken, claimBefore)
 }
 
+func (m *memoryStore) ClaimPendingAttemptLive(id, instance string) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttemptLive(id, instance, "pending", 0, time.Time{})
+}
+
+func (m *memoryStore) ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttemptLive(id, instance, expectedState, expectedToken, claimBefore)
+}
+
+func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != expectedState {
+		return nil, nil
+	}
+	if expectedState != "pending" && attempt.Attempt != expectedToken {
+		return nil, nil
+	}
+	if expectedState == "claimed" && !attempt.ClaimedAt.Before(claimBefore) {
+		return nil, nil
+	}
+	if attempt.Intent != "paper_place" {
+		unresolvedOther := false
+		for otherID, other := range m.attempts {
+			if otherID != id && other.Intent != "paper_place" && (other.State == "claimed" || other.State == "unknown") {
+				unresolvedOther = true
+				break
+			}
+		}
+		allowed := false
+		switch expectedState {
+		case "pending":
+			allowed = m.liveActiveAttemptID == "" && m.liveUnknownAttemptID == "" && !unresolvedOther
+		case "claimed":
+			allowed = (m.liveActiveAttemptID == id && m.liveUnknownAttemptID == "") ||
+				(m.liveActiveAttemptID == "" && m.liveUnknownAttemptID == "" && !unresolvedOther)
+		case "unknown":
+			allowed = (m.liveUnknownAttemptID == id && m.liveActiveAttemptID == "") ||
+				(m.liveActiveAttemptID == "" && m.liveUnknownAttemptID == "" && !unresolvedOther)
+		}
+		if !allowed {
+			return nil, nil
+		}
+		if expectedState == "unknown" {
+			m.liveUnknownAttemptID = id
+		} else {
+			m.liveActiveAttemptID = id
+		}
+	}
+	attempt.State = "claimed"
+	attempt.Attempt++
+	attempt.ClaimedBy = instance
+	attempt.ClaimedAt = time.Now().UTC()
+	m.attempts[id] = attempt
+	copy := attempt
+	return &copy, nil
+}
+
+func (m *memoryStore) PrepareAttemptProviderIntent(id string, fencingToken int, accountID string, canonical json.RawMessage, fingerprint []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != "claimed" || attempt.Attempt != fencingToken || attempt.Intent != "place" || !attempt.SentAt.IsZero() {
+		return false, nil
+	}
+	if len(attempt.IntentFingerprint) != 0 &&
+		(attempt.ProviderAccountID != accountID || !bytes.Equal(attempt.ProviderIntent, canonical) || !bytes.Equal(attempt.IntentFingerprint, fingerprint)) {
+		return false, nil
+	}
+	attempt.ProviderAccountID = accountID
+	attempt.ProviderIntent = append(json.RawMessage(nil), canonical...)
+	attempt.IntentFingerprint = append([]byte(nil), fingerprint...)
+	m.attempts[id] = attempt
+	return true, nil
+}
+
+func (m *memoryStore) MarkAttemptSent(id string, fencingToken int, replay bool) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[id]
+	if !ok || attempt.State != "claimed" || attempt.Attempt != fencingToken {
+		return false, nil
+	}
+	if replay {
+		if m.liveUnknownAttemptID != id || attempt.SentAt.IsZero() || attempt.ReplayCount != 0 {
+			return false, nil
+		}
+		attempt.ReplayCount++
+	} else {
+		if m.liveActiveAttemptID != id || !attempt.SentAt.IsZero() ||
+			(attempt.Intent == "place" && len(attempt.IntentFingerprint) != sha256.Size) {
+			return false, nil
+		}
+		now := time.Now().UTC()
+		attempt.SentAt = now
+		attempt.SendWindowStart = now.Add(-30 * time.Second)
+		attempt.SendWindowEnd = now.Add(2 * time.Minute)
+	}
+	m.attempts[id] = attempt
+	return true, nil
+}
+
+func (m *memoryStore) GetLiveExecutionGate() (store.LiveExecutionGate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return store.LiveExecutionGate{ActiveAttemptID: m.liveActiveAttemptID, UnknownAttemptID: m.liveUnknownAttemptID}, nil
+}
+
 func (m *memoryStore) claimMemoryAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -649,7 +761,28 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 	attempt.State = resolution.State
 	attempt.BrokerOrderID = resolution.BrokerOrderID
 	attempt.LastError = resolution.LastError
+	attempt.ProviderErrorCode = resolution.ProviderErrorCode
+	if resolution.CandidateBrokerOrderID != "" {
+		if attempt.CandidateBrokerOrderID != "" && attempt.CandidateBrokerOrderID != resolution.CandidateBrokerOrderID {
+			return false, nil
+		}
+		attempt.CandidateBrokerOrderID = resolution.CandidateBrokerOrderID
+		if attempt.CandidateObservedAt.IsZero() {
+			attempt.CandidateObservedAt = time.Now().UTC()
+		}
+	}
 	m.attempts[id] = attempt
+	if resolution.State == "unknown" && m.liveActiveAttemptID == id {
+		m.liveActiveAttemptID = ""
+		m.liveUnknownAttemptID = id
+	} else if resolution.State != "unknown" {
+		if m.liveActiveAttemptID == id {
+			m.liveActiveAttemptID = ""
+		}
+		if m.liveUnknownAttemptID == id {
+			m.liveUnknownAttemptID = ""
+		}
+	}
 	if resolution.OperationStatus != "" {
 		m.statuses[attempt.OperationID] = resolution.OperationStatus
 		row := m.operationRows[attempt.OperationID]
@@ -797,6 +930,12 @@ func (m *memoryStore) FinalizeRepriceCancel(cancelAttemptID string, fencingToken
 	cancelAttempt.State = "settled"
 	cancelAttempt.BrokerOrderID = source.BrokerOrderID
 	m.attempts[cancelAttempt.ID] = cancelAttempt
+	if m.liveActiveAttemptID == cancelAttempt.ID {
+		m.liveActiveAttemptID = ""
+	}
+	if m.liveUnknownAttemptID == cancelAttempt.ID {
+		m.liveUnknownAttemptID = ""
+	}
 	m.events = append(m.events, "execution_attempt_resolved")
 
 	durableFilled := units.Qty(0)

@@ -129,7 +129,10 @@ function renderControlAccess(rerenderReviews = true) {
   byId("control-actions").classList.toggle("hidden", !enabled || !adminToken);
   setText("control-state", !enabled ? `${controlCapabilities.mode} · DISABLED` : adminToken ? "ADMIN ENABLED" : "ADMIN LOCKED");
   renderBreakerActions();
-  if (rerenderReviews) renderPendingReviews();
+  if (rerenderReviews) {
+    renderPendingReviews();
+    loadControlWarnings().catch((error) => setPanelError("warnings-error", error.message));
+  }
 }
 
 async function loadControlCapabilities() {
@@ -235,9 +238,40 @@ async function loadControlWarnings() {
     const row = document.createElement("div"); row.className = "warning-item";
     const title = document.createElement("strong"); title.textContent = `${warning.kind} · ${warning.state}`;
     const detail = document.createElement("span");
-    detail.textContent = `${warning.ledger || "—"} · ${warning.symbol || "—"} · operation ${warning.operation_id} · ${warning.detail || "operator inspection required"} · ${when(warning.created_at)}`;
+    detail.textContent = `${warning.ledger || "—"} · ${warning.symbol || "—"} · operation ${warning.operation_id} · ${warning.detail || "operator inspection required"}${warning.provider_error_code ? ` · ${warning.provider_error_code}` : ""}${warning.candidate_broker_order_id ? ` · candidate ${warning.candidate_broker_order_id}` : ""} · ${when(warning.created_at)}`;
     const id = document.createElement("code"); id.textContent = warning.id;
-    row.append(title, detail, id); return row;
+    row.append(title, detail, id);
+    if (warning.kind === "execution_attempt" && warning.state === "unknown" && warning.candidate_broker_order_id && adminToken && controlCapabilities.mode === "live") {
+      const adopt = document.createElement("button"); adopt.type = "button"; adopt.className = "danger secondary-danger candidate-adopt";
+      adopt.textContent = "Arm candidate adoption";
+      let armed = false;
+      let disarmTimer = null;
+      adopt.addEventListener("click", async () => {
+        if (!armed) {
+          armed = true;
+          adopt.textContent = `Confirm ${warning.candidate_broker_order_id.slice(-8)}`;
+          disarmTimer = window.setTimeout(() => { armed = false; adopt.textContent = "Arm candidate adoption"; }, 8000);
+          return;
+        }
+        window.clearTimeout(disarmTimer);
+        adopt.disabled = true;
+        setPanelError("warnings-error", "");
+        try {
+          await controlAPI(`/execution-attempts/${encodeURIComponent(warning.id)}/adopt-candidate`, {
+            confirm_attempt_id:warning.id, confirm_broker_order_id:warning.candidate_broker_order_id
+          });
+          setText("control-result", `Adopted exact broker candidate ${warning.candidate_broker_order_id}.`);
+          await refresh();
+        } catch (error) {
+          armed = false;
+          adopt.disabled = false;
+          adopt.textContent = "Arm candidate adoption";
+          setPanelError("warnings-error", error.message);
+        }
+      });
+      row.append(adopt);
+    }
+    return row;
   });
   byId("warning-list").replaceChildren(...nodes);
   setText("warning-count", nodes.length);
@@ -286,6 +320,8 @@ async function renderState(state) {
   setText("account-type", state.account.account_type); setText("account-source", state.account.source);
   setText("equity", money(state.account.equity)); setText("buying-power", money(state.account.buying_power));
   setText("provider-cash", state.account.cash_known ? money(state.account.cash) : "Unknown"); setText("account-asof", `As of ${when(state.account.as_of)} · current`);
+  const gate = state.live_execution_gate || {};
+  setText("mutation-gate", gate.unknown_attempt_id ? `LATCHED · ${gate.unknown_attempt_id}` : gate.active_attempt_id ? `ACTIVE · ${gate.active_attempt_id}` : "READY");
   renderLedger("live", state.day.live, state.as_of); renderLedger("shadow", state.day.shadow, state.as_of);
   await renderPositions(state.positions);
   renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => ({title:`${o.side} ${o.symbol} · ${o.state}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${when(o.as_of)}`}));

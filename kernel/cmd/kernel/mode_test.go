@@ -124,6 +124,7 @@ func TestReadOnlyRoutesReturn405AndLiveDoesNotMountSim(t *testing.T) {
 	}{
 		{http.MethodPost, "/operations", `{}`},
 		{http.MethodPost, "/operations/11111111-1111-4111-8111-111111111111/review", `{}`},
+		{http.MethodPost, "/execution-attempts/11111111-1111-4111-8111-111111111111/adopt-candidate", `{}`},
 		{http.MethodPost, "/journal", `{}`},
 		{http.MethodPut, "/blackboard/2026-07-17", `{}`},
 		{http.MethodPost, "/telemetry", `{}`},

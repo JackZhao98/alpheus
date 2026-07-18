@@ -139,8 +139,42 @@ func TestMutationClientNeverCachesOrRetries(t *testing.T) {
 	if failedCalls.Load() != 1 {
 		t.Fatalf("failed mutation calls=%d, want exactly 1", failedCalls.Load())
 	}
-	if _, err := (&MutationClient{}).Call(context.Background(), "get_accounts", nil); err == nil {
-		t.Fatal("mutation client accepted read tool")
+	if _, err := (&MutationClient{}).Call(context.Background(), "get_accounts", nil); !errors.Is(err, ErrMutationNotSent) {
+		t.Fatalf("mutation client read-tool error=%v", err)
+	}
+}
+
+func TestMutationErrorsSeparateRejectedUnknownAndNotSent(t *testing.T) {
+	rejected := func(context.Context, string, map[string]any) (json.RawMessage, error) {
+		return nil, &toolResultError{detail: "account 518428891 rejected; Authorization: Bearer super-secret https://provider.invalid/failure"}
+	}
+	_, err := callMutationOnce(context.Background(), "place_option_order", nil, rejected)
+	if !errors.Is(err, ErrMutationRejected) {
+		t.Fatalf("rejected error=%v", err)
+	}
+	kind, code, detail, ok := MutationErrorFacts(err)
+	if !ok || kind != "rejected" || code != "tool_error" ||
+		strings.Contains(detail, "518428891") || strings.Contains(detail, "super-secret") || strings.Contains(detail, "provider.invalid") {
+		t.Fatalf("rejected facts kind=%q code=%q detail=%q ok=%v", kind, code, detail, ok)
+	}
+
+	unknown := func(context.Context, string, map[string]any) (json.RawMessage, error) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	_, err = callMutationOnce(context.Background(), "place_option_order", nil, unknown)
+	if !errors.Is(err, ErrMutationOutcomeUnknown) {
+		t.Fatalf("unknown error=%v", err)
+	}
+	if kind, code, detail, ok = MutationErrorFacts(err); !ok || kind != "unknown" || code != "call_failed" || detail != "" {
+		t.Fatalf("unknown facts kind=%q code=%q detail=%q ok=%v", kind, code, detail, ok)
+	}
+
+	client := &MutationClient{accountNumber: "518428891"}
+	_, err = client.Call(context.Background(), "place_equity_order", map[string]any{
+		"account_number": "other", "ref_id": "bbd2c894-f765-4dc4-9566-bfad4a87c12c",
+	})
+	if !errors.Is(err, ErrMutationNotSent) {
+		t.Fatalf("local validation error=%v", err)
 	}
 }
 

@@ -103,6 +103,11 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(ledger == "shadow")); err != nil {
 		return nil, normalizeDBError(err)
 	}
+	var activeAttemptID, unknownAttemptID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT active_attempt_id,unknown_attempt_id
+		FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeAttemptID, &unknownAttemptID); err != nil {
+		return nil, normalizeDBError(err)
+	}
 	cancelAttempt, err := scanAttempt(tx.QueryRowContext(ctx, `SELECT `+attemptColumns+`
 		FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed' FOR UPDATE`,
 		cancelAttemptID, fencingToken))
@@ -138,6 +143,16 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 		broker_order_id=$3,last_error=NULL,resolved_at=now()
 		WHERE id=$1 AND attempt=$2 AND state='claimed'`, cancelAttemptID, fencingToken, targetBrokerOrderID); err != nil {
 		return nil, normalizeDBError(err)
+	}
+	if activeAttemptID.String == cancelAttemptID || unknownAttemptID.String == cancelAttemptID {
+		if _, err := tx.ExecContext(ctx, `UPDATE live_execution_gate SET
+			active_attempt_id=CASE WHEN active_attempt_id=$1 THEN NULL ELSE active_attempt_id END,
+			active_since=CASE WHEN active_attempt_id=$1 THEN NULL ELSE active_since END,
+			unknown_attempt_id=CASE WHEN unknown_attempt_id=$1 THEN NULL ELSE unknown_attempt_id END,
+			unknown_since=CASE WHEN unknown_attempt_id=$1 THEN NULL ELSE unknown_since END,
+			updated_at=now() WHERE singleton=true`, cancelAttemptID); err != nil {
+			return nil, normalizeDBError(err)
+		}
 	}
 	if err := insertEvent(ctx, tx, "execution_attempt_resolved", map[string]any{
 		"attempt_id": cancelAttemptID, "operation_id": cancelAttempt.OperationID,

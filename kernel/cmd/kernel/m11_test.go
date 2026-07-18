@@ -13,9 +13,37 @@ import (
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/marketdata"
+	"alpheus/kernel/internal/rhmcp"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
 )
+
+type candidateExecution struct {
+	candidates []broker.OrderResult
+	placeCalls int
+}
+
+func (c *candidateExecution) PlaceLimitOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
+	c.placeCalls++
+	return broker.OrderResult{}, &rhmcp.MutationError{Kind: rhmcp.ErrMutationOutcomeUnknown, Code: "call_failed"}
+}
+
+func (c *candidateExecution) CancelOrder(context.Context, string) (broker.OrderResult, error) {
+	return broker.OrderResult{}, broker.ErrNotFound
+}
+
+func (c *candidateExecution) GetOrder(_ context.Context, brokerOrderID string) (broker.OrderResult, error) {
+	for _, candidate := range c.candidates {
+		if candidate.BrokerOrderID == brokerOrderID {
+			return candidate, nil
+		}
+	}
+	return broker.OrderResult{}, broker.ErrNotFound
+}
+
+func (c *candidateExecution) FindExactPlaceCandidates(context.Context, broker.ExactPlaceCandidateQuery) ([]broker.OrderResult, error) {
+	return append([]broker.OrderResult(nil), c.candidates...), nil
+}
 
 const m11Plan = `{"stop":"-30%","invalidation":"x","time_stop":"15:45 ET","target":"+50%"}`
 
@@ -89,6 +117,112 @@ func TestLiveCanaryBarrierGrantsExactlyOneRemainingAllowance(t *testing.T) {
 	}
 	if _, err := venue.GetOrder(context.Background(), "fake-2"); err == nil {
 		t.Fatal("canary overflow reached a second broker order")
+	}
+}
+
+func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
+	s, st, venue := m11Server("35")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "EQ", InstrumentID: "55555555-5555-4555-8555-555555555555",
+		Kind: "equity", Multiplier: 1, PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
+	execution := &candidateExecution{}
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = execution
+	handler := s.routes()
+	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
+	response := routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "m11-candidate")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("propose status=%d body=%s", response.Code, response.Body.String())
+	}
+	st.mu.Lock()
+	var attempt store.ExecutionAttempt
+	for _, candidate := range st.attempts {
+		attempt = candidate
+	}
+	st.mu.Unlock()
+	if attempt.ID == "" || attempt.State != "unknown" || attempt.SentAt.IsZero() {
+		t.Fatalf("attempt=%+v", attempt)
+	}
+	brokerOrderID := "77777777-7777-4777-8777-777777777777"
+	execution.candidates = []broker.OrderResult{{
+		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
+	}}
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("candidate claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); err != nil {
+		t.Fatal(err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	if err != nil || current.State != "unknown" || current.CandidateBrokerOrderID != brokerOrderID {
+		t.Fatalf("candidate attempt=%+v err=%v", current, err)
+	}
+	body := fmt.Sprintf(`{"confirm_attempt_id":%q,"confirm_broker_order_id":%q}`, attempt.ID, brokerOrderID)
+	execution.candidates = append(execution.candidates, broker.OrderResult{
+		BrokerOrderID: "88888888-8888-4888-8888-888888888888", ClientOrderID: attempt.ClientOrderID, State: "submitted",
+	})
+	ambiguous := routeRequest(handler, http.MethodPost, "/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
+	if ambiguous.Code != http.StatusConflict {
+		t.Fatalf("ambiguous status=%d body=%s", ambiguous.Code, ambiguous.Body.String())
+	}
+	current, _ = st.GetExecutionAttempt(attempt.ID)
+	gate, _ := st.GetLiveExecutionGate()
+	if current.State != "unknown" || gate.UnknownAttemptID != attempt.ID {
+		t.Fatalf("ambiguous current=%+v gate=%+v", current, gate)
+	}
+	execution.candidates = execution.candidates[:1]
+	adopted := routeRequest(handler, http.MethodPost, "/execution-attempts/"+attempt.ID+"/adopt-candidate", body, "admin-secret")
+	if adopted.Code != http.StatusOK || !strings.Contains(adopted.Body.String(), `"attempt_state":"placed"`) {
+		t.Fatalf("adopt status=%d body=%s", adopted.Code, adopted.Body.String())
+	}
+	current, _ = st.GetExecutionAttempt(attempt.ID)
+	gate, _ = st.GetLiveExecutionGate()
+	if current.State != "placed" || current.BrokerOrderID != brokerOrderID || gate.ActiveAttemptID != "" || gate.UnknownAttemptID != "" {
+		t.Fatalf("current=%+v gate=%+v", current, gate)
+	}
+}
+
+func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
+	s, st, venue := m11Server("35")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "EQ", InstrumentID: "55555555-5555-4555-8555-555555555555",
+		Kind: "equity", Multiplier: 1, PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
+	execution := &candidateExecution{}
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = execution
+	s.providerDedupeVerified = true
+	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-one-replay")
+	if response.Code != http.StatusBadGateway || execution.placeCalls != 1 {
+		t.Fatalf("initial status=%d calls=%d body=%s", response.Code, execution.placeCalls, response.Body.String())
+	}
+	st.mu.Lock()
+	var attempt store.ExecutionAttempt
+	for _, candidate := range st.attempts {
+		attempt = candidate
+	}
+	st.mu.Unlock()
+	for recovery := 0; recovery < 2; recovery++ {
+		current, err := st.GetExecutionAttempt(attempt.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := st.ClaimRecoverableAttemptLive(current.ID, "recovery", "unknown", current.Attempt, time.Now())
+		if err != nil || claimed == nil {
+			t.Fatalf("recovery %d claim=%+v err=%v", recovery, claimed, err)
+		}
+		_ = s.reconcileLivePlaceAttempt(context.Background(), execution, claimed)
+	}
+	current, _ := st.GetExecutionAttempt(attempt.ID)
+	if execution.placeCalls != 2 || current.ReplayCount != 1 || current.State != "unknown" {
+		t.Fatalf("calls=%d attempt=%+v", execution.placeCalls, current)
 	}
 }
 

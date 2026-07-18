@@ -30,6 +30,23 @@ type recordingMutation struct {
 	calls     []mutationCall
 }
 
+type recordingReadCaller struct {
+	responses map[string]json.RawMessage
+	mu        sync.Mutex
+	calls     []mutationCall
+}
+
+func (c *recordingReadCaller) Call(_ context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, mutationCall{tool: tool, args: args})
+	raw, ok := c.responses[tool]
+	if !ok {
+		return nil, fmt.Errorf("missing read fixture")
+	}
+	return raw, nil
+}
+
 func (m *recordingMutation) MutationBoundary() {}
 
 func (m *recordingMutation) Call(_ context.Context, tool string, args map[string]any) (json.RawMessage, error) {
@@ -50,15 +67,6 @@ type executionInstrument struct {
 
 func (f executionInstrument) Instrument(context.Context, string) (Instrument, error) {
 	return f.instrument, f.err
-}
-
-type executionLookup struct {
-	result OrderResult
-	err    error
-}
-
-func (f executionLookup) FindByClientOrderID(context.Context, string, string) (OrderResult, error) {
-	return f.result, f.err
 }
 
 func optionOrderFixture(state, side, effect, price, processed string) json.RawMessage {
@@ -115,22 +123,20 @@ func newExecutionFixture(t *testing.T, mutation *recordingMutation, orderState s
 		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
 		Source: robinhoodSource, AsOf: time.Now().UTC(),
 	}}
-	adapter, err := NewRobinhoodExecution(read, mutation, instruments, executionLookup{
-		result: OrderResult{BrokerOrderID: executionOrderID, ClientOrderID: executionRefID},
-	})
+	adapter, err := NewRobinhoodExecution(read, mutation, instruments)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return adapter, read
 }
 
-func TestRobinhoodExecutionCannotConstructWithoutClientIDLookup(t *testing.T) {
+func TestRobinhoodExecutionRequiresEveryMutationCapability(t *testing.T) {
 	read, err := NewRobinhood(fixtureCaller{}, "wanted")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRobinhoodExecution(read, &recordingMutation{}, executionInstrument{}, nil); err == nil {
-		t.Fatal("execution adapter constructed without provider client-id lookup")
+	if _, err := NewRobinhoodExecution(read, &recordingMutation{}, nil); err == nil {
+		t.Fatal("execution adapter constructed without instrument metadata")
 	}
 }
 
@@ -235,7 +241,7 @@ func TestRobinhoodExecutionFailsBeforeMutationOnMetadataOrEchoDrift(t *testing.T
 	}
 }
 
-func TestRobinhoodExecutionGetCancelAndClientLookup(t *testing.T) {
+func TestRobinhoodExecutionGetAndCancel(t *testing.T) {
 	mutation := &recordingMutation{responses: map[string]json.RawMessage{
 		"cancel_option_order": json.RawMessage(`{"data":{"accepted":true},"guide":"fixture"}`),
 	}}
@@ -243,10 +249,6 @@ func TestRobinhoodExecutionGetCancelAndClientLookup(t *testing.T) {
 	order, err := adapter.GetOrder(context.Background(), executionOrderID)
 	if err != nil || order.State != "submitted" || order.FilledQty != 0 || len(order.Fills) != 0 {
 		t.Fatalf("order=%+v err=%v", order, err)
-	}
-	found, err := adapter.FindOrderByClientID(context.Background(), executionRefID)
-	if err != nil || found.BrokerOrderID != executionOrderID || found.ClientOrderID != executionRefID {
-		t.Fatalf("found=%+v err=%v", found, err)
 	}
 	cancelled, err := adapter.CancelOrder(context.Background(), executionOrderID)
 	if err != nil || cancelled.State != "submitted" {
@@ -260,13 +262,53 @@ func TestRobinhoodExecutionGetCancelAndClientLookup(t *testing.T) {
 	}
 }
 
-func TestRobinhoodExecutionRejectsClientLookupMismatch(t *testing.T) {
-	mutation := &recordingMutation{}
-	adapter, _ := newExecutionFixture(t, mutation, "filled")
-	adapter.lookup = executionLookup{result: OrderResult{
-		BrokerOrderID: executionOrderID, ClientOrderID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+func TestRobinhoodExactEquityCandidatesRequireEveryVisibleField(t *testing.T) {
+	created := "2026-07-17T20:00:00Z"
+	order := func(id, instrument, side, price, placed string) string {
+		return fmt.Sprintf(`{"id":%q,"instrument_id":%q,"symbol":"SPY","side":%q,"type":"limit","state":"queued","quantity":"1","cumulative_quantity":"0","price":%q,"stop_price":null,"average_price":null,"reject_reason":"","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":%q,"created_at":%q,"last_transaction_at":null,"executions":[]}`,
+			id, instrument, side, price, placed, created)
+	}
+	lookalikeID := "66666666-6666-4666-8666-666666666666"
+	caller := &recordingReadCaller{responses: map[string]json.RawMessage{
+		"get_accounts": accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": json.RawMessage(`{"data":{"orders":[` +
+			order(executionOrderID, executionEquity, "buy", "100.1", "agentic") + `,` +
+			order(lookalikeID, executionEquity, "buy", "100.11", "agentic") +
+			`],"next":""},"guide":"fixture"}`),
 	}}
-	if _, err := adapter.FindOrderByClientID(context.Background(), executionRefID); err == nil {
-		t.Fatal("mismatched provider client id was accepted")
+	read, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewRobinhoodExecution(read, &recordingMutation{}, executionInstrument{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, _ := time.Parse(time.RFC3339, "2026-07-17T19:59:30Z")
+	end, _ := time.Parse(time.RFC3339, "2026-07-17T20:02:00Z")
+	candidates, err := adapter.FindExactPlaceCandidates(context.Background(), ExactPlaceCandidateQuery{
+		AccountID: "wanted", ClientOrderID: executionRefID, WindowStart: start, WindowEnd: end,
+		Intent: ProviderPlaceIntent{
+			Kind: "equity", InstrumentID: executionEquity, Symbol: "SPY", Side: "buy",
+			PositionEffect: "open", Qty: units.MustQty("1"), Limit: units.MustMicros("100.1"),
+			OrderType: "limit", Trigger: "immediate", TimeInForce: "gfd", MarketHours: "regular_hours",
+		},
+	})
+	if err != nil || len(candidates) != 1 || candidates[0].BrokerOrderID != executionOrderID ||
+		candidates[0].ClientOrderID != executionRefID {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+	caller.mu.Lock()
+	defer caller.mu.Unlock()
+	var orderCall *mutationCall
+	for i := range caller.calls {
+		if caller.calls[i].tool == "get_equity_orders" {
+			orderCall = &caller.calls[i]
+		}
+	}
+	if orderCall == nil || orderCall.args["account_number"] != "wanted" ||
+		orderCall.args["placed_agent"] != "agentic" || orderCall.args["symbol"] != "SPY" ||
+		orderCall.args["created_at_gte"] != start.Format(time.RFC3339Nano) {
+		t.Fatalf("order query=%+v", orderCall)
 	}
 }

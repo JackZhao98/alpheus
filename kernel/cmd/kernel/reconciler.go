@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -561,14 +563,16 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 }
 
 func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.ExecutionAttempt, now time.Time) error {
-	claimed, err := s.store.ClaimRecoverableAttempt(
-		seen.ID, s.workerID(), seen.State, seen.Attempt, now.Add(-s.attemptClaimTimeout()),
-	)
+	claimed, err := s.claimRecoverableAttempt(seen, now)
 	if err != nil || claimed == nil {
 		return err
 	}
 	if claimed.Intent == "paper_place" {
 		_, err := s.executeClaimedPaperAttempt(ctx, claimed)
+		return err
+	}
+	if s.tradingMode() == config.ModeLive && claimed.SentAt.IsZero() && claimed.Intent == "place" {
+		_, err := s.executeClaimedAttemptWithReplay(ctx, claimed, false)
 		return err
 	}
 	if claimed.Intent == "cancel" {
@@ -581,7 +585,22 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 			return decodeErr
 		}
 		if op.Action == "open" || op.Action == "close" {
+			if s.tradingMode() == config.ModeLive && claimed.SentAt.IsZero() {
+				order, orderErr := s.store.GetOrderByBrokerID(claimed.TargetBrokerOrderID)
+				if orderErr != nil {
+					return orderErr
+				}
+				policyReason, policyErr := s.repricePolicy(ctx, op, order)
+				if policyErr != nil {
+					return policyErr
+				}
+				return s.executeClaimedRepriceCancel(ctx, claimed, order, op, policyReason)
+			}
 			return s.reconcileUncertainReprice(ctx, claimed, op)
+		}
+		if s.tradingMode() == config.ModeLive && claimed.SentAt.IsZero() {
+			_, err := s.executeClaimedAttemptWithReplay(ctx, claimed, false)
+			return err
 		}
 	}
 	execution := s.executionProvider()
@@ -591,10 +610,21 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 		})
 		return err
 	}
+	if claimed.Intent == "place" && s.tradingMode() == config.ModeLive {
+		return s.reconcileLivePlaceAttempt(ctx, execution, claimed)
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	var result broker.OrderResult
 	if claimed.Intent == "place" {
-		result, err = execution.FindOrderByClientID(queryCtx, claimed.ClientOrderID)
+		finder, ok := execution.(broker.ClientOrderFinder)
+		if !ok {
+			cancel()
+			_, resolveErr := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
+				State: "unknown", LastError: "provider client-order lookup unavailable",
+			})
+			return resolveErr
+		}
+		result, err = finder.FindOrderByClientID(queryCtx, claimed.ClientOrderID)
 	} else {
 		result, err = execution.GetOrder(queryCtx, claimed.TargetBrokerOrderID)
 	}
@@ -612,6 +642,60 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 		State: "unknown", LastError: "broker query did not prove the effect",
 	})
 	return resolveErr
+}
+
+func (s *server) reconcileLivePlaceAttempt(ctx context.Context, execution broker.ExecutionProvider, claimed *store.ExecutionAttempt) error {
+	candidates, intent, queryErr := s.exactPlaceCandidatesForAttempt(ctx, execution, claimed)
+	if queryErr != nil {
+		return s.keepAttemptUnknown(claimed, "exact broker candidate query failed", "candidate_query_failed", "")
+	}
+	switch len(candidates) {
+	case 1:
+		return s.keepAttemptUnknown(claimed, "one exact broker candidate awaits human approval", "candidate_pending", candidates[0].BrokerOrderID)
+	case 0:
+		if claimed.ReplayCount == 0 && s.providerDedupeVerified && intent.Kind == "equity" {
+			_, err := s.executeClaimedAttemptWithReplay(ctx, claimed, true)
+			return err
+		}
+		return s.keepAttemptUnknown(claimed, "zero exact broker candidates; account remains latched", "candidate_zero", "")
+	default:
+		return s.keepAttemptUnknown(claimed, "multiple exact broker candidates; account remains latched", "candidate_ambiguous", "")
+	}
+}
+
+func (s *server) exactPlaceCandidatesForAttempt(ctx context.Context, execution broker.ExecutionProvider, attempt *store.ExecutionAttempt) ([]broker.OrderResult, broker.ProviderPlaceIntent, error) {
+	provider, ok := execution.(broker.ExactPlaceCandidateProvider)
+	if !ok {
+		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("exact provider candidate query unavailable")
+	}
+	var intent broker.ProviderPlaceIntent
+	if err := json.Unmarshal(attempt.ProviderIntent, &intent); err != nil {
+		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("durable provider intent is invalid")
+	}
+	canonical, err := json.Marshal(intent)
+	if err != nil {
+		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("durable provider intent is invalid")
+	}
+	digest := sha256.Sum256(canonical)
+	if attempt.ProviderAccountID != s.mode.LiveAccountID || !bytes.Equal(digest[:], attempt.IntentFingerprint) ||
+		attempt.SendWindowStart.IsZero() || attempt.SendWindowEnd.IsZero() {
+		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("durable provider intent evidence mismatch")
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	defer cancel()
+	candidates, err := provider.FindExactPlaceCandidates(queryCtx, broker.ExactPlaceCandidateQuery{
+		AccountID: attempt.ProviderAccountID, ClientOrderID: attempt.ClientOrderID,
+		Intent: intent, WindowStart: attempt.SendWindowStart, WindowEnd: attempt.SendWindowEnd,
+	})
+	return candidates, intent, err
+}
+
+func (s *server) keepAttemptUnknown(claimed *store.ExecutionAttempt, message, code, candidateID string) error {
+	_, err := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
+		State: "unknown", LastError: message, ProviderErrorCode: code,
+		CandidateBrokerOrderID: candidateID,
+	})
+	return err
 }
 
 func (s *server) reconcileUncertainReprice(ctx context.Context, claimed *store.ExecutionAttempt, op risk.Operation) error {

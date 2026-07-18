@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -346,7 +347,7 @@ func (c *Client) callTool(ctx context.Context, tool string, args map[string]any)
 		return nil, err
 	}
 	if result.IsError {
-		return nil, fmt.Errorf("tool returned an error")
+		return nil, &toolResultError{detail: toolErrorDetail(result)}
 	}
 	if result.StructuredContent != nil {
 		raw, err := json.Marshal(result.StructuredContent)
@@ -376,6 +377,44 @@ func (c *Client) callTool(ctx context.Context, tool string, args map[string]any)
 		return append(json.RawMessage(nil), raw...), nil
 	}
 	return nil, fmt.Errorf("tool result has no JSON content")
+}
+
+// toolResultError means the provider returned a complete MCP tool response
+// with IsError=true. Unlike a transport/protocol error, this conclusively says
+// the tool rejected the request and did not return a successful mutation.
+// The raw bounded detail stays inside this package and is sanitized before it
+// can cross the mutation boundary.
+type toolResultError struct {
+	detail string
+}
+
+func (e *toolResultError) Error() string { return "tool returned an error" }
+
+func toolErrorDetail(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	const maxDetailBytes = 4096
+	var detail strings.Builder
+	for _, content := range result.Content {
+		text, ok := content.(*mcp.TextContent)
+		if !ok || strings.TrimSpace(text.Text) == "" {
+			continue
+		}
+		if detail.Len() > 0 {
+			detail.WriteByte(' ')
+		}
+		remaining := maxDetailBytes - detail.Len()
+		if remaining <= 0 {
+			break
+		}
+		value := text.Text
+		if len(value) > remaining {
+			value = value[:remaining]
+		}
+		detail.WriteString(value)
+	}
+	return detail.String()
 }
 
 func (c *Client) Discover(ctx context.Context) ([]ToolSchema, error) {

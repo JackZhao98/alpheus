@@ -1021,6 +1021,10 @@ func resetM3AIntegrationData(t *testing.T, s *Store) {
 		shadow_positions,day_open,operations CASCADE`); err != nil {
 		t.Fatal(fmt.Errorf("reset M3A integration database: %w", err))
 	}
+	if _, err := s.DB.Exec(`INSERT INTO live_execution_gate(singleton) VALUES (true)
+		ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		t.Fatal(fmt.Errorf("reset live execution gate: %w", err))
+	}
 }
 
 func TestProportionalInt64RoundsAgainstAccount(t *testing.T) {

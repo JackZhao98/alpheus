@@ -79,6 +79,11 @@ type storeAPI interface {
 	UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error)
 	ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error)
 	ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
+	ClaimPendingAttemptLive(id, instance string) (*store.ExecutionAttempt, error)
+	ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
+	PrepareAttemptProviderIntent(id string, fencingToken int, accountID string, canonical json.RawMessage, fingerprint []byte) (bool, error)
+	MarkAttemptSent(id string, fencingToken int, replay bool) (bool, error)
+	GetLiveExecutionGate() (store.LiveExecutionGate, error)
 	ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error)
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
 	FailPendingAttempt(id, reason string) (bool, error)
@@ -148,7 +153,7 @@ func main() {
 		market = marketdata.NewFakeProvider(simVenue)
 	case "robinhood":
 		if mode.TradingMode == config.ModeLive {
-			log.Fatalf("broker: production execution is unavailable before M11")
+			log.Fatalf("broker: production execution remains unavailable pending M11 provider-contract certification")
 		}
 		if mode.LiveAccountID == "" {
 			log.Fatalf("broker: LIVE_ACCOUNT_ID is required for Robinhood reads")
@@ -581,15 +586,21 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "get shadow day state", err)
 		return
 	}
+	liveExecutionGate, err := s.store.GetLiveExecutionGate()
+	if err != nil {
+		writeStoreError(w, "get live execution gate", err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"account":      acct,
-		"positions":    pos,
-		"open_orders":  orders,
-		"recent_fills": fills,
-		"day":          map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
-		"mode":         s.tradingMode(),
-		"source":       "kernel",
-		"as_of":        time.Now().UTC(),
+		"account":             acct,
+		"positions":           pos,
+		"open_orders":         orders,
+		"recent_fills":        fills,
+		"day":                 map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+		"live_execution_gate": liveExecutionGate,
+		"mode":                s.tradingMode(),
+		"source":              "kernel",
+		"as_of":               time.Now().UTC(),
 	})
 }
 
@@ -1048,6 +1059,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
+		if errors.Is(err, errBrokerMutationFailed) {
+			resp["status"] = "failed"
+			resp["attempt_id"] = executionAttempt.ID
+			resp["attempt_state"] = "failed"
+			resp["error"] = "broker_mutation_failed"
+			writeJSON(w, http.StatusBadGateway, resp)
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{
 			"operation_id": opID, "status": "unknown", "attempt_id": executionAttempt.ID,
 			"error": "broker result uncertain",
@@ -1114,6 +1133,7 @@ func (s *server) executeNonBroker(opID string, op risk.Operation) (map[string]an
 var (
 	errInsufficientClosableQuantity = errors.New("insufficient closable quantity")
 	errBrokerDataUnavailable        = errors.New("broker data unavailable")
+	errBrokerMutationFailed         = errors.New("broker mutation failed")
 	errBrokerResultUnknown          = errors.New("broker result uncertain")
 	errInvalidClose                 = errors.New("invalid close")
 	errPaperExecutionFailed         = errors.New("paper execution failed")
@@ -1192,7 +1212,7 @@ func (s *server) workerID() string {
 }
 
 func (s *server) executePendingAttempt(ctx context.Context, attemptID string) (map[string]any, error) {
-	attempt, err := s.store.ClaimPendingAttempt(attemptID, s.workerID())
+	attempt, err := s.claimPendingAttempt(attemptID)
 	if err != nil {
 		return nil, err
 	}
@@ -1210,7 +1230,26 @@ func (s *server) executePendingAttempt(ctx context.Context, attemptID string) (m
 	return s.executeClaimedAttempt(ctx, attempt)
 }
 
+func (s *server) claimPendingAttempt(attemptID string) (*store.ExecutionAttempt, error) {
+	if s.tradingMode() == config.ModeLive {
+		return s.store.ClaimPendingAttemptLive(attemptID, s.workerID())
+	}
+	return s.store.ClaimPendingAttempt(attemptID, s.workerID())
+}
+
+func (s *server) claimRecoverableAttempt(seen *store.ExecutionAttempt, now time.Time) (*store.ExecutionAttempt, error) {
+	claimBefore := now.Add(-s.attemptClaimTimeout())
+	if s.tradingMode() == config.ModeLive {
+		return s.store.ClaimRecoverableAttemptLive(seen.ID, s.workerID(), seen.State, seen.Attempt, claimBefore)
+	}
+	return s.store.ClaimRecoverableAttempt(seen.ID, s.workerID(), seen.State, seen.Attempt, claimBefore)
+}
+
 func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
+	return s.executeClaimedAttemptWithReplay(ctx, attempt, false)
+}
+
+func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *store.ExecutionAttempt, replay bool) (map[string]any, error) {
 	if attempt.Intent == "paper_place" {
 		return s.executeClaimedPaperAttempt(ctx, attempt)
 	}
@@ -1236,6 +1275,36 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 	if op.Action == "close" && attempt.CloseReservationID == "" {
 		return nil, fmt.Errorf("refusing close without reservation")
 	}
+	var placeRequest broker.PlaceRequest
+	if attempt.Intent == "place" {
+		placeRequest = persistedPlaceRequest(op, attempt)
+		if s.tradingMode() == config.ModeLive {
+			canonical, fingerprint, evidenceErr := canonicalProviderIntent(placeRequest, op.InstrumentID)
+			if evidenceErr != nil {
+				_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+					State: "failed", LastError: "provider intent evidence invalid",
+					ProviderErrorCode: "intent_invalid", OperationStatus: "failed", ReleaseReservation: true,
+				})
+				return nil, errors.Join(evidenceErr, resolveErr)
+			}
+			if replay {
+				if attempt.ProviderAccountID != s.mode.LiveAccountID || !providerIntentEvidenceMatches(attempt, canonical, fingerprint) {
+					_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+						State: "unknown", LastError: "same-ref replay evidence mismatch",
+						ProviderErrorCode: "replay_intent_mismatch",
+					})
+					return nil, errors.Join(fmt.Errorf("same-ref replay evidence mismatch"), resolveErr)
+				}
+			} else {
+				prepared, evidenceErr := s.store.PrepareAttemptProviderIntent(
+					attempt.ID, attempt.Attempt, s.mode.LiveAccountID, canonical, fingerprint,
+				)
+				if evidenceErr != nil || !prepared {
+					return nil, errors.Join(evidenceErr, fmt.Errorf("provider intent evidence was not durably prepared"))
+				}
+			}
+		}
+	}
 	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
 	cancel()
@@ -1249,25 +1318,42 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 		}
 		return nil, bindingErr
 	}
+	if s.tradingMode() == config.ModeLive {
+		marked, markErr := s.store.MarkAttemptSent(attempt.ID, attempt.Attempt, replay)
+		if markErr != nil || !marked {
+			return nil, errors.Join(markErr, fmt.Errorf("provider send was not durably marked"))
+		}
+	}
 
 	brokerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	var result broker.OrderResult
 	if attempt.Intent == "cancel" {
 		result, err = execution.CancelOrder(brokerCtx, attempt.TargetBrokerOrderID)
 	} else {
-		positionEffect := "open"
-		if op.Action == "close" {
-			positionEffect = "close"
-		}
-		result, err = execution.PlaceLimitOrder(brokerCtx, broker.PlaceRequest{
-			ClientOrderID: attempt.ClientOrderID, Symbol: operationSymbol(op), Side: op.Side,
-			PositionEffect: positionEffect, Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
-		})
+		result, err = execution.PlaceLimitOrder(brokerCtx, placeRequest)
 	}
 	cancel()
 	if err != nil {
+		kind, code, detail, classified := rhmcp.MutationErrorFacts(err)
+		if !replay && classified && (kind == "not_sent" || kind == "rejected") {
+			lastError := "provider mutation " + kind
+			if code != "" {
+				lastError += " (" + code + ")"
+			}
+			if detail != "" {
+				lastError += ": " + detail
+			}
+			_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+				State: "failed", LastError: lastError,
+				ProviderErrorCode: code, OperationStatus: "failed", ReleaseReservation: true,
+			})
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			return nil, fmt.Errorf("%w", errBrokerMutationFailed)
+		}
 		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
-			State: "unknown", LastError: "broker call failed",
+			State: "unknown", LastError: "provider mutation outcome unknown", ProviderErrorCode: code,
 		})
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -1304,6 +1390,51 @@ func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.Execu
 		"status": status, "order": result, "attempt_id": attempt.ID,
 		"attempt_state": resolution.State,
 	}, nil
+}
+
+func persistedPlaceRequest(op risk.Operation, attempt *store.ExecutionAttempt) broker.PlaceRequest {
+	positionEffect := "open"
+	if op.Action == "close" {
+		positionEffect = "close"
+	}
+	return broker.PlaceRequest{
+		ClientOrderID: attempt.ClientOrderID, Symbol: operationSymbol(op), Side: op.Side,
+		PositionEffect: positionEffect, Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
+	}
+}
+
+func canonicalProviderIntent(req broker.PlaceRequest, instrumentID string) (json.RawMessage, []byte, error) {
+	intent := broker.ProviderPlaceIntent{
+		Kind: req.Kind, InstrumentID: strings.TrimSpace(instrumentID), Symbol: req.Symbol,
+		Side: req.Side, PositionEffect: req.PositionEffect, Qty: req.Qty, Limit: req.Limit,
+		OrderType: "limit", Trigger: "immediate", TimeInForce: "gfd", MarketHours: "regular_hours",
+	}
+	if intent.InstrumentID == "" || strings.TrimSpace(intent.Symbol) == "" ||
+		(intent.Kind != "equity" && intent.Kind != "option") ||
+		(intent.Side != "buy" && intent.Side != "sell") ||
+		(intent.PositionEffect != "open" && intent.PositionEffect != "close") ||
+		intent.Qty <= 0 || intent.Limit <= 0 {
+		return nil, nil, fmt.Errorf("provider place intent is incomplete")
+	}
+	canonical, err := json.Marshal(intent)
+	if err != nil {
+		return nil, nil, err
+	}
+	digest := sha256.Sum256(canonical)
+	return canonical, digest[:], nil
+}
+
+func providerIntentEvidenceMatches(attempt *store.ExecutionAttempt, canonical json.RawMessage, fingerprint []byte) bool {
+	var persisted broker.ProviderPlaceIntent
+	if json.Unmarshal(attempt.ProviderIntent, &persisted) != nil {
+		return false
+	}
+	persistedCanonical, err := json.Marshal(persisted)
+	if err != nil || !bytes.Equal(persistedCanonical, canonical) {
+		return false
+	}
+	digest := sha256.Sum256(persistedCanonical)
+	return bytes.Equal(digest[:], fingerprint) && bytes.Equal(digest[:], attempt.IntentFingerprint)
 }
 
 func (s *server) executeClaimedPaperAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
@@ -1594,6 +1725,7 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 				op.RejectReason = "unsupported_contract"
 				return op
 			}
+			op.InstrumentID = instrument.InstrumentID
 			op.QtyIncrement = instrument.QtyIncrement
 		}
 	case "option":
@@ -1606,6 +1738,7 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 			return op
 		}
 		op.Multiplier = instrument.Multiplier
+		op.InstrumentID = instrument.InstrumentID
 		op.QtyIncrement = instrument.QtyIncrement
 	default:
 		op.RejectReason = "unsupported_contract"
@@ -1700,6 +1833,7 @@ func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operat
 
 	op.Kind = position.Kind
 	op.Multiplier = position.Multiplier
+	op.InstrumentID = position.InstrumentID
 	if position.Qty > 0 {
 		op.Side = "sell"
 	} else {
@@ -1947,6 +2081,14 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			response["attempt_state"] = "failed"
 			response["error"] = "paper_execution_failed"
 			writeJSON(w, http.StatusOK, response)
+			return
+		}
+		if errors.Is(err, errBrokerMutationFailed) {
+			response["status"] = "failed"
+			response["attempt_id"] = attempt.ID
+			response["attempt_state"] = "failed"
+			response["error"] = "broker_mutation_failed"
+			writeJSON(w, http.StatusBadGateway, response)
 			return
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{

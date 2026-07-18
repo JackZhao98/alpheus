@@ -25,7 +25,7 @@ func startRepricer(s *server) error {
 	if s.limits.ExecutionPolicy.MaxReprices < 0 {
 		return fmt.Errorf("max_reprices must not be negative")
 	}
-	// Production Robinhood is intentionally read-only before M11. The absence
+	// Production Robinhood remains intentionally read-only pending M11. The absence
 	// of an execution capability is a construction-time guarantee that this
 	// worker cannot issue a broker effect in read-only deployments.
 	if s.executionProvider() == nil {
@@ -96,7 +96,7 @@ func (s *server) repriceOrder(ctx context.Context, order *store.Order) error {
 }
 
 func (s *server) executePendingRepriceCancel(ctx context.Context, cancelAttempt *store.ExecutionAttempt, order *store.Order, op risk.Operation, policyReason string) error {
-	claimed, err := s.store.ClaimPendingAttempt(cancelAttempt.ID, s.workerID())
+	claimed, err := s.claimPendingAttempt(cancelAttempt.ID)
 	if err != nil || claimed == nil {
 		return err
 	}
@@ -112,6 +112,12 @@ func (s *server) executeClaimedRepriceCancel(ctx context.Context, claimed *store
 			State: "failed", LastError: "account binding failed",
 		})
 		return errors.Join(bindingErr, resolveErr)
+	}
+	if s.tradingMode() == config.ModeLive {
+		marked, markErr := s.store.MarkAttemptSent(claimed.ID, claimed.Attempt, false)
+		if markErr != nil || !marked {
+			return errors.Join(markErr, fmt.Errorf("provider cancel send was not durably marked"))
+		}
 	}
 
 	brokerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())

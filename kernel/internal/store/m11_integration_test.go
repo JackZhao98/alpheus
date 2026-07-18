@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -9,6 +11,126 @@ import (
 
 	"alpheus/kernel/internal/units"
 )
+
+func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
+	s := openM11IntegrationStore(t)
+	defer s.DB.Close()
+	resetM3AIntegrationData(t, s)
+
+	const workers = 20
+	attemptIDs := make([]string, workers)
+	for index := range attemptIDs {
+		operationID := NewID()
+		attemptIDs[index] = NewID()
+		if err := s.InsertOperation(operationID, "m11-live-gate", "B", "auto_approved", map[string]any{
+			"action": "open", "shadow": false, "symbol": "SPY", "kind": "equity", "side": "buy",
+		}, map[string]any{"class": "B"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.Exec(`INSERT INTO execution_attempt
+			(id,operation_id,seq,intent,client_order_id,state,qty,limit_micros)
+			VALUES ($1,$2,1,'place',$3,'pending',$4,$5)`, attemptIDs[index], operationID, NewID(),
+			int64(units.MustQty("1")), int64(units.MustMicros("1"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan *ExecutionAttempt, workers)
+	errorsCh := make(chan error, workers)
+	var wait sync.WaitGroup
+	for _, attemptID := range attemptIDs {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			claimed, err := s.ClaimPendingAttemptLive(attemptID, "barrier-worker")
+			results <- claimed
+			errorsCh <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var winner *ExecutionAttempt
+	claimedCount := 0
+	for claimed := range results {
+		if claimed != nil {
+			claimedCount++
+			winner = claimed
+		}
+	}
+	if claimedCount != 1 || winner == nil {
+		t.Fatalf("claimed=%d winner=%+v", claimedCount, winner)
+	}
+	gate, err := s.GetLiveExecutionGate()
+	if err != nil || gate.ActiveAttemptID != winner.ID || gate.UnknownAttemptID != "" {
+		t.Fatalf("active gate=%+v err=%v", gate, err)
+	}
+	canonical, err := json.Marshal(map[string]any{"kind": "equity", "symbol": "SPY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(canonical)
+	prepared, err := s.PrepareAttemptProviderIntent(winner.ID, winner.Attempt, "account-1", canonical, digest[:])
+	if err != nil || !prepared {
+		t.Fatalf("prepared=%v err=%v", prepared, err)
+	}
+	marked, err := s.MarkAttemptSent(winner.ID, winner.Attempt, false)
+	if err != nil || !marked {
+		t.Fatalf("marked=%v err=%v", marked, err)
+	}
+	resolved, err := s.ResolveAttempt(winner.ID, winner.Attempt, AttemptResolution{
+		State: "unknown", LastError: "lost response", ProviderErrorCode: "call_failed",
+	})
+	if err != nil || !resolved {
+		t.Fatalf("unknown resolved=%v err=%v", resolved, err)
+	}
+	gate, _ = s.GetLiveExecutionGate()
+	if gate.ActiveAttemptID != "" || gate.UnknownAttemptID != winner.ID {
+		t.Fatalf("unknown gate=%+v", gate)
+	}
+	for _, attemptID := range attemptIDs {
+		if attemptID == winner.ID {
+			continue
+		}
+		claimed, claimErr := s.ClaimPendingAttemptLive(attemptID, "blocked-worker")
+		if claimErr != nil || claimed != nil {
+			t.Fatalf("latched claim=%+v err=%v", claimed, claimErr)
+		}
+	}
+	current, err := s.GetExecutionAttempt(winner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := s.ClaimRecoverableAttemptLive(winner.ID, "recovery", "unknown", current.Attempt, time.Now())
+	if err != nil || recovery == nil {
+		t.Fatalf("recovery=%+v err=%v", recovery, err)
+	}
+	marked, err = s.MarkAttemptSent(recovery.ID, recovery.Attempt, true)
+	if err != nil || !marked {
+		t.Fatalf("replay marked=%v err=%v", marked, err)
+	}
+	marked, err = s.MarkAttemptSent(recovery.ID, recovery.Attempt, true)
+	if err != nil || marked {
+		t.Fatalf("second replay marked=%v err=%v", marked, err)
+	}
+	resolved, err = s.ResolveAttempt(recovery.ID, recovery.Attempt, AttemptResolution{
+		State: "settled", BrokerOrderID: NewID(), CandidateBrokerOrderID: NewID(),
+	})
+	if err != nil || !resolved {
+		t.Fatalf("settled=%v err=%v", resolved, err)
+	}
+	gate, _ = s.GetLiveExecutionGate()
+	if gate.ActiveAttemptID != "" || gate.UnknownAttemptID != "" {
+		t.Fatalf("cleared gate=%+v", gate)
+	}
+}
 
 func TestTradeGrantCanaryBarrierPostgres(t *testing.T) {
 	s := openM11IntegrationStore(t)

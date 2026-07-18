@@ -59,6 +59,7 @@
           <div><dt>Capability snapshot</dt><dd id="snapshot-version">—</dd></div>
           <div><dt>Schema parity</dt><dd id="schema-parity">—</dd></div>
           <div><dt>Last read</dt><dd id="last-read">—</dd></div>
+          <div><dt>Live mutation gate</dt><dd id="mutation-gate">—</dd></div>
           <div><dt>Last error</dt><dd id="provider-error">None</dd></div>
         </dl>
       </article>
@@ -126,7 +127,7 @@
         <div><p class="eyebrow">FAIL-CLOSED HOLDS</p><h2 id="warning-title">Execution warnings</h2></div>
         <span id="warning-count" class="badge">0</span>
       </div>
-      <p class="query-intro">Stale or unknown execution attempts and held reservations are informational only. This console cannot release a hold or retry an uncertain broker effect.</p>
+      <p class="query-intro">The console never releases a hold or retries an uncertain broker effect. In Live mode only, an Admin may use the two-step control to adopt a previously recorded exact candidate; the kernel re-pulls and requires that same sole match before clearing the latch.</p>
       <div id="warning-list" class="warning-list"></div>
       <p id="warnings-empty" class="empty">No uncertain attempts or held reservations.</p>
       <p id="warnings-asof" class="timestamp">—</p>

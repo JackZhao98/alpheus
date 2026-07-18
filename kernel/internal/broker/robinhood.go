@@ -430,20 +430,32 @@ type equityExecution struct {
 	Timestamp string        `json:"timestamp"`
 }
 
+type equityDollarAmount struct {
+	Amount       string `json:"amount"`
+	CurrencyCode string `json:"currency_code"`
+}
+
 type equityReadOrder struct {
-	ID                 string            `json:"id"`
-	InstrumentID       string            `json:"instrument_id"`
-	Symbol             string            `json:"symbol"`
-	Side               string            `json:"side"`
-	State              string            `json:"state"`
-	Quantity           *units.Qty        `json:"quantity"`
-	CumulativeQuantity *units.Qty        `json:"cumulative_quantity"`
-	Price              *units.Micros     `json:"price"`
-	AveragePrice       optionalMicros    `json:"average_price"`
-	RejectReason       string            `json:"reject_reason"`
-	CreatedAt          string            `json:"created_at"`
-	LastTransactionAt  *string           `json:"last_transaction_at"`
-	Executions         []equityExecution `json:"executions"`
+	ID                 string              `json:"id"`
+	InstrumentID       string              `json:"instrument_id"`
+	Symbol             string              `json:"symbol"`
+	Side               string              `json:"side"`
+	State              string              `json:"state"`
+	Quantity           *units.Qty          `json:"quantity"`
+	DollarBasedAmount  *equityDollarAmount `json:"dollar_based_amount"`
+	CumulativeQuantity *units.Qty          `json:"cumulative_quantity"`
+	Price              *units.Micros       `json:"price"`
+	StopPrice          optionalMicros      `json:"stop_price"`
+	AveragePrice       optionalMicros      `json:"average_price"`
+	RejectReason       string              `json:"reject_reason"`
+	CreatedAt          string              `json:"created_at"`
+	LastTransactionAt  *string             `json:"last_transaction_at"`
+	Type               string              `json:"type"`
+	TimeInForce        string              `json:"time_in_force"`
+	MarketHours        string              `json:"market_hours"`
+	Trigger            string              `json:"trigger"`
+	PlacedAgent        string              `json:"placed_agent"`
+	Executions         []equityExecution   `json:"executions"`
 }
 
 type optionExecution struct {
@@ -469,10 +481,16 @@ type optionReadOrder struct {
 	Quantity          *units.Qty       `json:"quantity"`
 	ProcessedQuantity *units.Qty       `json:"processed_quantity"`
 	Price             optionalMicros   `json:"price"`
+	StopPrice         optionalMicros   `json:"stop_price"`
 	RejectReason      string           `json:"reject_reason"`
 	CreatedAt         string           `json:"created_at"`
 	LastTransactionAt *string          `json:"last_transaction_at"`
 	UpdatedAt         string           `json:"updated_at"`
+	Type              string           `json:"type"`
+	TimeInForce       string           `json:"time_in_force"`
+	MarketHours       string           `json:"market_hours"`
+	Trigger           string           `json:"trigger"`
+	PlacedAgent       string           `json:"placed_agent"`
 	Legs              []optionOrderLeg `json:"legs"`
 }
 
@@ -500,21 +518,25 @@ func providerNextCursor(next string) (string, error) {
 }
 
 func (r *Robinhood) equityOrders(ctx context.Context) ([]equityReadOrder, error) {
-	return readOrderPages[equityReadOrder](ctx, r, "get_equity_orders")
+	return readOrderPages[equityReadOrder](ctx, r, "get_equity_orders", nil)
 }
 
 func (r *Robinhood) optionOrders(ctx context.Context) ([]optionReadOrder, error) {
-	return readOrderPages[optionReadOrder](ctx, r, "get_option_orders")
+	return readOrderPages[optionReadOrder](ctx, r, "get_option_orders", nil)
 }
 
-func readOrderPages[T any](ctx context.Context, r *Robinhood, tool string) ([]T, error) {
+func readOrderPages[T any](ctx context.Context, r *Robinhood, tool string, filters map[string]any) ([]T, error) {
 	if _, err := r.selectedAccount(ctx); err != nil {
 		return nil, err
 	}
 	out := []T{}
 	cursor := ""
 	for page := 0; page < 100; page++ {
-		args := map[string]any{"account_number": r.accountID}
+		args := make(map[string]any, len(filters)+2)
+		for key, value := range filters {
+			args[key] = value
+		}
+		args["account_number"] = r.accountID
 		if cursor != "" {
 			args["cursor"] = cursor
 		}

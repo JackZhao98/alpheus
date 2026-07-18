@@ -120,6 +120,35 @@ type PlaceRequest struct {
 	Kind           string       `json:"kind"`
 }
 
+// ProviderPlaceIntent is the canonical, provider-visible identity of one
+// place mutation. It is persisted before the first live send and is also the
+// only shape exact candidate reconciliation may use.
+type ProviderPlaceIntent struct {
+	Kind           string       `json:"kind"`
+	InstrumentID   string       `json:"instrument_id"`
+	Symbol         string       `json:"symbol"`
+	Side           string       `json:"side"`
+	PositionEffect string       `json:"position_effect"`
+	Qty            units.Qty    `json:"qty"`
+	Limit          units.Micros `json:"limit"`
+	OrderType      string       `json:"order_type"`
+	Trigger        string       `json:"trigger"`
+	TimeInForce    string       `json:"time_in_force"`
+	MarketHours    string       `json:"market_hours"`
+}
+
+type ExactPlaceCandidateQuery struct {
+	AccountID     string
+	ClientOrderID string
+	Intent        ProviderPlaceIntent
+	WindowStart   time.Time
+	WindowEnd     time.Time
+}
+
+type ExactPlaceCandidateProvider interface {
+	FindExactPlaceCandidates(ctx context.Context, query ExactPlaceCandidateQuery) ([]OrderResult, error)
+}
+
 // InstrumentReader is the minimum read capability an execution adapter needs
 // to revalidate the persisted order against current provider metadata before
 // any mutation. marketdata.Provider satisfies it without creating a package
@@ -163,6 +192,12 @@ type ExecutionProvider interface {
 	PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
 	CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
 	GetOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
+}
+
+// ClientOrderFinder is the preferred recovery capability when a provider
+// exposes the client-generated identity in its read API. Robinhood currently
+// does not, so its bounded recovery uses ExactPlaceCandidateProvider instead.
+type ClientOrderFinder interface {
 	FindOrderByClientID(ctx context.Context, clientOrderID string) (OrderResult, error)
 }
 

@@ -37,6 +37,7 @@ type Operation struct {
 	WorkingPrice     units.Micros `json:"working_price,omitempty"`
 	Multiplier       int64        `json:"multiplier,omitempty"`
 	QtyIncrement     units.Qty    `json:"qty_increment,omitempty"`
+	InstrumentID     string       `json:"instrument_id,omitempty"`
 
 	VerifiedReduction bool   `json:"-"`
 	RejectReason      string `json:"-"`

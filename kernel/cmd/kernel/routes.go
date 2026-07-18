@@ -34,6 +34,7 @@ func (s *server) routes() http.Handler {
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)
 		mux.HandleFunc("POST /operations/{id}/review", methodNotAllowed)
+		mux.HandleFunc("POST /execution-attempts/{id}/adopt-candidate", methodNotAllowed)
 		mux.HandleFunc("POST /journal", methodNotAllowed)
 		mux.HandleFunc("PUT /blackboard/{day}", methodNotAllowed)
 		mux.HandleFunc("POST /telemetry", methodNotAllowed)
@@ -44,6 +45,7 @@ func (s *server) routes() http.Handler {
 
 	mux.HandleFunc("POST /operations", s.authorize(permissionRuntime, s.propose))
 	mux.HandleFunc("POST /operations/{id}/review", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.review)))
+	mux.HandleFunc("POST /execution-attempts/{id}/adopt-candidate", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.adoptExecutionCandidate)))
 	mux.HandleFunc("POST /journal", s.authorize(permissionRuntime, s.postJournal))
 	mux.HandleFunc("PUT /blackboard/{day}", s.authorize(permissionRuntime, s.putBlackboard))
 	mux.HandleFunc("POST /telemetry", s.authorize(permissionRuntime, s.postTelemetry))
