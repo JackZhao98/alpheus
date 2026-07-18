@@ -201,7 +201,10 @@ pretending that non-unique order attributes are a client identity.
   transaction to roll back after an unknown attempt is claimed, then proves a
   replacement worker can reclaim that same fenced attempt after lease expiry
   while the unknown latch remains engaged. The isolated database and volume
-  were removed after the test.
+  were removed after the test. A positive-path PostgreSQL probe separately
+  proves candidate adoption commits the attempt state, broker order identity,
+  canonical fill, exposure conversion, reservation conversion, and latch clear
+  together; no latch is cleared ahead of durable accounting.
 
 ## Remaining gates for M11
 

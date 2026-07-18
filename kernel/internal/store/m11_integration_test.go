@@ -162,6 +162,124 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 	}
 }
 
+func TestCandidateAdoptionCommitsFillAndClearsLatchAtomicallyPostgres(t *testing.T) {
+	s := openM11IntegrationStore(t)
+	defer s.DB.Close()
+	resetM3AIntegrationData(t, s)
+
+	operationID, reservationID := NewID(), NewID()
+	attemptID, orderID, clientID := NewID(), NewID(), NewID()
+	marketDay := time.Date(2026, time.July, 17, 0, 0, 0, 0, time.UTC)
+	if err := s.InsertOperation(operationID, "m11-adoption", "B", "auto_approved", map[string]any{
+		"action": "open", "shadow": false, "symbol": "M11-ADOPT", "kind": "equity",
+		"side": "buy", "qty": 1, "multiplier": 1,
+		"derived_max_risk": 10, "required_cash": 10,
+	}, map[string]any{"class": "B"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WithLedgerLock(false, marketDay, func(gate OperationGate) error {
+		if err := gate.InsertTradeGrant(TradeGrant{
+			OperationID: operationID, Ledger: "live", MarketDay: marketDay,
+			AuthorizedRisk: units.MustMicros("10"), RiskSource: "computed",
+		}); err != nil {
+			return err
+		}
+		if err := gate.InsertOpenReservation(OpenReservation{
+			ID: reservationID, OperationID: operationID, Ledger: "live", MarketDay: marketDay,
+			Symbol: "M11-ADOPT", Kind: "equity",
+			OriginalQty: units.MustQty("1"), RemainingQty: units.MustQty("1"),
+			OriginalRisk: units.MustMicros("10"), RemainingRisk: units.MustMicros("10"),
+			OriginalCash: units.MustMicros("10"), RemainingCash: units.MustMicros("10"),
+			ResourceState: "held",
+		}); err != nil {
+			return err
+		}
+		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
+			ID: attemptID, OperationID: operationID, Seq: 1, OpenReservationID: reservationID,
+			Intent: "place", ClientOrderID: clientID, State: "pending",
+			Qty: units.MustQty("1"), Limit: units.MustMicros("10"),
+		}); err != nil {
+			return err
+		}
+		return gate.InsertOrder(Order{
+			ID: orderID, OperationID: operationID, ExecutionAttemptID: attemptID,
+			ClientOrderID: clientID, Ledger: "live", Symbol: "M11-ADOPT", Side: "buy",
+			Kind: "equity", Multiplier: 1, Qty: units.MustQty("1"),
+			Limit: units.MustMicros("10"), State: "new",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := s.ClaimPendingAttemptLive(attemptID, "m11-adoption-send")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	canonical, err := json.Marshal(map[string]any{"kind": "equity", "symbol": "M11-ADOPT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(canonical)
+	prepared, err := s.PrepareAttemptProviderIntent(claimed.ID, claimed.Attempt, "account-1", canonical, digest[:])
+	if err != nil || !prepared {
+		t.Fatalf("prepared=%v err=%v", prepared, err)
+	}
+	marked, err := s.MarkAttemptSent(claimed.ID, claimed.Attempt, false)
+	if err != nil || !marked {
+		t.Fatalf("marked=%v err=%v", marked, err)
+	}
+	resolved, err := s.ResolveAttempt(claimed.ID, claimed.Attempt, AttemptResolution{
+		State: "unknown", LastError: "lost placement response", ProviderErrorCode: "call_failed",
+	})
+	if err != nil || !resolved {
+		t.Fatalf("unknown resolved=%v err=%v", resolved, err)
+	}
+	unknown, err := s.GetExecutionAttempt(attemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adoption, err := s.ClaimRecoverableAttemptLive(
+		unknown.ID, "m11-adoption-admin", "unknown", unknown.Attempt, time.Now(),
+	)
+	if err != nil || adoption == nil {
+		t.Fatalf("adoption=%+v err=%v", adoption, err)
+	}
+	brokerOrderID, brokerFillID := NewID(), NewID()
+	resolved, err = s.ResolveAttempt(adoption.ID, adoption.Attempt, AttemptResolution{
+		State: "settled", BrokerOrderID: brokerOrderID,
+		CandidateBrokerOrderID: brokerOrderID, OperatorSubject: "admin:m11-test",
+		OperationStatus: "executed",
+		OrderUpdate: &OrderUpdate{
+			ExecutionAttemptID: adoption.ID, BrokerOrderID: brokerOrderID,
+			State: "filled", FilledQty: units.MustQty("1"),
+			Fills: []FillInput{{
+				BrokerFillID: brokerFillID, Qty: units.MustQty("1"),
+				Price: units.MustMicros("9"), TS: time.Now().UTC(),
+			}},
+		},
+	})
+	if err != nil || !resolved {
+		t.Fatalf("adopt resolved=%v err=%v", resolved, err)
+	}
+
+	current, err := s.GetExecutionAttempt(attemptID)
+	order, orderErr := s.GetOrderByAttempt(attemptID)
+	reservation, reservationErr := s.GetOpenReservation(reservationID)
+	gate, gateErr := s.GetLiveExecutionGate()
+	var fillCount int
+	fillErr := s.DB.QueryRow(`SELECT count(*) FROM fills
+		WHERE order_id=$1 AND broker_fill_id=$2`, orderID, brokerFillID).Scan(&fillCount)
+	if err != nil || orderErr != nil || reservationErr != nil || gateErr != nil || fillErr != nil ||
+		current.State != "settled" || current.BrokerOrderID != brokerOrderID ||
+		current.CandidateBrokerOrderID != brokerOrderID || order.State != "filled" ||
+		order.BrokerOrderID != brokerOrderID || reservation.ResourceState != "converted" ||
+		reservation.RemainingQty != 0 || fillCount != 1 || gate.ActiveAttemptID != "" ||
+		gate.UnknownAttemptID != "" {
+		t.Fatalf("attempt=%+v order=%+v reservation=%+v gate=%+v fills=%d errors=%v/%v/%v/%v/%v",
+			current, order, reservation, gate, fillCount, err, orderErr, reservationErr, gateErr, fillErr)
+	}
+}
+
 func TestTradeGrantCanaryBarrierPostgres(t *testing.T) {
 	s := openM11IntegrationStore(t)
 	defer s.DB.Close()
