@@ -218,6 +218,28 @@ violated, and severity.
   remainder or ingest a partial/full fill, prove clean accounting and gate, and
   only then restart `read_only`. A filled order is never reported as rolled
   back, and the certification harness must never invoke a production mutation.
+- **I16 K0 canary authority.** Activate the database canary revision/head, edit
+  only YAML canary values and restart two differently configured Kernel
+  instances: both use the same database cap/clean-days generation. Missing or
+  corrupt canary authority closes Live without YAML fallback. Race 20 candidate
+  changes and prove one latest generation/head wins. Lower
+  `clean_days_before_raise` and require the widening proof; mixed cap/threshold
+  changes cannot bypass it. State and refusal events expose the authoritative
+  revision/generation.
+- **I17 K1 Kernel policy and temporal binding.** After K1 migration, change
+  migrated `limits.yaml` values and restart two differently configured Kernel
+  instances: effective business/risk policy remains bound to the database head.
+  Missing, corrupt or stale authority fails closed without file fallback. Race
+  20 activations and prove one generation wins. Create a pending proposal and
+  working order, activate a more permissive TTL/risk/reprice policy, then
+  restart: old work gains no lifetime, capacity, price movement or reprice. A
+  reviewable Class-C failure can receive one exact scoped approval while a
+  structural/non-overridable failure cannot. Field-specific tightening follows
+  its code-declared transition rule without rewriting old evidence. Start two
+  workers with different local claim timeouts and prove neither steals before
+  persisted database-time lease expiry. Inventory every retained policy field
+  to one enforcement reader and test; unknown/dead fields are rejected or
+  removed, and no secret appears in policy/event/API projections.
 
 ## Suppression list — known, tracked, NOT findings
 

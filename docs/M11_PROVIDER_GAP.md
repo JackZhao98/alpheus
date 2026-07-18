@@ -256,6 +256,23 @@ pretending that non-unique order attributes are a client identity.
 
 ## Remaining gates for M11
 
+### v1.8 canary policy authority
+
+Migration 0008 and `RecordLiveCanaryRevision` currently provide an immutable
+audit ledger, but the production gate still reads `s.limits.LiveCanary` and no
+production path records or activates the database revision. The ledger is not
+yet authority. In addition, lowering `clean_days_before_raise` without raising
+the cap is currently classified as an ordinary policy change even though it
+widens when a future cap increase becomes eligible.
+
+Before the separately confirmed one-share canary, plan v1.8 K0 requires the
+database canary revision/head to drive startup, gate decisions, state and
+events; missing/invalid authority fails Live closed with no YAML fallback.
+`cap increase OR clean-days decrease` is widening. Editing `limits.yaml` and
+restarting after activation must not change the effective canary. The broader
+Kernel policy migration remains a separate post-M11/pre-AP0 module so the first
+canary is not coupled to an unnecessary configuration rewrite.
+
 ### v1.7 recovery hardening found by cross-module review
 
 The verified upstream `ref_id` behavior remains sufficient for duplicate-effect

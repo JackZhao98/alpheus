@@ -104,6 +104,29 @@ Operation approval classes (`kernel/internal/risk`):
     interest; a direction that is only implied by the formula has already been
     inverted once in this plan's own history.
 
+### Amendment v1.8 — policy ownership (supersedes invariants 1 and 6 only)
+
+Human/business risk values remain Kernel-owned and impossible for prompts or
+Agents to override, but their runtime authority moves from `limits.yaml` to
+typed immutable database policy revisions with an audited active head. Code
+continues to own structural invariants and absolute resource/protocol ceilings;
+deployment config owns endpoints, secrets, physical account binding, timeouts
+and a maximum capability ceiling; Provider/account data remains observed fact.
+The effective permission combines those layers, current Kernel/Provider facts
+and, where the effect requires it, the operation's scoped grant. The frozen
+Class-C route remains: an exact approval may cover only named reviewable
+checklist failures; it cannot cover structural or non-overridable absolutes.
+Cancel, reconciliation and verified reduction do not depend on an opening grant.
+
+`limits.yaml` becomes a one-time bootstrap/export fixture. Once the
+corresponding domain head exists, missing or invalid database policy fails
+closed and never falls back to that domain's file values. Existing numeric
+values and prompt content remain human-owned: normal implementation work may
+migrate them without changing them, while any value or semantic change requires
+its own authorized policy revision. Full ownership, binding and transition
+rules are in
+[`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md).
+
 ---
 
 ## Canonical sequence
@@ -116,8 +139,9 @@ status, dependency gates, and the current implementation target.
 ## Explicitly out of scope for the coding agent
 
 - Authoring any prompt slot content (human task).
-- Changing limits.yaml numbers or approval-class semantics. (Adding a key a
-  milestone specifies is fine; see invariant 6.)
+- Changing human-owned policy values or approval-class semantics during a
+  storage migration. Importing identical values under v1.8 is allowed; any
+  value/semantic change requires its own authorized policy revision.
 - Robinhood ORDER placement before M11's preconditions are met.
 - Any UI beyond the M8B/M7 single Trading Cockpit.
 - Backtest replay tooling (Phase 3, separate plan).
