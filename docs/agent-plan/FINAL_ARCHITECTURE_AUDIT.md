@@ -3,8 +3,9 @@
 > Audit date: **2026-07-18**
 >
 > Audit input baseline: `d8c977ccdd86b28550da526a56ec010cdf63adac`
-> Corrected architecture candidate: pinned by the follow-up audit-closure commit
-> after this reviewed document set lands
+> Corrected architecture candidate:
+> `aa4df069e979a119782224ec2a488f942f0dcff6`
+> (this follow-up changes audit metadata only)
 >
 > Result: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS**
 >
