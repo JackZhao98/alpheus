@@ -23,7 +23,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
    grants, human confirmation interaction, budgets, or Kernel authorization.
 5. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
    cross-module APIs, Provider access, or failure behavior.
-6. Read the frozen Kernel plan only when defining or implementing a Kernel
+6. Read `BUILD_ROADMAP.md` before planning implementation, schemas, services,
+   migrations, rollout, or milestone acceptance.
+7. Read the frozen Kernel plan only when defining or implementing a Kernel
    interface. Agent architecture cannot silently amend it.
 
 `FROZEN ARCHITECTURE` records an agreed ownership or mechanism boundary. It does
@@ -47,6 +49,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
+| Agent Platform Build Roadmap | Implementation sequence, schema-pack format, service/database topology, stage gates, threat model, rollout, and acceptance-command contract frozen; code authorization still requires the final cross-module audit and per-stage gates | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md) |
 
 ## Planning rules
 
@@ -69,9 +72,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 1. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
    data and a signed Calibration Pack before authorizing implementation.
-2. Derive the Agent Build Roadmap: exact machine schemas, service/database
-   boundaries, implementation milestones, threat models, rollout gates, and
-   acceptance commands from the frozen module contracts.
-3. Run one final cross-module architecture audit before authorizing code work.
-4. Implement non-Live foundations first; GRACE and Delegation cannot affect
-   autonomous Live until their independent acceptance boundaries pass.
+2. Run one final cross-module architecture audit against
+   `BUILD_ROADMAP.md` before authorizing code work.
+3. After M11 lands and the Charter amendment is accepted, implement AP0 only if
+   the audit explicitly issues `AUTHORIZED_FOR_AP0`.
+4. Continue stage by stage with non-Live foundations first. GRACE and
+   Delegation cannot affect autonomous Live until their independent acceptance
+   boundaries pass.
