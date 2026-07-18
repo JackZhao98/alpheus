@@ -52,8 +52,11 @@ one PostgreSQL deployment. Co-location does not grant shared ownership.
 
 ### Evaluation and delegation
 
-- GRACE owns delayed EvaluationTickets, matured outcomes, rating-model
-  revisions, and ScoreSnapshots.
+- GRACE owns delayed EvaluationTickets and their state/binding events, matured
+  outcomes, AtomicEvaluations, Evaluation Profiles/Contracts, rating-model and
+  Calibration Pack revisions, and ScoreSnapshots. Privileged human/model-risk
+  paths own Profile, Pack, and Champion activation; the Engine cannot approve
+  itself.
 - Delegation owns deterministic authorization policy, proposals, approvals,
   and scoped active grants.
 - A GRACE score is not a grant, and a grant is not a Kernel execution decision.
@@ -83,6 +86,7 @@ User / Web
             -> typed Artifacts + BehaviorEvents
 
 Decision Artifact
+  -> accepted GRACE intake / EvaluationTicket acknowledgement for new risk
   -> deterministic Proposal Validator
   -> exact human ticket OR active DelegationGrant
   -> Kernel hard-risk/reconciliation path
@@ -117,7 +121,9 @@ from reconciling, cancelling, closing, or enforcing breakers.
 | Evidence/Claim/Fact/Metric/Snapshot | Evidence Store/Validator | Agents and Strategy Lab read |
 | Memory item/candidate/promotion | Memory service | Agents retrieve under context policy |
 | Playbook/Strategy/experiment revision | Strategy Registry/Lab | Agents consume active or isolated Candidate revision |
-| EvaluationTicket/MaturedBehaviorOutcome/ScoreSnapshot | GRACE | Delegation and Agents read published records |
+| EvaluationProfile/Contract and Calibration Pack | GRACE privileged human/model-risk path | Engine and Validator consume immutable revision |
+| EvaluationTicket/TicketState/ModelBindingState | GRACE | Agent Control Plane receives intake acknowledgement; other modules read |
+| MaturedBehaviorOutcome/AtomicEvaluation/ScoreSnapshot | GRACE | Delegation and Agents read permitted publication class |
 | Delegation policy/proposal/grant | Delegation privileged path | Kernel validates; Agents read scoped status |
 | Account/operation/reservation/order/fill/position/breaker | Kernel | Other modules read canonical publication |
 | Broker request/effect/reconciliation | Kernel Provider | No Agent-plane access |
@@ -159,10 +165,12 @@ There is no distributed database transaction covering Agent cognition and
 broker execution. Safety comes from ordered committed records:
 
 1. commit Agent Artifact and required BehaviorEvent;
-2. validate proposal and authority reference;
-3. commit canonical Kernel operation/reservation before broker mutation;
-4. reconcile Provider outcome into Kernel truth;
-5. publish facts for delayed GRACE/learning consumption.
+2. for Agent new risk, receive accepted GRACE intake/EvaluationTicket
+   acknowledgement;
+3. validate proposal and authority reference;
+4. commit canonical Kernel operation/reservation before broker mutation;
+5. reconcile Provider outcome into Kernel truth;
+6. publish facts for delayed GRACE/learning consumption.
 
 ## New-risk path
 
@@ -170,6 +178,9 @@ Only Decision Desk may produce Agent new-risk intent. Before Kernel receives it:
 
 - required Evidence, Strategy, Challenge, decision graph, and BehaviorEvent
   references are committed;
+- GRACE intake has accepted that BehaviorEvent and acknowledged the immutable
+  EvaluationTicket/ModelBindingPlan, even when its model binding is explicitly
+  bootstrap-unassigned or unsupported;
 - deterministic Proposal Validator checks schema, freshness, revision and
   authority-envelope compatibility;
 - autonomous flow references one current scoped `DelegationGrant`;
@@ -192,6 +203,12 @@ They also cannot label an invalid action risk reducing. Human policy may still
 require review for a non-urgent management action, but no missing Agent-plane
 component may disable Kernel emergency safety.
 
+For Agent-originated risk reduction, Artifact and BehaviorEvent still commit
+before effect. A Ticket/GRACE outage after that commit may be repaired from the
+pre-effect event and cannot trap risk. If the BehaviorEvent itself did not
+commit, the Agent Artifact is not used; only a separately originated user or
+Kernel emergency path may act, under its real identity and audit record.
+
 ## Strategy activation path
 
 Strategy Lab produces Candidate artifacts only. Activation requires:
@@ -210,9 +227,11 @@ to their entry revisions unless an explicit reviewed migration occurs.
 ## GRACE and Delegation path
 
 Agent Runtime commits BehaviorEvent before outcome. GRACE derives the immutable
-ticket, waits for its predeclared maturity/finality conditions, constructs a
-real-outcome record, and publishes a scoped ScoreSnapshot under an approved
-Champion model.
+ticket and ModelBindingPlan, appends separate lifecycle/binding events, waits
+for predeclared maturity/finality, constructs the outcome and AtomicEvaluation,
+and publishes a scoped Snapshot class. Only a `current_authority` Snapshot
+under the active approved Champion is eligible for Delegation consumption;
+historical-bound, Challenger, and diagnostic classes remain non-authoritative.
 
 Delegation may consume the snapshot together with human-owned policy, current
 grant, deployment/canary state, and Kernel-published health facts. It produces

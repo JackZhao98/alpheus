@@ -2,9 +2,10 @@
 
 > Status: **FROZEN ARCHITECTURE — delayed evaluation, evidence and attribution
 > boundaries, score ownership, and model-promotion lifecycle are authoritative.
-> The quantitative model, parameters, thresholds, and any downstream Live
-> authorization mapping remain unspecified and are not authorized for
-> implementation.**
+> The proposed quantitative design now lives in `GRACE_QUANTITATIVE.md`, but it
+> remains a Draft pending independent model-risk review, exact machine schemas,
+> a signed Calibration Pack, and implementation authorization. Any downstream
+> Live authorization mapping remains separate and unauthorized.**
 
 GRACE stands for **Grounded Retrospective Agent Credibility Evaluation**. Its
 descriptive name is the **real-outcome delayed credibility rating system**.
@@ -25,10 +26,11 @@ never interchangeable.
 
 This document freezes what GRACE may evaluate, which facts must be captured
 before an outcome, how delayed outcomes mature, how multi-Agent contribution is
-represented, and how a candidate rating model may become active. It
-intentionally does not select a statistical model or authorize numerical
-policy. Those decisions require a separate quantitative specification and
-independent model-risk review.
+represented, and how a candidate rating model may become active. The proposed
+schemas, scoring-rule families, model candidates, and rating lattice are in
+`GRACE_QUANTITATIVE.md`; they remain non-authoritative until independent
+model-risk review. Numerical policy requires its separately signed Calibration
+Pack.
 
 ## Non-negotiable boundary
 
@@ -74,7 +76,8 @@ A GRACE rating is evidence for authorization policy; it is not authority.
    its confidence, change its benchmark, or rename its identity after seeing
    the result.
 5. Executed Live profit, unrealized marks, execution-aware Shadow results, and
-   observed market counterfactuals are different evidence classes.
+   observed market counterfactuals are different evidence classes. Invalid or
+   censored is an orthogonal validity state, not another provenance class.
 6. Profit alone is not credibility. Rating must account for calibration,
    exposure, cost, drawdown, adverse path, tail risk, policy compliance, and
    uncertainty.
@@ -142,8 +145,10 @@ records when they mature at different times.
 ## Agent-side behavior contract
 
 The Agent system must preserve enough pre-outcome structure to make delayed
-evaluation possible. Exact schemas remain future work, but every scoreable
-`BehaviorEvent` binds fields equivalent to the following.
+evaluation possible. This architecture summarizes the minimum fields; the
+proposed Role-discriminated record semantics are in
+`GRACE_QUANTITATIVE.md`. Every scoreable `BehaviorEvent` binds fields
+equivalent to the following.
 
 ### Identity and causal lineage
 
@@ -213,24 +218,40 @@ The immutable `EvaluationTicket` freezes fields equivalent to:
 
 ```text
 ticket_id, behavior_id, ticket revision, and registration time
+evaluation Contract and Evaluation Profile revisions
 primary/secondary horizon ids and maturity criteria
 evaluate_not_before and next evaluation time
 benchmark/comparator and market-path sampling rules
 approved market-data source hierarchy and revision compatibility
 price, corporate-action, FX, fee, slippage, and cost conventions
-Live/Shadow/Research evidence class
+behavior evidence class and allowed outcome evidence classes
 counterfactual and censoring protocol
 required Kernel reconciliation/finality state
 eligible metrics and prohibited interpretations
-GRACE model compatibility requirement
-status, status reason, and supersession references
+immutable GRACE ModelBindingPlan: primary/fallback/deadline/compatibility
+supersession references
 ```
 
 Ticket creation must reject a horizon that is already observable, a benchmark
 selected after the decision, missing required point-in-time context, or a
-behavior/model mismatch. Ticket updates may advance deterministic lifecycle
-state or add evidence references; they cannot change the frozen evaluation
-meaning.
+behavior/model mismatch. Append-only ticket-state events may advance the
+deterministic lifecycle or add evidence references; they cannot change the
+frozen ticket or its evaluation meaning.
+
+Append-only binding-state events select, invalidate, or apply a predeclared
+fallback under the immutable Plan; binding state is not rewritten inside the
+ticket.
+
+The compatible Champion active at registration is bound to the ticket. When no
+first Champion or no compatible model exists, an explicit unassigned/
+unsupported binding preserves the behavior but cannot produce favorable
+`current_authority` evidence. If a new Champion activates before maturity, the
+original bound revision may produce a `historical_bound` evaluation/Snapshot,
+not current authority evidence. A later model may produce a labeled diagnostic
+replay, but cannot choose itself after the outcome, replace the bound result,
+or silently absorb the pending ticket into a current-authority Snapshot.
+Invalid-model and predeclared-fallback behavior is specified in
+`GRACE_QUANTITATIVE.md`.
 
 ## Matured outcome contract
 
@@ -242,9 +263,13 @@ ticket and behavior references
 outcome observation window and complete market path manifest
 market-data sources, Provider revisions, observation times, and quality state
 benchmark and excess outcome
-realized or unrealized status and evidence class
-net PnL where actually executed, with fees, slippage, and opportunity cost
-return and loss in pre-authorized risk/exposure units
+outcome evidence class
+realized Live net PnL from reconciled canonical lot/inventory accounting,
+matched closed quantity, and signed cash-flow/basis-transfer manifests
+benchmark-relative edge and actual-account risk units kept separate
+unrealized marked PnL only in its distinct outcome class
+hypothetical opportunity cost in a physically separate counterfactual field
+return and loss in pre-effect Kernel-authoritative risk/reservation units
 MAE, MFE, drawdown, volatility, gap, and tail-path measures
 fill quality, latency, capacity, and execution divergence where applicable
 forecast/probability calibration result
@@ -360,7 +385,8 @@ Every evaluation must therefore reconstruct:
 - the market, Strategy, prompt/model, Tool, and Evidence versions known at
   behavior time;
 - which outcomes are Live facts, unrealized marks, Shadow estimates, observed
-  counterfactual paths, invalid, or censored;
+  counterfactual paths, with invalid/censored recorded as an orthogonal
+  validity state;
 - coverage limitations created by the generating policy and missing data.
 
 An evaluation that cannot reconstruct this manifest is invalid and cannot
@@ -398,8 +424,9 @@ GRACE does not maintain one global, context-free "AI score". Atomic evidence is
 keyed at least by:
 
 ```text
-behavior_type × AgentRevision × RoleContract × StrategyVersion
-× market_regime × horizon × live_or_shadow
+behavior_type × AgentRevision × RoleContract × optional StrategyVersion
+× market_regime × horizon
+× behavior_evidence_class × outcome_evidence_class
 ```
 
 The quantitative model may use reviewed hierarchical credibility methods to
@@ -434,7 +461,7 @@ subject type/id and complete segmentation scope
 GRACE Champion model revision and input manifest
 behavior count, exposure, effective sample size, and maturity coverage
 credibility estimate/posterior and uncertainty interval
-real economic outcome and risk-adjusted utility components
+real economic outcome, risk-unit, frequency, and severity components
 calibration/proper-score components
 frequency, severity, drawdown, clustering, and tail-risk components
 operational integrity/compliance facts kept distinct from market variance
@@ -445,11 +472,10 @@ deterioration, staleness, invalid-model, and requalification flags
 machine-readable drivers plus immutable replay references
 ```
 
-The quantitative specification may define a bounded rating or decision
-statistic that balances credibility with true economic outcome, but the output
-must retain its components and uncertainty. A scalar cannot hide a profitable
-tail-risk profile, small sample, poor calibration, policy violation, or
-unidentified counterfactual.
+The quantitative Draft defines a multidimensional scorecard and
+non-compensatory joint grade. The output retains every component and its
+uncertainty; no scalar may hide a profitable tail-risk profile, small sample,
+poor calibration, policy violation, or unidentified counterfactual.
 
 The optional Advisor may translate a published snapshot into concise prose and
 propose research or Playbook questions. Advisor prose is never fed back as a
@@ -559,7 +585,8 @@ decision usefulness, and regime-shift failure are assessed separately.
 ## Champion, Challenger, and Validator
 
 - **Champion** is the single active, immutable GRACE evaluation-model revision
-  used to publish official ScoreSnapshots. It does not update while active.
+  used to publish `current_authority` ScoreSnapshots. It does not update while
+  active.
 - **Challenger** is a candidate model revision evaluated offline and in Shadow
   on the same timestamped behavior/opportunity stream. It has no authority to
   trade, grant, approve, overwrite ratings, or modify the Champion.
@@ -579,8 +606,9 @@ immediate rollback. Model promotion never directly changes a delegation grant.
    revisions, Champion, and Challenger before scoring.
 2. Replay Champion and Challenger on the same eligible behavior and qualified
    opportunity streams.
-3. Keep realized Live, unrealized, execution-aware Shadow, observed
-   counterfactual, invalid, and censored cases distinct.
+3. Keep realized Live, unrealized, execution-aware Shadow, and observed
+   counterfactual provenance distinct, with invalid/censored validity tracked
+   orthogonally.
 4. Use predeclared metrics and model-promotion gates. Report uncertainty,
    exposure, regime/role coverage, selection limitations, and tail outcomes.
 5. Test sensitivity to attribution, missing counterfactuals, transaction costs,
@@ -606,6 +634,10 @@ Promotion is a bounded, independently reviewed model transition. A newly
 promoted model first publishes parallel observe-only snapshots. Downstream
 Delegation Policy remains pinned to its approved compatible GRACE model until a
 separate human-owned policy transition accepts the new revision.
+
+Tickets registered before the new Champion's effective time retain their
+original model binding. This may slow evidence continuity across promotion, but
+prevents outcome-time model selection and preserves every prior Snapshot.
 
 The Validator monitors whether downstream use of GRACE changes:
 
@@ -734,18 +766,18 @@ GRACE cannot influence Live delegation until acceptance proves:
 - independent actuarial/model-risk review approves the implemented model,
   attribution, calibration, stress tests, and limitations.
 
-## Required next specification
+## Required quantitative review
 
-This frozen architecture does not make GRACE implementation-ready. The next
-document must specify BehaviorEvent schemas per Role, maturity schedules,
-probability/forecast Contracts, benchmark and counterfactual protocols,
-multi-Agent attribution candidates, actuarial model candidates, data
-sufficiency, calibration, stress scenarios, rating output, and Validator
-acceptance probes.
+`GRACE_QUANTITATIVE.md` now proposes the Role payloads, maturity semantics,
+forecast Contracts, benchmark/counterfactual protocols, attribution boundary,
+actuarial candidates, rating lattice, and Validator probes requested by this
+architecture. It remains a Draft: independent model-risk review, exact machine
+schemas, representative reference data, and a signed Calibration Pack are
+still required before implementation is authorized.
 
-Until that specification is reviewed and frozen, GRACE remains
-documentation-only. Until `DELEGATION.md` is separately implemented and
-accepted, no GRACE result can alter Live authority.
+Until those requirements are accepted, GRACE remains documentation-only.
+Until `DELEGATION.md` is separately implemented and accepted, no GRACE result
+can alter Live authority.
 
 ## Research basis
 

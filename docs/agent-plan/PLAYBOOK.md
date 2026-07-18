@@ -201,8 +201,9 @@ searches.
 
 ## Evaluation boundary
 
-Evaluation cannot reduce to total PnL. The future quantitative specification
-must separately address:
+Evaluation cannot reduce to total PnL. `GRACE_QUANTITATIVE.md` now proposes the
+following separate dimensions, pending independent model-risk review and
+calibration:
 
 - return relative to pre-authorized risk and exposure;
 - loss frequency/severity, drawdown, clustering, and tail behavior;
@@ -223,9 +224,15 @@ and GRACE evaluation Contract before the outcome. These obligations apply to
 WAIT and PASS as well as traded proposals. Strategy evaluation cannot select
 only the decisions whose outcomes later became favorable.
 
-No numerical model, threshold, prior, sample requirement, or objective from
-architecture discussion is authorized. Those belong in a reviewed
-quantitative/model-risk specification.
+Human-owned evaluation policy determines mandatory behavior classes. A
+Strategy defines the qualified opportunity universe and objective meaning for
+those classes, but cannot mark a required unfavorable behavior unscoreable.
+Delayed behavior registration begins when the behavior occurs; it does not wait
+for Strategy promotion or later Coach review.
+
+The proposed model families and non-compensatory rating logic are specified in
+`GRACE_QUANTITATIVE.md`. No numerical threshold, prior, sample requirement, or
+Calibration Pack value is authorized until independent model-risk review.
 
 ## Performative and counterfactual boundary
 

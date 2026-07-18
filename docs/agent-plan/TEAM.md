@@ -184,12 +184,15 @@ It produces `WAIT`, `PASS`, a `DecisionMemo`, or a typed new-risk
 to the Challenge, names unresolved facts, binds the Strategy revision, and
 states invalidation/exit intent.
 
-WAIT, PASS, and PROPOSE are all attributable behaviors when the active Strategy
-marks the opportunity scoreable. The Decision Artifact binds the complete
-qualified opportunity, prediction distribution or approved categorical
-forecast, confidence scale, horizon, benchmark/no-action comparator, expected
-reward/risk/cost, decision graph, and evaluation Contract. Not trading does not
-erase the decision from delayed evaluation.
+WAIT, PASS, and PROPOSE are all attributable behaviors when human-owned
+evaluation policy defines their qualified behavior class as mandatory. The
+active Strategy defines the legitimate qualified opportunity universe and
+objective semantics; it cannot remove an unfavorable decision from evaluation.
+The Decision Artifact binds the complete qualified opportunity, prediction
+distribution or approved categorical forecast, confidence scale, horizon,
+benchmark/no-action comparator, expected reward/risk/cost, decision graph, and
+evaluation Contract. Not trading does not erase the decision from delayed
+evaluation.
 
 It cannot call a broker, declare Kernel-derived risk, modify limits/Strategy/
 GRACE/Delegation, skip required Challenge, rewrite Evidence to fit a trade,
@@ -273,7 +276,7 @@ decision.
 Role Packages therefore declare:
 
 ```text
-which output/behavior types are scoreable
+which human-owned mandatory behavior classes the Role implements
 which fields are required for each type
 the confidence/probability or categorical scoring semantics
 the applicable Strategy/evaluation Contract and allowed horizons
@@ -288,8 +291,10 @@ a losing WAIT/PASS/forecast, or claim another role's objective. Non-scoreable
 operational Tasks remain under ordinary reliability and audit metrics rather
 than being forced into financial GRACE.
 
-The minimum Agent-side fields and the distinction among Behavior, Ticket,
-Matured Outcome, and ScoreSnapshot are frozen in `GRACE.md`.
+The architectural boundary is frozen in `GRACE.md`; the proposed Role payloads,
+record semantics, scoring rules, and acceptance probes are specified in
+`GRACE_QUANTITATIVE.md`. That Draft still requires independent model-risk
+review and a signed Calibration Pack before implementation.
 
 ## Permission direction
 

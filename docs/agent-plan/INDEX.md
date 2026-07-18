@@ -15,7 +15,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
 1. Read this index.
 2. Read only the module file relevant to the current discussion or task.
 3. Read `GRACE.md` when work concerns delayed behavior evaluation, credibility,
-   real outcomes, attribution, or Post Mortem boundaries.
+   real outcomes, attribution, or Post Mortem boundaries. Then read
+   `GRACE_QUANTITATIVE.md` for schemas, scoring rules, statistical models,
+   ratings, maturity, and model validation.
 4. Read `DELEGATION.md` when work concerns autonomous authority, score-to-tier
    mapping, grants, human confirmation interaction, or Kernel authorization.
 5. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
@@ -31,7 +33,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| GRACE delayed credibility and real-outcome evaluation | Architecture frozen; Role behavior schemas, quantitative model specification, and implementation authorization still required | [`GRACE.md`](GRACE.md) |
+| GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
+| GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
 | Delegation policy and risk authorization | Architecture frozen; exact policy, grants, human override, Kernel Gate, and rollout specification required | [`DELEGATION.md`](DELEGATION.md) |
 | Complete module graph and trust boundaries | Architecture frozen; exact transport, persistence roles, cross-module schemas, and probes required | [`SYSTEM_BOUNDARIES.md`](SYSTEM_BOUNDARIES.md) |
 | Durable Agent Runtime | Architecture frozen; detailed state machines and implementation specification required | [`RUNTIME.md`](RUNTIME.md) |
@@ -63,10 +66,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Write and independently review GRACE's Role behavior schemas and
-   quantitative model specification.
-2. Freeze Delegation's exact policy/grant/Kernel Gate specification after the
-   GRACE output contract is quantitative and stable.
+1. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
+   data and a signed Calibration Pack before authorizing implementation.
+2. Freeze Delegation's exact policy/grant/Kernel Gate specification against the
+   proposed non-compensatory `ScoreSnapshot` contract.
 3. Derive detailed state schemas, threat models, milestones, rollout gates, and
    acceptance probes only after the architecture closes.
 4. Run one final cross-module architecture audit before authorizing code work.
