@@ -154,4 +154,8 @@ successful mutation, and wires the production execution capability only in
 explicit live mode. The production constructor is equity-only; option grants
 and mutations remain blocked. The deployed Robinhood stack remains read-only,
 and the first Alpheus-routed live canary still requires separate human
-confirmation after isolated live-mode startup certification.
+confirmation. The owner set the initial controls to a $50 daily authorized-risk
+cap and five clean days before widening. A fresh-volume, no-agent, no-proposal
+live-mode startup certification then passed exact account binding and health;
+all operation, grant, attempt, order and fill counts remained zero, and the
+isolated stack was removed.

@@ -42,8 +42,8 @@ execution_policy:
 # Fail-closed M11 placeholders. Live startup refuses zero; a human must set a
 # positive one-position canary cap and clean-day threshold before live exists.
 live_canary:
-  daily_authorized_risk_cap_usd: 0
-  clean_days_before_raise: 0
+  daily_authorized_risk_cap_usd: 50
+  clean_days_before_raise: 5
 
 risk_declaration_tolerance: 0.01
 pnl_reconciliation_tolerance_usd: 0.01 # local/provider difference before fail-closed halt

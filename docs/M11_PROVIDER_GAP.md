@@ -243,6 +243,16 @@ pretending that non-unique order attributes are a client identity.
   proves candidate adoption commits the attempt state, broker order identity,
   canonical fill, exposure conversion, reservation conversion, and latch clear
   together; no latch is cleared ahead of durable accounting.
+- On 2026-07-17 the owner set the initial live canary controls to a $50 daily
+  authorized-risk cap and five clean completed live-ledger days before any
+  widening. An isolated fresh-volume deployment then started the production
+  construction in `live` mode against the exact bound Robinhood account, with
+  no published port, no agent runtime and no proposal. The kernel reached
+  healthy state and emitted `kernel_start` with `mode=live` and
+  `broker=robinhood`. The fresh database contained zero operations, trade
+  grants, execution attempts, orders and fills. The isolated containers,
+  network and volume were removed; the running production stack remained
+  healthy and `read_only`.
 
 ## Remaining gates for M11
 
@@ -258,18 +268,16 @@ improvement:
 The v1.5 bounded recovery component satisfies the offline equity recovery
 requirement without weakening it to loose field matching. The v1.6 evidence
 closes the equity-limit metadata gate and commit `319f657` wires the equity-only
-adapter behind explicit live startup controls. M11 is not yet marked landed:
+adapter behind explicit live startup controls. The isolated no-order live-mode
+startup certification now passes. M11 is not yet marked landed:
 
-1. Rerun the complete isolated M11 deployment certification with the production
-   construction in `live` mode, an empty test database and no agent proposal.
-   This proves startup/account binding without authorizing an order.
-2. The first Alpheus-routed live canary remains a separate human-confirmed
+1. The first Alpheus-routed live canary remains a separate human-confirmed
    action. Its ticket must be exactly one share and remain within the immutable
    daily canary risk cap. Direct MCP evidence is not silently treated as that
    acceptance order.
-3. The currently running Robinhood deployment remains `read_only`; do not
+2. The currently running Robinhood deployment remains `read_only`; do not
    change its mode or restart it as part of documentation work.
-4. Option placement produced only unknown/zero-order negative evidence. The
+3. Option placement produced only unknown/zero-order negative evidence. The
    production constructor is equity-only; option placement and recovery remain
    closed pending separate evidence and certification.
 
