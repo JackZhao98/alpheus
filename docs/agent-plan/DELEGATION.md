@@ -141,8 +141,11 @@ broker or treated as an active grant.
 
 ## Active grant and authority envelope
 
-After required validation and human approval, the privileged path may create
-an immutable `DelegationGrant`. The grant pins the exact proposal, policy,
+After required validation and exactly one applicable activation authority, the
+privileged path may create an immutable `DelegationGrant`. First grants and
+widening require a `HumanDelegationDecision`; an equal-or-narrower replacement
+may instead use a policy-preauthorized `AutomaticNarrowingAuthorization`. The
+grant pins the exact proposal, policy,
 complete ScoreSnapshotBinding set, GRACE model/Profile/Calibration Pack/
 Champion manifest, scope, envelope, effective time, expiry, and rollback
 target. Replacement is atomic; concurrent promotion cannot create overlapping
@@ -154,11 +157,16 @@ equivalent to:
 ```text
 grant id and immutable digest
 account/ledger and target Strategy/Agent/Role scope
-user request, Run, Task, Artifact, and OperationProposal references
+RunOrigin, Run, Task, Artifact, and OperationProposal references
+UserRequest reference only when origin=user_request
 allowed action/product and requested risk envelope
 effective and expiry time
 causation, correlation, idempotency, and dedupe identities
 ```
+
+Scheduled/event autonomous work uses the registered occurrence and effective
+owner policy carried by `RunOrigin`; it never impersonates a human request or
+reuses a human-confirmation credential.
 
 Kernel resolves the canonical grant by id and validates its digest and scope.
 It does not trust an Agent-supplied copy of limits or a label claiming that the
@@ -278,7 +286,8 @@ Schemas must preserve immutable or append-only records equivalent to:
 
 - human-owned delegation policy and compatibility revisions;
 - authorization input manifests and proposals;
-- Validator and human approval/rejection artifacts;
+- Validator and human approval/rejection or automatic-narrowing authorization
+  artifacts;
 - active, expired, revoked, suspended, and superseded grants;
 - fenced ScopeHead generations with append-only transition history, authority
   bindings, budget charges, dispatch authorizations, authority envelopes, and
@@ -326,8 +335,10 @@ capability-template lattice, scope/partition model, GRACE mapping, human
 authority classes, grant/ticket/use state machines, concurrency, Kernel Gate,
 rollout, and adversarial acceptance probes.
 
-Implementation may proceed only in that order and initially through non-Live,
-Shadow, exact-confirmation, and observe-only stages. Autonomous Live remains
+When the roadmap and preceding stage gates separately authorize it,
+implementation may proceed only in that order and initially through non-Live,
+Shadow, exact-confirmation, and observe-only stages. This document grants no
+code authority by itself. Autonomous Live remains
 disabled until the signed GRACE Calibration Pack/model-risk review, exact
 machine schemas and security review, PostgreSQL fault suite, final cross-module
 audit, and explicit production PolicyRevision activation pass. Until then, no

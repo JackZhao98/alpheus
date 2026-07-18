@@ -106,7 +106,8 @@ owning source's policy and legal/licensing constraints.
 
 Memory items carry an explicit scope such as user, team, Agent role revision,
 strategy revision, entity, portfolio/account, market regime, Task, or Run.
-Access is the intersection of authenticated user, Agent permission, Task/Skill
+Access is the intersection of EffectiveRunAuthority (authenticated user or the
+registered owner policy for a schedule/event), Agent permission, Task/Skill
 scope, sensitivity, and deployment policy.
 
 Workers may have private L0 and Task-bound L1 state. Durable L2/L3 knowledge is

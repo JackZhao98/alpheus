@@ -670,18 +670,20 @@ complete ScoreSnapshotBinding set and source-head manifest
 current and proposed capability/envelope/budget-pool comparison
 every gate result: PASS | FAIL | UNKNOWN | N/A plus reason code
 transition edge, post-expansion cohort, cooldown/dwell/review facts
-required human approval class and proposed effective/expiry times
+activation-authority class and proposed effective/expiry times
 deterioration/requalification/rollback metadata
 ```
 
 A proposal has no authority effect. It is reproducible from the immutable input
 manifest. Its lifecycle fields are not edited into that body. A fenced
 `AuthorizationProposalStateHead(proposal_id, generation, effective_state,
-attestation_id, human_decision_id, activated_grant_id,
+attestation_id, activation_authority_type, activation_authority_id,
+activated_grant_id,
 superseding_proposal_id)` plus append-only `AuthorizationProposalStateEvent`s
 tracks workflow state. A deterministic Delegation Workflow Coordinator is the
 sole writer of that projection; it cannot create or edit a proposal,
-attestation, human decision, grant, policy/Scope/Pool head, or Kernel record.
+attestation, activation-authority record, grant, policy/Scope/Pool head, or
+Kernel record.
 Every transition validates the referenced immutable artifacts and uses
 expected-generation CAS.
 
@@ -728,12 +730,30 @@ display receipt, timestamp, and expiry. It cannot edit proposal/candidate
 fields. A different cap or scope requires a new Policy/Template revision and
 proposal.
 
+Every grant installation carries exactly one immutable discriminated
+`ActivationAuthority`:
+
+```text
+human_decision(HumanDelegationDecisionRef)
+automatic_narrowing(AutomaticNarrowingAuthorizationRef)
+```
+
+`human_decision` is required for the first grant, every widening/promotion, and
+any transition the active PolicyRevision does not explicitly preauthorize.
+`automatic_narrowing` is permitted only for an equal-or-narrower replacement
+whose exact transition edge, old/new envelope comparison, current policy/head
+generation, proposal/Validator digests, reason, cooldown, and expiry are fixed by
+the active policy. The deterministic Engine creates the candidate; the
+independent Validator attests the dimension-wise non-widening proof. Missing,
+both, unknown, stale, mismatched, or a purported automatic first/wider grant
+fails closed.
+
 ## 15. `DelegationGrant`
 
 The privileged Activation Path may create an immutable grant only from one
 valid proposal, matching proposal and GrantActivationCandidate Validator
-attestations, and required human decision. Creation of the final grant and its
-matching initial AuthorityHealthLease, initial `active` StateEvent, proposal
+attestations, and exactly one valid ActivationAuthority. Creation of the final
+grant and its matching initial AuthorityHealthLease, initial `active` StateEvent, proposal
 `-> activated` event, and installation into the ScopeHead are one transaction
 after activation-time revalidation; an uninstalled grant body has no authority.
 It contains fields equivalent to:
@@ -741,7 +761,7 @@ It contains fields equivalent to:
 ```text
 delegation_grant_id, schema revision, canonical digest
 GrantActivationCandidate and candidate-attestation references
-authorization proposal, Validator attestation, human decision references
+authorization proposal, Validator attestation, ActivationAuthority reference
 policy/template/material revision and ScoreSnapshotBinding manifests
 stable partition key, grant-scope digest,
 activated_at_scope_head_generation, subject/grantee and capability set
@@ -814,7 +834,8 @@ extends an earlier source boundary.
 V1 forbids future-scheduled grants. Clock passage never changes a grant from
 non-authoritative to authoritative. A proposal may wait, but at the eventual
 activation transaction the Engine result, independent attestation, human
-decision, source heads, policy/template/material revisions, budgets, and every
+decision or automatic-narrowing authorization, source heads,
+policy/template/material revisions, budgets, and every
 categorical gate are checked again; stale or failed input produces no grant and
 no ScopeHead change. Future scheduling requires a separately reviewed state
 machine and is not implemented by overloading `effective_at`.
@@ -845,7 +866,8 @@ automatically_eligible_narrowing -> activated | expired | superseded
 
 Automatic activation is limited to an equal-or-narrower replacement explicitly
 pre-authorized by the active policy. V1 promotion/widening always requires the
-human decision. A proposal state transition uses idempotency plus expected
+human-decision ActivationAuthority; automatic replacement requires the exact
+AutomaticNarrowingAuthorization. A proposal state transition uses idempotency plus expected
 generation on `AuthorizationProposalStateHead`; concurrent winners collapse to
 one. The immutable AuthorizationProposal body never receives a `state`,
 decision, attestation, activation, expiry, or supersession field after creation.
@@ -956,8 +978,9 @@ working_order_not_after
 supersedes_prior_ticket_id and issuance reason, if this is a replacement
 ```
 
-The immutable Kernel ticket cannot contain a future display fact. When User
-Input/Web actually renders it, the User Input service creates an immutable
+The immutable Kernel ticket cannot contain a future display fact. When Web
+actually renders it, the dedicated User Authority Gateway
+(`user-authority-gateway`) creates an immutable
 `TicketDisplayReceipt` containing fields equivalent to:
 
 ```text
@@ -968,31 +991,35 @@ digest of every rendered material field and exception vector
 displayed_at, client delivery acknowledgement, idempotency key
 ```
 
-User Input submits the display artifact through an authenticated typed command.
+The User Authority Gateway submits the display artifact through an
+authenticated typed command.
 Kernel validates it, requires its own database time to be before
 `confirmation_not_after`, and CAS-transitions a Kernel-owned
 `OperationConfirmationTicketStateHead(ticket_id, generation, effective_state,
 display_receipt_id, confirmation_receipt_id)` from `issued` to `displayed`.
 The immutable ticket never changes.
 
-The User Input service then binds an authenticated response to exactly one
+The User Authority Gateway then binds an authenticated response to exactly one
 still-current display receipt and creates an immutable `ConfirmationReceipt`
 with the ticket and display-receipt ids/digests, decision, subject,
 session/authentication facts, timestamp, expected ticket generation, and
-idempotency key. Natural-language text alone is not the receipt. User Input
-submits it as another authenticated command; Kernel validates it and CAS-
+idempotency key. Natural-language text alone is not the receipt. The User
+Authority Gateway submits it as another authenticated command; Kernel validates
+it and CAS-
 transitions the same state head only when Kernel database time is still before
 `confirmation_not_after`; otherwise the ticket expires. Receipt/client clocks
 are audit facts and never extend authority. Neither service writes the other's
 records.
 
-The frozen ticket lock order is `pending operation row -> TicketStateHead` for
-every transition that touches both records. Receipt attachment that changes
-only the StateHead must finish without later acquiring the operation row in
-the same transaction. Consumption extends the order to
-`pending operation row -> TicketStateHead -> ledger -> symbol/order/attempt`.
-Reject, expiry, supersession, and TTL cleanup cannot take the head first and
-then lock the operation.
+The frozen local ticket lock suffix is
+`pending operation row -> TicketStateHead` for every transition that touches
+both records. A non-effectful display, reject, expiry, supersession, or receipt
+attachment may use this local suffix without platform heads; a head-only
+transaction must finish without later acquiring the operation row. Effectful
+confirmation consumption/admission uses the full
+`sorted PlatformMode/EffectClass/KillSwitch heads -> pending operation row ->
+TicketStateHead -> ledger -> symbol/order/attempt` order. No cleanup or ticket
+transition may take a later lock and then reach backward for an earlier one.
 
 Effective ticket state is linearized by the Kernel-owned StateHead and its
 append-only `OperationConfirmationTicketStateEvent`s:
@@ -1006,7 +1033,9 @@ confirmed -> consumed | gate_denied | effect_expired
 `displayed` exists only with one valid TicketDisplayReceipt. `confirmed` or
 `rejected` exists only with a ConfirmationReceipt bound to that display. Kernel
 owns the StateHead plus issue/display/confirm/reject/supersede/expire/consume/
-gate events; User Input owns display and response receipt candidates. Every
+gate events; the User Authority Gateway owns display and response receipt
+candidates. Ordinary Input Gateway, Web, Agent Runtime, Workers, and CI have no
+receipt-write or receipt-signing credential. Every
 transition supplies the expected generation and has unique ticket/decision
 constraints. Confirm, reject, expiry, and supersession racing from the same
 generation have one winner; losing receipts remain inert audit artifacts.
@@ -1017,8 +1046,10 @@ StateHead projection. The immutable ticket may name only the prior ticket it
 superseded at issuance; it cannot contain a future mutable successor.
 
 `confirmed` is not broker authority by itself. Kernel consumes the receipt in
-one transaction that locks the pending operation and TicketStateHead at the
-expected `confirmed` generation, checks the exact digests and expiry,
+one transaction that first locks the current PlatformMode, relevant EffectClass,
+and every applicable KillSwitch head in canonical order, then locks the pending
+operation and TicketStateHead at the expected `confirmed` generation, checks
+the exact head generations/digests, receipt digests, and expiry,
 re-fetches current canonical account/quote/Provider facts, reruns the
 full gate, and compares the current reviewable exception vector with the one
 displayed. The current failed-key set must be a subset of the displayed set,
@@ -1166,22 +1197,25 @@ For autonomous new risk, Kernel validates at least:
 
 1. `authority_mode=autonomous_grant` is legal for the authenticated Agent
    origin and effect class;
-2. Artifact, BehaviorEvent, GRACE intake acknowledgement, Proposal Validator,
+2. the locked current `PlatformModeHead`, relevant `EffectClassHead`, and every
+   applicable `KillSwitchHead` permit this effect and are at or below the
+   operation's other authority ceilings;
+3. Artifact, BehaviorEvent, GRACE intake acknowledgement, Proposal Validator,
    operation idempotency, and decision graph references are committed/current;
-3. the canonical stable partition, grant id/digest, grant-scope digest,
+4. the canonical stable partition, grant id/digest, grant-scope digest,
    current ScopeHead generation, current AuthorityHealthLease id/digest, and
    `active` state resolve exactly once;
-4. database time is within grant/effect validity;
-5. policy/template/material revisions and current authoritative source heads
+5. database time is within grant/effect validity;
+6. policy/template/material revisions and current authoritative source heads
    match the current AuthorityHealthLease bound at admission;
-6. the operation's account, ledger, Strategy, pipeline, Agent/Role, product,
+7. the operation's account, ledger, Strategy, pipeline, Agent/Role, product,
    instrument, regime/session, action, and order shape fit the grant;
-7. Kernel-derived risk/cash/quantity/concentration facts fit every envelope and
+8. Kernel-derived risk/cash/quantity/concentration facts fit every envelope and
    BudgetPoolRevision;
-8. current Kernel Class B, limits, live canary, buying power, reservations,
+9. current Kernel Class B, limits, live canary, buying power, reservations,
    breaker, Provider health, account binding, quote, and reconciliation gates
    pass; and
-9. the atomic use/reservation transaction has capacity in every applicable
+10. the atomic use/reservation transaction has capacity in every applicable
    counter and pool.
 
 The effective authority is the dimension-wise intersection of the operation's
@@ -1191,8 +1225,9 @@ account capacity, and Provider capabilities. A valid grant is necessary but
 never sufficient.
 
 Kernel emits an immutable GateDecision with the resolved canonical ids,
-digests, source heads, facts, `PASS/FAIL/UNKNOWN/N/A` gates, reason codes, and
-database time.
+digests, source heads and their generations, including the exact PlatformMode,
+EffectClass, and KillSwitch heads, facts, `PASS/FAIL/UNKNOWN/N/A` gates, reason
+codes, and database time.
 
 A deterministic `FAIL` or `UNKNOWN` admission commits the canonical operation
 candidate/request hash, authenticated idempotency identity, and negative
@@ -1221,7 +1256,9 @@ For a positive autonomous admission, the gate transaction:
 
 1. takes the authenticated operation-idempotency/admission lock;
 2. locks every authoritative source-head row in canonical
-   `(owner_type, head_type, head_id)` order;
+   `(owner_type, head_type, head_id)` order, including the current
+   `PlatformModeHead`, relevant `EffectClassHead`, and all applicable
+   `KillSwitchHead`s;
 3. locks the current Delegation ScopeHead and captures its exact admission
    generation plus AuthorityHealthLease id/digest;
 4. locks all applicable stable BudgetPoolHeads in canonical sorted-key order;
@@ -1250,13 +1287,16 @@ ScopeHead -> sorted BudgetPoolHeads -> live account execution latch -> attempt`
 ordering before its send fence. Existing Kernel helpers that currently acquire
 the ledger or live execution latch before these checks must be refactored;
 adding upstream queries inside their present callback would invert the order.
-Exact-confirmation consumption has no Delegation source/Scope/Pool heads and
-retains its
-`pending operation row -> TicketStateHead -> ledger -> symbol/order/attempt`
-order. Every display/confirm/reject/expire/supersede transition that also
-touches the operation uses the same prefix; a head-only transaction never
-later reaches backward for the operation row. Fill and reconciliation never
-reject a real fact because authority later changed.
+Exact-confirmation consumption has no Delegation Scope/Pool heads, but it must
+lock the same PlatformMode, EffectClass, and KillSwitch heads before its
+existing `pending operation row -> TicketStateHead -> ledger ->
+symbol/order/attempt` suffix. Non-effectful display, confirm, reject, expire,
+and supersede transitions that touch the operation retain only the local
+`pending operation row -> TicketStateHead` suffix from section 17; the global
+platform/effect/kill prefix is reserved for effectful consumption/admission and
+send authorization. A head-only transaction never later reaches backward for
+the operation row. Fill and reconciliation never reject a real fact because
+authority later changed.
 
 ### 22.1 Authority health lease
 
@@ -1355,10 +1395,12 @@ attempt claim/send, and every risk-preserving replacement. It is not checked
 only once at proposal time.
 
 Before the first Provider call, Kernel performs a `send_authorize` transaction
-that, for autonomous authority, re-locks every authoritative source head, the
-ScopeHead, and every applicable BudgetPoolHead in the global order above;
-exact-confirmation dispatch instead revalidates the consumed immutable
-ticket/receipt binding. In the autonomous route, all authoritative source
+that re-locks the current PlatformMode, relevant EffectClass, and every
+applicable KillSwitch head for both authority routes. For autonomous authority
+it then re-locks every remaining authoritative source head, the ScopeHead, and
+every applicable BudgetPoolHead in the global order above; exact-confirmation
+dispatch instead follows the platform/effect/kill prefix and revalidates the
+consumed immutable ticket/receipt binding. In the autonomous route, all authoritative source
 heads must still exactly match the bound lease even when the ScopeHead has not
 yet advanced. The current ScopeHead generation, grant id/digest, and
 AuthorityHealthLease id/digest must exactly equal the admission binding, and
@@ -1374,7 +1416,8 @@ OperationAuthorityBinding, charges/reservation, and requires database time to
 be before both
 `dispatch_not_after` and `working_order_not_after`. It also validates current
 hard safety state and the execution-attempt fencing token, then inserts one
-`DispatchAuthorization` and durably marks the attempt sent.
+`DispatchAuthorization` that binds the exact locked platform/effect/kill head
+ids, digests, and generations and durably marks the attempt sent.
 
 The durable sent mark is the revocation linearization boundary:
 
@@ -1384,6 +1427,12 @@ The durable sent mark is the revocation linearization boundary:
   reconciled even if revocation follows; and
 - a process death after the sent mark uses the bounded same-ref/unknown
   recovery contract below, never a fresh order identity.
+
+The same boundary governs a platform-mode downgrade or kill-switch transition:
+if the send fence commits first, that one already-authorized call may proceed
+and must reconcile; if the downgrade/kill transition commits first, no later
+new send may pass. The Platform Activator and Kernel therefore use the same
+canonical head locks rather than racing on cached mode state.
 
 Revocation cannot undo an already sent external effect. It blocks new uses,
 blocks unsent attempts, and causes Kernel to cancel the unfilled remainder of
@@ -1530,11 +1579,12 @@ expected-generation CAS and has complete append-only transition history.
 | GrantActivationCandidate | deterministic Delegation Engine |
 | GrantActivationValidatorAttestation | independent Delegation Validator |
 | HumanDelegationDecision | authenticated policy-owner command path |
+| AutomaticNarrowingAuthorization | deterministic Delegation Engine from an active preauthorization rule, with independent Delegation Validator attestation required before use |
 | AuthorityHealthLeaseCandidate | deterministic Delegation Engine |
 | LeaseValidatorAttestation | independent Delegation Validator |
 | DelegationGrant/GrantStateEvent/ScopeHead/AuthorityHealthLease | privileged Activation Path from validated inputs only |
 | OperationConfirmationTicket/TicketStateHead/TicketStateEvent | Kernel |
-| TicketDisplayReceipt/ConfirmationReceipt/conversation-receipt binding | User Input service |
+| TicketDisplayReceipt/ConfirmationReceipt/conversation-receipt binding | dedicated User Authority Gateway (`user-authority-gateway`) |
 | OperationAuthorityBinding/DelegationCharge/DispatchAuthorization/GateDecision/ReductionProof | Kernel |
 | operation/trade_grant/reservation/attempt/order/fill | Kernel |
 | ScoreSnapshot and GRACE invalidation heads | GRACE |
@@ -1548,7 +1598,7 @@ projection grants no authority. Activation cannot write GRACE, Engine
 candidates, arbitrary proposal state, or Validator attestations; it has only
 execute permission on the fenced activated-transition routine inside the
 grant-install transaction. Kernel cannot alter a policy/grant, ScopeHead,
-BudgetPoolHead, or health lease; User Input cannot write the Kernel
+BudgetPoolHead, or health lease; the User Authority Gateway cannot write the Kernel
 TicketStateHead.
 Database foreign keys do not substitute for service identity and row-level
 write ownership.
@@ -1652,7 +1702,13 @@ input only and is neither a grant nor authorization to place an order.
 
 Only after new post-canary independent evidence satisfies the next template's
 ROBUST burden. Each product/action/universe expansion is separately reviewed.
-No stage automatically enables a later one.
+No stage automatically enables a later one. This is the scoped autonomous
+production state: ordinary qualified operations use `autonomous_grant` without
+per-trade human confirmation. Humans retain absolute-limit, initial/material
+Strategy/model/policy, new-product/effect, non-preauthorized widening, and
+incident/unknown authority. Equal-or-narrower replacement and lease renewal may
+proceed only through the exact active-policy preauthorization and independent
+validation path frozen above.
 
 ## 29. Acceptance suite
 
@@ -1683,6 +1739,12 @@ No stage automatically enables a later one.
 - Directional compatibility cannot be reversed or widened.
 - Zero or two matching grants fail closed; an operation cannot pick the larger.
 - Twenty concurrent promotions produce one ScopeHead generation.
+- Grant installation with neither or both ActivationAuthority variants is
+  rejected. A first grant or any widened dimension with
+  `automatic_narrowing` is rejected.
+- Automatic replacement fixtures prove every set, numeric, time, predicate,
+  product, universe, action, session, and budget dimension is equal or narrower
+  under the frozen comparator and exact active policy generation.
 - Initial/replacement activation validates one exact GrantActivationCandidate,
   its independent attestation, the target-candidate LeaseCandidate and its
   attestation, then atomically creates grant plus lease and advances proposal/
@@ -1754,7 +1816,7 @@ No stage automatically enables a later one.
 
 - `好` with zero or multiple displayed tickets creates no receipt. A response
   without a prior immutable TicketDisplayReceipt cannot confirm a ticket.
-- Kernel's immutable ticket never gains User Input-owned display fields;
+- Kernel's immutable ticket never gains User Authority Gateway-owned display fields;
   duplicate display/confirmation delivery is idempotent and conflicting
   display/response receipts fail closed.
 - Cross-account, cross-ticket, changed-digest, expired, superseded, and replayed
@@ -1844,8 +1906,8 @@ No stage automatically enables a later one.
 - Policy body/state separation is enforced: lifecycle changes append an event
   and CAS ActiveDelegationPolicyHead without modifying the immutable revision
   digest.
-- Proposal body/state separation is enforced: validation, human decision,
-  activation, expiry, and supersession CAS AuthorizationProposalStateHead and
+- Proposal body/state separation is enforced: validation, activation-authority
+  selection, activation, expiry, and supersession CAS AuthorizationProposalStateHead and
   append events without modifying the immutable proposal digest; Coordinator
   credentials cannot create any referenced authority artifact.
 - Grant activation racing proposal expiry/supersession locks the exact approved
@@ -1863,9 +1925,10 @@ No stage automatically enables a later one.
 
 ## 30. Implementation boundary
 
-This specification authorizes detailed implementation planning and non-Live
-schema/observe-only work after the final cross-module architecture audit. It
-does not authorize autonomous Live. Before Stage 4, the project still requires:
+This specification authorizes no code by itself. Detailed AP11 implementation
+may begin only after the roadmap's AP0 release token and every preceding stage
+gate; non-Live observe-only remains mandatory first. It does not authorize
+autonomous Live. Before Stage 4, the project still requires:
 
 - exact machine schemas and migrations reviewed against this contract;
 - origin-aware authority identity/idempotency fields and fact-based

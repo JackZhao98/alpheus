@@ -113,10 +113,12 @@ typed Agent Artifact or deterministic decision
   -> optional downstream Delegation Policy review
 ```
 
-A scoreable Artifact and its `BehaviorEvent` must be committed atomically or
-through a transactional outbox before the Artifact can influence another
-decision or reach Kernel proposal flow. Registration after the outcome becomes
-observable is invalid.
+A qualifying Artifact, its canonical `BehaviorEvent`, and the delivery outbox
+row must be committed in one Agent Control Plane owner transaction before the
+Artifact can influence another decision or reach Kernel proposal flow. The
+outbox delivers the already committed BehaviorEvent to GRACE; it is not a
+substitute for BehaviorEvent persistence. Registration after the outcome
+becomes observable is invalid.
 
 An `EvaluationTicket` has a state equivalent to:
 
@@ -157,7 +159,8 @@ equivalent to the following.
 ```text
 behavior_id and behavior_schema_revision
 occurred_at, committed_at, and market_time_zone
-conversation, user_request, run, task, session, attempt, and artifact ids
+RunOriginRef, run, task, session, attempt, and artifact ids
+conversation and user_request ids only for user_request origin
 AgentRevision and RoleContract revision
 parent behavior, opportunity, claim, decision, proposal, operation, and
 position references where applicable
@@ -190,10 +193,17 @@ Evidence Snapshot and as-of time
 market/regime and feature Snapshot revisions
 Strategy, Playbook, prompt, model, Skill, Tool, and configuration revisions
 Kernel account/position/order references visible at decision time where needed
-effective user, deployment, policy, and delegation context
+EffectiveRunAuthority, deployment, policy, and delegation context;
+authenticated user context only iff RunOrigin=user_request
 known gaps, conflicts, stale inputs, and unresolved unknowns
 Live, Shadow, Simulation, or Research evidence class
 ```
+
+For schedule, event, maintenance, or recovery behavior, `RunOriginRef` binds the
+registered occurrence, authenticated workload, and owner-policy authority.
+Conversation/UserRequest placeholders are forbidden. Recovery retains the
+original causal/effect identity and cannot be reclassified as a new prediction
+or new-risk decision.
 
 ### Evaluation registration
 
@@ -601,6 +611,13 @@ The three use distinct credentials and write paths. The Engine may produce
 Challenger artifacts, but only the privileged promotion path creates a new
 active model revision. The prior Champion remains replayable and available for
 immediate rollback. Model promotion never directly changes a delegation grant.
+
+The immutable `GRACEModelRevision` body contains no mutable state, effective/
+retired time, approval, signature, or activation field. The independent
+Validator writes `GRACEValidatorAttestation`; the authenticated model-risk path
+writes `ModelRiskDecision`; the Activator appends `ModelStateEvent` and CAS-
+advances the fenced `ActiveGRACEChampionHead` from their exact digests. These
+roles have disjoint credentials and concurrent promotion has one winner.
 
 ## Challenger evaluation protocol
 

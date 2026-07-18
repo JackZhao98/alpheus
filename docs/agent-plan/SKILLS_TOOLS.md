@@ -89,6 +89,14 @@ Agents may propose Candidate Skill revisions but cannot install, activate,
 edit, or supersede an active Skill. Promotion follows a separate reviewed and
 versioned workflow.
 
+Candidate author, independent `CapabilityValidator`, activation-decision owner,
+and fenced `CapabilityActivator` are separate write authorities. The Activator
+may only CAS an `ActiveCapabilityHead` from the exact validated revision and
+authorization digests. Workers and Tool Providers have read-only access to that
+head and never hold activation credentials. Initial or external-effect
+capabilities require explicit owner approval; a policy may later preauthorize
+only an independently validated read-only/equal-or-narrower revision.
+
 ## Skill injection and read receipt
 
 Selected Skill instructions occupy a dedicated context section, separate from
@@ -139,11 +147,15 @@ The effective Tool set is the intersection of:
 ```text
 Agent maximum permission
   ∩ selected Skill declaration
-  ∩ authenticated user authority
+  ∩ EffectiveRunAuthority (authenticated user or registered owner policy)
   ∩ Run mode and budget
   ∩ deployment policy
   ∩ current health and safety policy
 ```
+
+For scheduled/event work, `EffectiveRunAuthority` is derived from the immutable
+RunOrigin occurrence, authenticated workload identity, and current owner policy;
+it is never a cached or fabricated interactive user token.
 
 A Skill can request a Tool but cannot grant it. Research-only work cannot gain a
 mutation Tool through prompt text. Agent Workers never receive a Robinhood

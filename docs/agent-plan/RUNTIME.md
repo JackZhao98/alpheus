@@ -77,7 +77,11 @@ The detailed schema remains future work, but the model distinguishes:
   output Contract revision;
 - `Conversation`: the long-lived user-facing thread;
 - `UserRequest`: one durable user input and its resolved scope;
-- `Run`: one bounded workflow serving a request, schedule, or event;
+- `RunOrigin`: one immutable tagged origin under the common contract:
+  UserRequest, ScheduleOccurrence, KernelEvent, ExternalEvent,
+  SystemMaintenance, or SystemRecovery, with its authenticated initiating
+  principal and owner policy;
+- `Run`: one bounded workflow serving exactly one `RunOrigin`;
 - `Task`: one unit of work with typed inputs, outputs, dependencies, and budget;
 - `Session`: the logical cognition history for an Agent performing a Task;
 - `Attempt`: one leased execution of a Session/Task;
@@ -92,6 +96,13 @@ The detailed schema remains future work, but the model distinguishes:
 GRACE-owned identities. Runtime may create the Agent-side behavior through an
 allowlisted intake/outbox contract and later reference GRACE publications; it
 cannot create or mutate a ticket, matured outcome, or official score.
+
+Conversation and UserRequest are required only for a user-originated Run. A
+scheduled, event, maintenance, or recovery Run must not invent a Conversation,
+reuse an interactive user token, or claim human origin. Its `RunOriginRef`
+propagates through every child Task, Artifact, BehaviorEvent, proposal, and audit
+record. Recovery additionally retains the original causal/effect identities and
+cannot mint fresh new-risk authority.
 
 A Run can contain multiple Tasks and Sessions. A Conversation can contain many
 UserRequests and Runs. Reusing one unbounded chat transcript for all three is
@@ -113,11 +124,23 @@ Attempt for the same Task. Recovery follows committed state:
 
 Process-local dedupe is not sufficient for durable scheduling or delivery.
 
-When a Worker commits a scoreable Artifact, the Artifact and its BehaviorEvent
-are written atomically or through a transactional outbox with one causal and
-idempotency identity. A crash cannot leave a proposal usable but its required
-behavior unregistered. Retry resolves the existing registration; it cannot
-create a second behavior or wait until the market outcome is visible.
+When a Worker submits a scoreable result candidate, the Agent Control Plane
+accepts and commits the qualifying published Artifact, its canonical
+BehaviorEvent, and the delivery outbox row in one owner transaction with one
+causal and idempotency identity. The outbox only delivers the already committed
+BehaviorEvent to GRACE; it is not a substitute for BehaviorEvent persistence.
+A crash cannot leave a published proposal usable but its required behavior
+unregistered. An unpublished Worker/Attempt result may remain quarantined.
+Retry resolves the existing publication; it cannot create a second behavior or
+wait until the market outcome is visible.
+
+Before AP8 installs the canonical BehaviorEvent contract, AP1 exposes only a
+typed `ArtifactPublicationIntent`/outbox extension and all scoreable/new-risk
+progression is disabled. AP1 must not invent a provisional BehaviorEvent that
+would create a second evaluation identity later. From AP8 onward the Agent
+Control Plane remains the sole BehaviorEvent writer and atomically commits it
+with the qualifying Artifact; `grace-intake` validates that immutable event and
+derives the separate GRACE-owned EvaluationTicket.
 
 ## Session reconstruction
 
@@ -125,7 +148,8 @@ An LLM Session is reconstructed from bounded, versioned inputs:
 
 ```text
 AgentRevision
-+ UserRequest and Task Contract
++ RunOrigin and Task Contract
++ UserRequest when and only when origin=user_request
 + active Skill revisions
 + tool capability grant
 + latest valid Checkpoint

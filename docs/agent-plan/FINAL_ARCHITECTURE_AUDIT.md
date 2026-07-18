@@ -1,0 +1,318 @@
+# Agent Platform Final Cross-Module Architecture Audit
+
+> Audit date: **2026-07-18**
+>
+> Audit input baseline: `d8c977ccdd86b28550da526a56ec010cdf63adac`
+> Corrected architecture candidate: pinned by the follow-up audit-closure commit
+> after this reviewed document set lands
+>
+> Result: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS**
+>
+> Authorization: **`AUTHORIZED_FOR_AP0` WITHHELD**
+
+## 1. Decision
+
+The corrected Agent Platform architecture is coherent around one intended
+product destination:
+
+> Alpheus is a governed autonomous trading system. Once an exact scope has
+> qualified through Strategy validation, GRACE, Delegation, rollout, and Kernel
+> gates, ordinary eligible trades execute without per-trade human confirmation.
+
+Human authority remains necessary for absolute limits, initial and material
+Strategy/model/policy changes, new product/effect classes, non-preauthorized
+scope widening, rollout activation, emergency stop, and exceptional unknown
+effect resolution. AP13 exact confirmation is a transitional qualification and
+exception route. AP14 is the mandatory first autonomous canary. AP15 is scoped
+autonomous production.
+
+The audit found no surviving document-level path by which an Agent, prompt,
+Skill, Tool, Web client, Memory item, research source, Strategy experiment,
+GRACE score, or Delegation proposal can directly mutate a broker or manufacture
+Kernel permission. The architecture findings discovered during this audit were
+closed in the same document revision.
+
+AP0 is nevertheless not authorized. M11 is still in progress, current Kernel
+certification is not green, the required M11 rollback acceptance/evidence is
+not complete, and the post-M11 Charter amendment has not landed. These are hard
+release gates, not optional follow-up work.
+
+## 2. Scope and method
+
+The audit covered:
+
+- every file in this Agent Platform plan;
+- the frozen Kernel Charter, plan index, M11 phase, and provider-gap evidence;
+- write ownership, service credentials, authenticated origin, and record
+  activation;
+- identity, revision, digest, freshness, units, time, and canonicalization;
+- outbox/inbox delivery, retries, dedupe, cancellation, supersession, crash
+  recovery, unknown external effects, and rollback;
+- User Input, Web, Capability, Tool, Evidence, collaboration, Memory, Strategy,
+  GRACE, Delegation, Kernel, Provider, and BlobStore boundaries;
+- AP0-AP15 dependencies, certification, canary isolation, and steady-state
+  autonomy; and
+- current repository status and the reproducible Kernel test failure described
+  in section 6.
+
+Three independent review passes challenged authority/security, schema/failure
+semantics, and roadmap/release gates. No Live mode, production credential, MCP
+mutation, broker call, or real-money operation was used by this audit.
+
+## 3. Human and machine responsibility
+
+| Decision/effect | Normal owner after AP15 | Human interaction |
+|---|---|---|
+| Research, planning, challenge, WAIT/PASS/PROPOSE | Versioned Agents under deterministic Control Plane | On ambiguity or explicit user query, not every Run |
+| Ordinary qualified Class-B order | Delegation grant plus Kernel Gate | No per-trade confirmation |
+| Exact Class-C exception | Kernel exact-confirmation ticket | One exact fresh receipt; never a reusable grant |
+| Risk reduction | Kernel-proven canonical position/order effect | No Agent-plane dependency; emergency user/Kernel origin remains separate |
+| GRACE evaluation | Frozen Champion Engine plus independent validation lifecycle | Model-risk approval for Champion changes, not each score |
+| Equal-or-narrower grant replacement | Frozen policy plus independent Validator and AutomaticNarrowingAuthorization | No fresh click when explicitly preauthorized |
+| First grant or wider authority | Delegation validation and privileged activation | Human policy-owner decision |
+| Initial/material Strategy change | Independent Strategy Validator and fenced Activator | Human Strategy Owner decision |
+| Future preauthorized parameter-only non-widening Strategy change | Separately frozen policy, Validator, and Activator | May be automatic; cannot widen authority |
+| Absolute limit, new product/effect, production mode increase | Human-owned policy and fenced platform/Kernel activation | Always explicit |
+| Unknown broker effect or incident | Kernel latch and canonical reconciliation | Human only where deterministic recovery cannot resolve it |
+
+Human absence never creates a permissive default. It also is not a normal
+per-order dependency for an already valid autonomous scope.
+
+## 4. End-to-end write and authority trace
+
+| Path | Canonical writer/identity | Authority boundary | Fail-closed result |
+|---|---|---|---|
+| User input | Input Gateway writes raw UserRequest; LLM writes only IntentDraft | Deterministic Policy Resolver; exact human authority uses a separate audience | Ambiguity waits; prose cannot become authority |
+| Schedule/event/recovery | Control Plane writes TriggerOccurrence and Run with one RunOrigin | EffectiveRunAuthority derives from registered owner policy and workload identity | No fake UserRequest, human token, or fresh authority on recovery |
+| Task and Artifact | Control Plane owns state; Worker returns validated candidate output | Artifact is untrusted; AP8 atomically adds Agent Control-owned BehaviorEvent | Duplicate/retry retains causal identity; no provisional scoreable record |
+| Skill/Tool | Candidate, Validator, activation decision, and ActiveCapabilityHead have disjoint writers | Gateway intersects active capability, Skill, Run, principal, mode, and health | AP3 external calls are read-only; no production Robinhood MCP credential |
+| Evidence | Connector preserves raw BlobRef; Evidence Store owns transformations and point-in-time facts | Research facts never satisfy Kernel execution gates | Stale/conflicting/missing data stays explicit and blocks dependent decisions |
+| Agent release | Candidate author, release Validator, and ActiveAgentDeploymentHead Activator are separate | Delegation lease and Kernel bind the active head | Runtime cannot deploy its own prompt/model/Role revision |
+| Strategy | Lab writes Candidate; Validator attests; authority owner decides; Activator CASes ActiveStrategyHead | Activation selects a decision revision but grants no money authority | Self-promotion, material inheritance, and head races fail closed |
+| Behavior/Outcome | Agent Control owns BehaviorEvent; GRACE Intake owns Ticket and fenced Outcome revisions | New risk waits for exact accepted Ticket acknowledgement | Late/selective registration and concurrent correction cannot win silently |
+| GRACE | Engine, Validator, model-risk, and Activator write disjoint records | ScoreSnapshot is evidence only; immutable model body is separate from head/events | Missing/stale/invalid model or data cannot produce favorable authority evidence |
+| Delegation | Engine proposes; Validator attests; applicable authority approves; Activator installs | Grant is scoped evidence-backed permission, not execution | Missing/mixed ActivationAuthority, stale heads, or widening by auto path denies |
+| Exact confirmation | User Authority Gateway owns receipt candidates; Kernel owns ticket/head/use | Kernel consumes one exact current receipt after re-gating | Duplicate, stale, changed, forged, or ambiguous receipt is inert/denied |
+| Autonomous admission | Decision Artifact plus Ticket acknowledgement plus one current grant | Kernel locks source/scope/pool and its own risk/reservation state | Any mismatch/unknown denies new risk before attempt/send |
+| Broker effect | Kernel owns operation, binding, charge, grant, reservation, attempt, order/fill, and Provider | Stable attempt and send fence commit before Provider call | Unknown latches; canonical pull/reconciliation; no blind resend |
+| Web/Diagnostics | Web writes no truth; typed commands target owning APIs | Browser has no DB, broker, activation, or production MCP secret | Stale/unknown UI cannot confirm, activate, or infer success |
+| BlobStore | Artifact Store owns staged/committed bytes and BlobRef metadata | Every read enforces current principal, owning reference, ACL, and retention | Digest knowledge is not access; authoritative reachable blobs are not GC'd |
+
+## 5. Architecture findings closed in this revision
+
+### A-01 — Autonomous product destination
+
+The roadmap previously ended at an optional one-symbol canary. AP14 is now a
+mandatory canary, AP15 defines scoped autonomous production, and
+`live_autonomous` is an explicit platform ceiling. AP13 is documented as a
+transitional/fallback route rather than the product's steady state.
+
+### A-02 — Truthful Run origin
+
+The common contract now requires a discriminated RunOrigin for user, schedule,
+Kernel event, external event, maintenance, or recovery origin. It propagates to
+Artifacts, BehaviorEvents, GRACE, Delegation, and Kernel. Scheduled work uses
+registered owner policy and workload identity, not a fabricated user session.
+
+### A-03 — Record-level write authority
+
+The invalid rule of one writer for an entire logical schema was replaced by one
+write authority per record family/transition. Engine, Validator, owner-decision,
+Workflow, and Activator roles may coexist only with mutually non-overlapping
+grants and no catch-all schema writer.
+
+### A-04 — Missing validation and activation boundaries
+
+The topology now names Capability, Agent release, Strategy, GRACE, Delegation,
+Platform, and human-confirmation validation/activation identities. Candidate
+authors and Workers do not hold their Activator credentials. Kernel locks
+authority source heads only through scoped per-owner functions/equivalent
+capabilities, never broad cross-schema update permission.
+
+### A-05 — Behavior and GRACE Intake ownership
+
+AP1 supplies only the durable Artifact publication/outbox extension and cannot
+invent a provisional BehaviorEvent. At AP8, Agent Control atomically commits the
+canonical BehaviorEvent with its qualifying Artifact; separately credentialed
+GRACE Intake validates it and creates the GRACE-owned Ticket/ack. There is one
+Behavior identity and no cross-owner transaction claim.
+
+### A-06 — Delegation activation authority
+
+Grant activation now requires exactly one `ActivationAuthority` variant:
+HumanDelegationDecision for first/wider grants, or independently validated
+AutomaticNarrowingAuthorization for an explicitly preauthorized equal-or-
+narrower replacement. Missing/both/mismatched variants and automatic widening
+are rejected.
+
+### A-07 — GRACE immutable model and outcome correction
+
+Mutable lifecycle and approvals were removed from immutable ModelRevision.
+ValidatorAttestation, ModelRiskDecision, ModelStateEvent, and the fenced
+ChampionHead have distinct writers. Outcome correction advances one OutcomeHead
+and publishes an event; the Engine later creates evaluations in its own
+transaction.
+
+### A-08 — Robinhood and external Tool isolation
+
+Research Gateway may consume external research and Kernel-published read
+projections. It never receives the production Robinhood MCP token/session.
+AP3 enables no external mutation Tool. Broker mutation remains exclusively in
+Kernel Provider; any future non-broker external write needs its own separately
+frozen durable attempt/reconciliation protocol.
+
+### A-09 — BlobStore ownership and early attachment dependency
+
+AP0 now owns the common BlobRef/staging/commit/read protocol because AP2 accepts
+attachments before AP4. AP4 extends the same store. Streaming bounds, digest
+verification, ACL, retained-reference GC protection, quarantine, and orphan
+cleanup are explicit.
+
+### A-10 — Platform mode and scoped rollout
+
+PlatformModeHead, effect heads, kill switches, and ActivationReceipts are AP0
+contracts with a fenced owner. The global mode is a maximum ceiling, not
+authority for every scope. One canary cannot elevate unrelated scopes or remove
+an eligible exact-confirmation fallback.
+
+### A-11 — Deployment, rollback, and certification safety
+
+The roadmap freezes additive deployment and safety-first rollback order. Routine
+`certify-agent.sh`, including `all`, is permanently non-money. Any real canary
+uses a separate one-shot runner, fresh activation, narrow credential audience,
+exact environment/account/commit/operation/cap/expiry binding, and stable replay
+identity.
+
+### A-12 — Review outage and durable delivery
+
+A missing required Challenger/Validator yields WAIT or no-trade PASS; ordinary
+human approval cannot waive a mandatory review. Event consumer identity remains
+stable across deployment, and inbox dedupe/tombstones outlive the producer's
+maximum replay horizon.
+
+## 6. Open release blockers
+
+### R-01 — Kernel market-day clock is split and certification is red
+
+The following current command fails reproducibly:
+
+```sh
+cd kernel
+GOCACHE=/tmp/alpheus-go-cache \
+  go test ./cmd/kernel \
+  -run '^TestBreakerResumeSuppressesSameDayAndExpiresNextDay$' -count=1
+```
+
+`m3c_test.go` injects database time for the breaker/resume path, but
+`currentMarketWindow()` derives `/state` market day from process `time.Now()`.
+On 2026-07-18 the test's fixed 2026-07-17 same-day override is therefore treated
+as expired and the daily-loss breaker reappears. Merely changing the hard-coded
+test date would hide the split.
+
+Required closure:
+
+- use one injectable/database-authoritative time source for the security-
+  relevant market-day decision;
+- test database/process clock disagreement and market-day/DST boundaries; and
+- rerun the complete Kernel race/vet suite with no skipped test.
+
+### R-02 — M11 canary and rollback evidence are incomplete
+
+The Kernel plan index still marks M11 `IN PROGRESS`. The production deployment
+remains read-only, and the first Alpheus-routed one-share Live canary still needs
+its separately confirmed exact ticket. The canonical M11 acceptance text also
+does not yet specify the complete rollback proof required by this roadmap.
+
+Before any canary, use the frozen Kernel amendment process to add a v1.7
+evidence amendment covering at least:
+
+- stop new Live admission/send and restore read-only configuration;
+- preserve and reconcile any real order/fill/position;
+- prove zero unresolved unknown attempt, unsafe reservation, or orphaned grant;
+- prove cancel/reconcile/verified reduction remain available; and
+- record exact account, operation, order, fill, PnL, mode, and cleanup evidence.
+
+Then execute only the already specified one-share equity canary under a fresh
+confirmation, run the rollback proof, and mark M11 `LANDED` only if every frozen
+acceptance item passes. This audit authorizes no real-money order.
+
+### R-03 — Post-M11 Charter amendment is not landed
+
+The current Charter still excludes the new Agent schemas/services, Research
+Gateway, Strategy Lab, and additional Web scope. After M11 lands, a dedicated
+pre-AP0 governance commit must amend the Charter and pin the exact service,
+database, Provider, and authority boundaries from this plan.
+
+### R-04 — AP0 release token has not been issued
+
+After R-01 through R-03 close, a narrow release check must verify the M11
+evidence, Charter, roadmap, corrected architecture commit, and audit digests and
+confirm no new authority/fail-open finding. An owner authorization and an
+independent architecture-review attestation must then land in a separate,
+committed, digest-pinned `AP0_RELEASE.md`. At minimum that record contains every
+verified digest, reviewer identity, owner acceptance, decision, and database or
+trusted release time. Only that record may contain the named release token
+(shown here as a field, not an issued authorization):
+
+```text
+future_release_token_name = AUTHORIZED_FOR_AP0
+```
+
+The implementation Agent, Worker, CI job, and ordinary maintainer cannot issue
+that token by typing it into a plan or commit message. The token opens AP0 only.
+AP0's first commit must be its contract-only Schema Freeze Pack. Only after that
+Pack is separately reviewed and accepted may the remaining AP0-scoped
+non-runtime scaffold, validators, and fresh-test-database roles/migrations be
+implemented. It does not authorize AP1 or later work, production activation,
+runtime effects, GRACE implementation, Delegation activation, or Live trading.
+
+## 7. Intentional later gates
+
+These are expected stage gates and do not need to block AP0 after section 6
+closes:
+
+- GRACE quantitative implementation remains blocked at AP9 pending independent
+  actuarial/model-risk review, exact machine schemas, representative reference
+  data, a signed Calibration Pack, and explicit approval.
+- Delegation remains observe-only until AP11 acceptance and cannot affect Live
+  before AP12/AP14 gates.
+- AP13/AP14/AP15 each require their own non-money certification plus separately
+  controlled production evidence.
+- Options and every uncertified product/effect class remain disabled until a
+  separate frozen Kernel/Provider plan and canary certify them.
+
+## 8. Dependency and rollback verdict
+
+The corrected sequence is valid:
+
+```text
+Kernel clock/M11 closeout
+-> pre-AP0 Charter closeout and audit release check
+-> AP0 -> AP1
+-> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
+-> AP9 || AP10 -> AP11 -> AP12 -> AP13 -> AP14 -> AP15
+```
+
+AP2/AP3 and AP9/AP10 are the only declared parallel branches. No later authority
+is needed to implement an earlier stage. The legacy direct Runtime proposer is
+disabled before AP1 claims triggers, avoiding two schedulers/proposers.
+
+Rollback order is also valid after the correction: deny new admission and send
+first, freeze upward activation/lease advance, preserve reconciliation/cancel/
+verified reduction, drain or latch in-flight effects, stop writers, roll back
+compatible applications, and retain forward-compatible schema plus immutable
+authority/audit history.
+
+## 9. Final authorization statement
+
+```text
+ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS
+AUTHORIZED_FOR_AP0: WITHHELD
+```
+
+No Agent Platform implementation should begin from this audit alone. The next
+implementation module is the Kernel market-day time-source repair, committed
+and pushed independently. The second module is the M11 v1.7 rollback-acceptance
+documentation amendment, also committed and pushed independently. The third is
+the separately confirmed one-share canary, rollback evidence, and M11 landing
+commit; the canary is never implied by either documentation module.

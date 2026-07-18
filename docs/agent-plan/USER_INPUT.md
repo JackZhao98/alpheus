@@ -42,7 +42,8 @@ Establishes facts that do not require semantic inference:
 
 - authenticated user and permissions;
 - Conversation, Run, Task, question, and confirmation identifiers;
-- attachment identity, type, size, checksum, and storage reference;
+- attachment identity through the AP0 `BlobRef`, type, size, checksum, and
+  authorized storage reference; no second attachment-content identity exists;
 - explicit structured controls such as cancel, pause, resume, approve, reject;
 - whether a critical action is pending and whether its displayed revision is
   still current.
@@ -73,8 +74,10 @@ Validates the draft against real state and policy:
 - a claimed answer corresponds to an outstanding question;
 - a correction cannot rewrite committed history;
 - ambiguity is acceptable for a reversible discussion step;
-- critical, external, or money-related effects have the required structured
-  confirmation.
+- critical, external, or money-related effects resolve exactly one legal
+  structured authority route. A user-originated one-operation trade uses exact
+  confirmation; an autonomous schedule/event route uses a current Delegation
+  grant and never fabricates a user receipt.
 
 Invalid or materially ambiguous input produces a focused clarification rather
 than an inferred action.
@@ -98,7 +101,8 @@ new revision.
 ## Confirmation boundary
 
 Natural-language confidence cannot authorize money or another critical effect.
-An approval must bind a structured confirmation object containing the exact
+When policy requires human approval, that approval must bind a structured
+confirmation object containing the exact
 target, revision/hash, authenticated account and user, material parameters,
 risk envelope where applicable, display time, and expiry.
 
@@ -111,17 +115,24 @@ For trading, the user confirms a Kernel-owned operation/review ticket. Intent
 interpretation cannot invent quantity, order type, price, expiry, account, or
 risk terms and cannot substitute for Kernel review.
 
+This is the exact-confirmation route, not a requirement that every qualified
+autonomous trade receive a human click. Scheduled/event autonomous proposals do
+not pass through User Input for order authority; they require the separate
+Delegation and Kernel Gate path.
+
 Exact confirmation is a one-ticket authority path under `DELEGATION.md`; it is
 not a GRACE score change or a general autonomous grant. Confirming one operation
 cannot raise an Agent/Strategy capability template, approve later proposals,
 or waive Kernel invariants.
 
 For trading, `DELEGATION_POLICY.md` freezes the Kernel-owned
-OperationConfirmationTicket, User Input-owned TicketDisplayReceipt and
-ConfirmationReceipt, exclusive authority route, expiry/consumption sequence,
-and separation from grant activation, breaker resume, canary widening,
-unknown-effect resolution, and emergency reduction. This file remains
-authoritative for conversational binding and ambiguity behavior.
+OperationConfirmationTicket and the dedicated User Authority Gateway-owned
+TicketDisplayReceipt and ConfirmationReceipt, exclusive authority route,
+expiry/consumption sequence, and separation from grant activation, breaker
+resume, canary widening, unknown-effect resolution, and emergency reduction.
+Ordinary Input Gateway, Web, Agent Runtime, Workers, and CI have no receipt-write
+or receipt-signing credential. This file remains authoritative for
+conversational binding and ambiguity behavior.
 
 ## Attachments and external text
 

@@ -1,12 +1,16 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **DRAFT — architecture discussion, not implementation authority**
+> Status: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS — `AUTHORIZED_FOR_AP0`
+> withheld pending Kernel/M11 and Charter closeout**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
 > `docs/plan/`.
 
-This is the entrypoint for the next Alpheus planning cycle. A module becomes an
+This is the entrypoint for the next Alpheus planning cycle. The intended mature
+product is policy-bounded autonomous trading: qualified ordinary orders do not
+require per-trade human confirmation, while humans retain absolute-limit,
+material-promotion, rollout, and emergency authority. A module becomes an
 implementation target only after its specification, threat model, acceptance
 criteria, dependencies, and rollout boundary have been reviewed and frozen.
 
@@ -25,7 +29,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
    cross-module APIs, Provider access, or failure behavior.
 6. Read `BUILD_ROADMAP.md` before planning implementation, schemas, services,
    migrations, rollout, or milestone acceptance.
-7. Read the frozen Kernel plan only when defining or implementing a Kernel
+7. Read `FINAL_ARCHITECTURE_AUDIT.md` before claiming AP0 or any later stage is
+   authorized.
+8. Read the frozen Kernel plan only when defining or implementing a Kernel
    interface. Agent architecture cannot silently amend it.
 
 `FROZEN ARCHITECTURE` records an agreed ownership or mechanism boundary. It does
@@ -49,7 +55,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
-| Agent Platform Build Roadmap | Implementation sequence, schema-pack format, service/database topology, stage gates, threat model, rollout, and acceptance-command contract frozen; code authorization still requires the final cross-module audit and per-stage gates | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md) |
+| Agent Platform Build Roadmap | Corrected and frozen through AP15; governed autonomous Live is the destination; AP0 authorization withheld pending recorded pre-AP0 gates | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md) |
+| Final cross-module architecture audit | Complete with architecture findings closed and four release blockers; exact AP0 token not issued | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
 
@@ -70,12 +77,16 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
-   data and a signed Calibration Pack before authorizing implementation.
-2. Run one final cross-module architecture audit against
-   `BUILD_ROADMAP.md` before authorizing code work.
-3. After M11 lands and the Charter amendment is accepted, implement AP0 only if
-   the audit explicitly issues `AUTHORIZED_FOR_AP0`.
-4. Continue stage by stage with non-Live foundations first. GRACE and
+1. Repair the Kernel market-day time-source split and restore the complete race/
+   vet suite to green.
+2. Freeze M11 rollback acceptance, complete only the separately confirmed
+   one-share canary and rollback proof, then mark M11 `LANDED` if it passes.
+3. Land the post-M11 Charter amendment and run the digest-pinned audit release
+   check. Record owner acceptance plus independent review in committed
+   `AP0_RELEASE.md`; implement AP0 only when that record explicitly issues
+   `AUTHORIZED_FOR_AP0`.
+4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
+   data and a signed Calibration Pack before AP9 implementation.
+5. Continue stage by stage with non-Live foundations first. GRACE and
    Delegation cannot affect autonomous Live until their independent acceptance
    boundaries pass.

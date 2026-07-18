@@ -34,6 +34,14 @@ One AgentRevision may execute multiple isolated Sessions concurrently. A
 material prompt, model, Skill, Contract, or permission change creates a new
 revision.
 
+A Candidate Agent/Role/prompt/model/config revision is not active deployment
+state. An independent Agent Release Validator writes a
+`DeploymentValidationAttestation`; a separately credentialed Activator may only
+CAS the `ActiveAgentDeploymentHead` from the exact validated manifest and
+applicable owner/policy decision. Runtime/Workers cannot attest to or activate
+their own release. Kernel may lock the published head through the common scoped
+authority-head protocol when a Delegation lease binds it.
+
 ## Role Package direction
 
 A role is expected to have a versioned package equivalent to:
@@ -328,7 +336,11 @@ User/schedule/event
   -> Challenger
   -> at most one scoped rebuttal
   -> Decision Desk WAIT/PASS/PROPOSE
-  -> Kernel
+  -> qualifying Artifact + canonical BehaviorEvent
+  -> GRACE intake acknowledgement
+  -> Proposal Validator
+  -> active DelegationGrant OR exact-confirmation ticket route
+  -> Kernel Gate
 ```
 
 Research uses the staged funnel in `RESEARCH_DATA.md`; deep Specialists run only
@@ -358,7 +370,7 @@ reconciled Kernel outcome
   -> Strategy Researcher
   -> Playbook/Strategy Candidate
   -> independent Challenge and Validator
-  -> Human Strategy Owner
+  -> StrategyActivationAuthority (initial/material: Human Strategy Owner)
   -> GRACE delayed evaluation
   -> Delegation Policy review where autonomous authority is requested
 ```
@@ -413,7 +425,11 @@ required data freshness, deadline, concurrency, missed-run behavior, and budget.
   requirements, with substitution recorded.
 - Missing required Specialist/capability: surface the gap; do not let an
   unqualified Agent impersonate it.
-- Challenger unavailable: wait or route to human where Challenge is required.
+- Challenger unavailable: WAIT or issue a no-trade PASS where Challenge is
+  required. A human may supply the typed independent-review Artifact only when
+  the frozen RoleContract explicitly permits that reviewer class; ordinary
+  approval or exact trade confirmation cannot waive mandatory Challenge,
+  Validator, or Evidence requirements.
 - Decision Desk unavailable: produce no new-risk proposal.
 - Position Manager unavailable: Kernel safety continues; monitor-dependent new
   autonomous opens are blocked and surfaced.

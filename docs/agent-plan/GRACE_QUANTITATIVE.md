@@ -136,16 +136,19 @@ trusted as registration time.
 
 ## 5. `BehaviorEvent`
 
-`BehaviorEvent` is written by the Agent Control Plane through an atomic commit
-or transactional outbox with the Artifact it qualifies. GRACE owns validation
-and ticket derivation, not the original behavior.
+`BehaviorEvent` is written by the Agent Control Plane in the same owner
+transaction as the qualifying published Artifact and its delivery outbox row.
+The outbox delivers the already committed BehaviorEvent to GRACE; it is not an
+alternative to BehaviorEvent persistence. GRACE owns validation and ticket
+derivation, not the original behavior.
 
 ### 5.1 Common fields
 
 ```text
 behavior_id, behavior_schema_revision, digest
 occurred_at_claimed, committed_at_server, market_time_zone
-conversation_id, user_request_id, run_id, task_id, attempt_id, session_id
+run_origin_ref, run_id, task_id, attempt_id, session_id
+conversation_id and user_request_id iff run_origin=user_request
 artifact_id and artifact_schema_revision
 agent_revision_id and role_contract_revision
 optional strategy_version_id or explicit role_policy_scope_id
@@ -171,6 +174,12 @@ future Outcome.
 `strategy_version_id` is not required for operational Roles that do not act
 under a Strategy. Such events bind an explicit `role_policy_scope_id`; absence
 is never represented by an ambiguous empty string.
+
+`run_origin_ref` is the common immutable discriminated origin. Scheduled,
+external-event, Kernel-event, maintenance, and recovery behaviors must not
+fabricate a Conversation/UserRequest or reuse an interactive credential.
+Recovery binds the original causal, idempotency, authority, and effect identity
+and cannot create a fresh scoreable decision merely by retrying it.
 
 ### 5.2 Role-discriminated payloads
 
@@ -200,7 +209,8 @@ publication. The Agent cannot submit `not_scoreable` as an escape hatch.
 
 If mandatory behavior registration fails:
 
-1. the Artifact remains durably quarantined;
+1. the Worker/Attempt result or unpublished Artifact candidate may remain
+   durably quarantined, but no canonical published Artifact exists;
 2. a new-risk Artifact cannot enter a decision graph or Kernel proposal path
    until intake validation and ticket creation are acknowledged;
 3. the outbox retries idempotently; and
@@ -374,10 +384,17 @@ adjustments, assignments, exercise, delisting proceeds, or corrected market
 data create a new Outcome revision. The correction transaction:
 
 1. records the reason and source manifest;
-2. supersedes but does not delete the prior outcome;
-3. produces new model evaluations and ScoreSnapshots;
-4. marks affected old Snapshots superseded; and
-5. emits a downstream notification without directly changing a grant.
+2. CAS-advances one fenced `OutcomeHead` from the exact prior generation;
+3. appends the OutcomeRevision and OutcomeStateEvent without deleting the prior
+   outcome; and
+4. commits an outbox notification without directly writing an evaluation,
+   ScoreSnapshot, model head, or grant.
+
+The Engine later consumes that event under its own stable inbox identity and
+publishes new AtomicEvaluations/ScoreSnapshots plus supersession references in
+an Engine-owned transaction. Concurrent corrections have one current Outcome
+tip; losers re-read and create an explicit successor or conflict. No correction
+transaction crosses Intake/Outcome and Engine write ownership.
 
 ### 7.3 `AtomicEvaluation`
 
@@ -1228,8 +1245,7 @@ Every candidate and active evaluation model is immutable and self-contained:
 
 ```text
 model_revision_id, parent_revision_id
-state: draft | challenger | validated | champion | retired | rolled_back
-created_at, data_cutoff, effective_at, retired_at, rollback_target
+created_at, data_cutoff, proposed rollback target
 code, build, runtime, dependency, and configuration digests
 Calibration Pack revision and full prior/hyperparameter manifest
 supported Role, behavior, target, horizon, product, regime, and evidence classes
@@ -1240,8 +1256,24 @@ tail threshold/model, VaR/ES definition, and unresolved-tail behavior
 rating plane criteria and output scale
 training, validation, forward-observation, and stress-window manifests
 predeclared comparison metrics, multiple-testing family, and stopping rule
-validation results, limitations, approvals, signatures, and activation record
+declared assumptions and candidate limitations
 ```
+
+Mutable lifecycle and independently owned decisions are separate records:
+
+```text
+GRACEValidatorAttestation
+ModelRiskDecision
+ModelStateEvent: draft | challenger | validated | champion | retired | rolled_back
+ActiveGRACEChampionHead(model_revision_id, generation, effective_at)
+```
+
+The Trainer/Engine writes only the immutable candidate body; the independent
+Validator writes only its attestation; the authenticated model-risk path writes
+only its decision; and the Activator may only append the state event and CAS the
+Champion head from exact validated digests. Effective/retired times, approvals,
+signatures, activation, and current state never appear as mutable fields inside
+the ModelRevision. Concurrent promotion has one head-generation winner.
 
 The revision specifies deterministic numeric precision, random seeds where
 sampling is used, convergence diagnostics, tolerated replay error, and what
@@ -1386,8 +1418,11 @@ optimality or safety.
 - Publication is transactionally bound to the input manifest and replay digest.
 - Only the privileged evaluation service writes AtomicEvaluations and
   ScoreSnapshots. Agents, Coach, Advisor, and Delegation have read-only access.
-- Only the promotion path can activate one Champion; Engine and Validator use
-  separate credentials, and Trainer cannot approve its own model.
+- Intake/Outcome, Engine, Validator, model-risk, and Activator write disjoint
+  record families with no catch-all GRACE writer.
+- Only the promotion path can append a ModelStateEvent and CAS one Champion;
+  Engine and Validator use separate credentials, and Trainer cannot approve its
+  own model.
 
 ## 23. Acceptance suite
 
@@ -1514,7 +1549,10 @@ optimality or safety.
 - **No leakage:** point-in-time replay cannot read later data revisions,
   adjusted features, or smoothed future regime state.
 - **Append-only correction:** a later reconciliation creates a superseding
-  Outcome and Snapshot; old records remain replayable and marked superseded.
+  Outcome; concurrent corrections have one OutcomeHead winner. The separate
+  Engine event later creates a superseding Snapshot. Old records remain
+  replayable and marked superseded, and duplicate delivery cannot apply the
+  correction twice.
 - **Missing evidence:** absence/conflict expands uncertainty, censors, or
   invalidates; it never raises a grade.
 
@@ -1539,6 +1577,10 @@ optimality or safety.
   behavior/outcomes but cannot silently become favorable official history.
 - **One Champion:** concurrent promotion yields one active revision; rollback
   restores the exact prior revision.
+- **Body/state separation:** attempts to place lifecycle, effective/retired,
+  approval, signature, or activation fields in ModelRevision fail schema
+  validation; Trainer/Engine, Validator, model-risk, and Activator credentials
+  cannot write one another's record families.
 - **Publication class:** Challenger, diagnostic, and historical-bound
   AtomicEvaluations/Snapshots cannot enter a `current_authority` Snapshot or be
   consumed by Delegation.

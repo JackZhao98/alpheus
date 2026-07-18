@@ -69,7 +69,8 @@ Learning and governance surface:
 - Behavior evaluation maturity and GRACE ScoreSnapshots with components,
   uncertainty, coverage, and limitations;
 - Delegation proposals/grants as a separate authority record;
-- human Strategy Owner and model-risk decisions;
+- Strategy activation-authority and model-risk decisions, including explicit
+  human decisions where initial/material policy requires them;
 - canary, deterioration, requalification, rejection, and rollback history.
 
 Strategy Lab cannot directly activate a Strategy, change a GRACE score, create
@@ -107,7 +108,9 @@ user input
 The UI may show the interpreted scope, mode, assumptions, missing information,
 budget, and planned work before or during execution. Read-only research can run
 under policy without trading confirmation. A money or other critical effect
-requires the exact binding in `USER_INPUT.md` and `DELEGATION.md`.
+requires exactly one Kernel-recognized structured authority binding: a current
+autonomous grant, an exact human confirmation, or a Kernel-proven reduction/
+emergency route as frozen in `USER_INPUT.md` and `DELEGATION.md`.
 Trading and privileged authority views also follow the distinct effect classes,
 ticket/receipt fields, and deadlines in `DELEGATION_POLICY.md`.
 
@@ -133,11 +136,18 @@ Any material backend change invalidates the visible confirmation and requires a
 new ticket. A generic `Confirm` action cannot bind multiple pending objects,
 activate a general autonomous grant, or approve a different proposal.
 
-Successful rendering creates the User Input-owned immutable
-`TicketDisplayReceipt` defined by `DELEGATION_POLICY.md`; only after Kernel has
-CAS-attached that receipt to the current TicketStateHead may the UI submit a
-confirmation/rejection receipt. Browser-local visibility or button state is
-not the ticket state.
+Successful rendering asks the dedicated User Authority Gateway
+(`user-authority-gateway`) to create the immutable `TicketDisplayReceipt`
+defined by `DELEGATION_POLICY.md`; only after Kernel has CAS-attached that
+receipt to the current TicketStateHead may the UI submit a confirmation or
+rejection through that gateway. Web, ordinary Input Gateway, Agent Runtime,
+Workers, and CI have no receipt-write or receipt-signing credential.
+Browser-local visibility or button state is not the ticket state.
+
+After autonomous production qualification, this screen is an exceptional one-
+operation fallback and governance surface, not an ordinary per-order approval
+queue. Normal qualified autonomous orders remain visible and auditable without
+waiting for a browser or human receipt.
 
 ## Provenance and truth labels
 

@@ -24,6 +24,13 @@ one PostgreSQL deployment. Co-location does not grant shared ownership.
 - It owns no trading, rating, Strategy, Memory, or workflow truth.
 - Authentication proves the user/session; ordinary prose does not prove
   authorization.
+- Before exact confirmation reaches Live, its receipt commands use a dedicated
+  human-audience User Authority Gateway whose credential is unavailable to
+  Agent Runtime/Workers. Ordinary conversational intake may remain co-located;
+  human authority may not.
+- Platform mode ceilings and effect kill switches are fenced governance records,
+  not environment-only flags or Web state. A separate Platform Activator owns
+  their transitions from authenticated owner commands and deployment evidence.
 
 ### Agent control and cognition
 
@@ -103,7 +110,7 @@ BehaviorEvent
 Canonical case + outcome
   -> Coach / Memory Candidate / Strategy Research
   -> Strategy Lab Candidate
-  -> independent validation + human Strategy Owner
+  -> independent validation + applicable StrategyActivationAuthority
   -> Strategy Activation Controller
 ```
 
@@ -113,20 +120,24 @@ from reconciling, cancelling, closing, or enforcing breakers.
 
 ## Canonical ownership table
 
-| Record/fact | Sole write owner | Other modules |
+| Record/fact | Write authority by record family | Other modules |
 |---|---|---|
-| Conversation/UserRequest/ticket-display and confirmation conversation-receipt binding | User Input service | Read/reference under policy |
+| Conversation/UserRequest | ordinary Input Gateway / Agent Control Plane intake role | Read/reference under policy; this role has no human-authority receipt credential |
+| TicketDisplayReceipt/ConfirmationReceipt/conversation-receipt binding | dedicated User Authority Gateway (`user-authority-gateway`) | Web may render/submit through the gateway; ordinary Input Gateway, Agent Runtime, Workers, and CI cannot write or sign receipts |
+| PlatformMode/EffectClass/KillSwitch heads, events, and activation receipts | authenticated platform owner plus fenced Platform Activator | Services and Kernel enforce the current ceiling; Web reads only |
 | Run/Task/Attempt/Message/Artifact/Checkpoint | Agent Control Plane | Read/reference only |
+| AgentDeploymentRevision/validation/ActiveAgentDeploymentHead | Candidate owner / independent Agent Release Validator / fenced Activator on disjoint records | Runtime reads active revision; Kernel may scoped-lock a bound head |
 | BehaviorEvent and decision graph | Agent Control Plane through validated Artifact commit | GRACE consumes immutable copy/reference |
+| Capability candidate/validation/ActiveCapabilityHead | Candidate owner / independent Capability Validator / fenced Activator on disjoint records | Planner/Workers read active manifest only |
 | Tool call/effect/reconciliation | Tool Gateway | Agent references; Control Plane handles task state |
 | Evidence/Claim/Fact/Metric/Snapshot | Evidence Store/Validator | Agents and Strategy Lab read |
 | Memory item/candidate/promotion | Memory service | Agents retrieve under context policy |
-| Playbook/Strategy/experiment revision | Strategy Registry/Lab | Agents consume active or isolated Candidate revision |
+| Playbook/Strategy/experiment candidate, validation, activation authority, and ActiveStrategyHead | Strategy Registry/Lab / independent Validator / policy-owner / fenced Activator on disjoint records | Agents consume active or isolated Candidate revision |
 | EvaluationProfile/Contract and Calibration Pack | GRACE privileged human/model-risk path | Engine and Validator consume immutable revision |
 | EvaluationTicket/TicketState/ModelBindingState | GRACE | Agent Control Plane receives intake acknowledgement; other modules read |
 | MaturedBehaviorOutcome/AtomicEvaluation/ScoreSnapshot | GRACE | Delegation and Agents read permitted publication class |
 | Delegation policy/template/budget revisions; proposal/ProposalStateHead; attestations/candidates; grant/ScopeHead/PoolHead/HealthLease | Delegation roles and privileged paths exactly as specified in `DELEGATION_POLICY.md` | Kernel validates; Agents read scoped status |
-| OperationConfirmationTicket/TicketStateHead; OperationAuthorityBinding/charge/dispatch/reduction proof | Kernel | User Input submits receipt commands; other modules read scoped publication |
+| OperationConfirmationTicket/TicketStateHead; OperationAuthorityBinding/charge/dispatch/reduction proof | Kernel | dedicated User Authority Gateway submits receipt commands; other modules read scoped publication |
 | Account/operation/reservation/order/fill/position/breaker | Kernel | Other modules read canonical publication |
 | Broker request/effect/reconciliation | Kernel Provider | No Agent-plane access |
 
@@ -195,7 +206,8 @@ The authority routes then diverge:
 - human-review flow presents a non-effectful candidate with
   `authority_mode=exact_confirmation`; Kernel canonicalizes it and creates the
   pending operation plus immutable OperationConfirmationTicket; only a later
-  exact User Input receipt may be atomically consumed into an entitlement; and
+  exact User Authority Gateway receipt may be atomically consumed into an
+  entitlement; and
 - the two routes are exclusive and never stacked or silently substituted.
 
 Before any Provider effect, Kernel independently recomputes account state,
@@ -231,7 +243,9 @@ Strategy Lab produces Candidate artifacts only. Activation requires:
 - immutable Candidate and parent/rollback revision;
 - reproducible point-in-time replay and forward Shadow evidence;
 - independent Challenge and Validator reproduction;
-- human Strategy Owner decision;
+- applicable StrategyActivationAuthority: a human Strategy Owner for initial or
+  material change, or a separately frozen policy-preauthorized non-widening
+  parameter transition;
 - atomic activation by deterministic Strategy Activation Controller.
 
 Activation makes a revision eligible as the Active Strategy; it does not grant
@@ -281,7 +295,7 @@ around Provider, Delegation, or Kernel.
 | Web unavailable | No new interactive confirmation; valid pre-authorized work follows policy; Kernel safety continues |
 | Agent Runtime unavailable | No new cognition/proposals; Kernel reconciliation, breaker, and risk reduction continue |
 | Research/Evidence unavailable | No new evidence-dependent decision; existing Kernel truth remains available |
-| Required Challenger/Validator unavailable | Wait, PASS, or human route; no silent substitution or promotion |
+| Required Challenger/Validator unavailable | WAIT or a no-trade PASS; no silent substitution, promotion, or exact-confirmation waiver. A human may supply a typed independent-review Artifact only when the frozen RoleContract explicitly permits that reviewer class; ordinary approval cannot replace mandatory evidence/review |
 | GRACE unavailable/stale | No favorable new rating or authority increase; Delegation preserves/reduces only under frozen policy |
 | Delegation unavailable/ambiguous | No new/expanded autonomous grant; exact human and risk-reducing paths follow separate policy |
 | Strategy Lab unavailable | No learning/promotion; active immutable revision and existing-position binding remain |

@@ -151,7 +151,7 @@ canonical decision and reconciled outcome
   -> point-in-time historical replay
   -> forward Shadow observation
   -> independent Validator reproduction
-  -> human Strategy Owner decision
+  -> StrategyActivationAuthority (initial/material changes: human owner)
   -> GRACE delayed evaluation / ScoreSnapshot
   -> Delegation authorization proposal where autonomous authority is requested
   -> bounded Live canary
@@ -316,7 +316,9 @@ promotion.
 - **Strategy Validator:** independently reproduces manifests and deterministic
   experiments; it does not train the Candidate.
 - **Human Strategy Owner:** approves activation, retirement, and material
-  changes.
+  changes. A later separately frozen policy may preauthorize only a parameter-
+  only equal-or-narrower transition within an exact domain after independent
+  validation; it cannot widen Delegation or Kernel authority.
 - **GRACE:** independently performs delayed credibility and real-outcome
   evaluation.
 - **Delegation Validator/Policy:** independently maps compatible approved
@@ -326,6 +328,13 @@ promotion.
 
 No component grades, validates, promotes, activates, or authorizes its own
 output.
+
+The initial Strategy, every model/rule/scope/effect change, and any transition
+that can widen behavior or authority remain human-approved. A
+`StrategyActivationAuthority` is a discriminated immutable record, never an
+optional human id: it is either the required HumanStrategyDecision or a future
+policy-preauthorized non-widening parameter transition. Candidate authors,
+Validators, and Activator credentials remain disjoint in either branch.
 
 ## Context and retrieval
 
