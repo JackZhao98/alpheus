@@ -6,8 +6,8 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **K1B-2 downstream execution envelopes and
-> database-time claim leases. M11 is
+> Current implementation target: **K1C typed completed-day attestation and
+> guarded Live-canary widening. M11 is
 > `CANARY DEFERRED`, production remains read-only, and the real canary is a hard
 > gate before AP13 rather than before non-money development**
 
@@ -57,7 +57,7 @@ PR/commit and update this index only after its acceptance criteria pass.
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Landed | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Landed | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
 | 4 — Pre-live and live | M9, M10, M11 | **M11 CANARY DEFERRED; AP13+ blocked** | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
-| X — Policy ownership | M11 K0; K1; Agent K2 | **K0 LANDED; K1 IN PROGRESS (K1A + K1B-1 LANDED)** | [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md) |
+| X — Policy ownership | M11 K0; K1; Agent K2 | **K0 LANDED; K1 IN PROGRESS (K1A + K1B LANDED; K1C NEXT)** | [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md) |
 | Y — Broker coexistence | B0 | **FROZEN; after M11 non-money gate, before AP0** | [`07_BROKER_COEXISTENCE.md`](07_BROKER_COEXISTENCE.md) |
 | Z — Deferred production evidence | M11 Canary | **DEFERRED; required before AP13** | [`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md) |
 
@@ -88,7 +88,7 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `DEFERRED`,
 | **M9** | **LANDED** | M7; full pre-live certification | 96.6% risk coverage; deterministic claimed/accepted/crash/reprice fault seams; live/shadow daily, open-risk, buying-power and close-reservation barriers plus PostgreSQL advisory-lock proof; six-operation full-day idempotent replay; paused DB 503 in 3.005701s with zero effects; PostgreSQL process replacement recovery; final unknown=0 and unsafe-orphan=0; isolated race/vet/smoke green | Phase 4 |
 | **M10** | **LANDED** | M9 | official Anthropic Go SDK v1.42.0; role-card-order prompt rendering; forced single-tool handwritten contract schemas; strict local decode/Validate and one retry; exact token-count budget plus per-slot caps; untrusted-context boundary; authenticated bounded telemetry event; mocked transport/startup/injection suites; race/vet, isolated Compose certification and missing-key process probe green | Phase 4 |
 | **M11** | **DEFERRED** | Non-money code and target read-only deployment complete; exact one-share Alpheus-routed Canary plus stop/recovery acceptance remains; hard gate before AP13; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority; target database migrated v7→v10 with 92 operations preserved and authority revision/generation `1/1` at $50/five days; current image healthy in `read_only`, Live disabled, account $401.16 with no positions/open orders and zero attempt/order/fill/current-day grant/open-risk/unknown effect | Phase 4 / Z |
-| **K1** | **IN PROGRESS** | M11 non-money gate; before AP0; real Canary not required; zero production broker mutation | K1A `229a77b`: typed strict policy schema, canonical digest, immutable revisions/CAS head and explicit CLI. K1B-1 `be90658`: operation revision binding, DB-time absolute proposal expiry, shared/exclusive activation barrier, bound+current review, runtime YAML removal, API/event projection; isolated PostgreSQL/race/vet/Compose and full M9 certification green. K1B-2 downstream envelopes/DB leases and K1C completed-day attestation/guarded widening remain | Phase X |
+| **K1** | **IN PROGRESS** | M11 non-money gate; before AP0; real Canary not required; zero production broker mutation | K1A `229a77b`: typed strict policy schema, canonical digest, immutable revisions/CAS head and explicit CLI. K1B-1 `be90658`: operation binding, DB-time expiry, policy activation barrier, bound/current review and runtime YAML removal. K1B-2 `bb07274`: immutable downstream execution envelopes, exact order price authority, database-time leases, no-widen/current-tighten recovery and reprice behavior; fresh PostgreSQL/race/vet/Compose and full M9 certification green. K1C completed-day attestation/guarded widening remains | Phase X |
 | **B0** | **PENDING** | M11 non-money gate; K1 policy binding where applicable; before AP0; real Canary not required | external/manual broker facts, origin separation, aggregate-risk reconciliation, external cancel/close through Kernel, action-specific pre-effect refresh, stale-proposal invalidation, PostgreSQL/race/fault/Provider-fixture acceptance | Phase Y |
 
 Ordering constraints: M8A/M8B land after M2.6 so production reads inherit

@@ -336,14 +336,19 @@ widening. Normal runtime YAML loading is removed; startup requires valid
 database authority and `/limits`, `/state`, operation reads and lifecycle
 events expose its binding. Isolated missing-file startup, PostgreSQL transition
 and barrier probes, race/vet, Compose smoke and full M9 certification passed.
-Neither K1A nor K1B-1 was deployed to production.
+**K1B-2 LANDED** in `bb07274`. Migration 0013 binds grants, open/close
+reservations, attempts and orders to their operation's exact revision,
+generation and digest. Attempts and orders persist immutable authorization,
+price and reprice envelopes; later widening cannot expand old work, while
+typed current tightening can stop future replacement work. Claim ownership now
+uses a persisted database-time lease, so one instance's local timeout cannot
+steal another instance's unexpired claim. PostgreSQL binding/immutability,
+widening, tightening and cross-instance lease probes passed, followed by the
+complete M9 certification. See [`../k1b2_certification.md`](../k1b2_certification.md).
 
-K1B-2 remains: bind grants, reservations, attempts and orders to the same
-revision; persist their exact execution envelopes; replace instance-relative
-claim cutoffs with database-time lease expiry; and apply current tightening to
-reprice/recovery without allowing a later widening to expand old work. K1C
-retains the completed-day attestation and guarded Live-canary widening work.
-K1 is not `LANDED` until both are complete.
+K1A and both K1B increments were not deployed to production. K1C retains the
+completed-day attestation and guarded Live-canary widening work. K1 is not
+`LANDED` until K1C is complete.
 
 ## Explicit non-goals
 
