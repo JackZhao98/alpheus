@@ -62,6 +62,12 @@ func TestClientCachesCallsAndReconnects(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("calls=%d, want one cached transport call", calls.Load())
 	}
+	if _, err := client.Call(WithFreshReads(context.Background()), "get_accounts", map[string]any{}); err != nil {
+		t.Fatalf("fresh read: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls=%d, want fresh read to bypass cache", calls.Load())
+	}
 	// Leave the closed session pointer installed to model a transport that
 	// disappears between calls. Call must fail once at the sole CallTool
 	// boundary, reconnect, and then succeed.
@@ -77,7 +83,7 @@ func TestClientCachesCallsAndReconnects(t *testing.T) {
 	if _, err := client.Call(context.Background(), "get_accounts", map[string]any{}); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
-	if calls.Load() != 2 {
+	if calls.Load() != 3 {
 		t.Fatalf("calls=%d, want reconnect call", calls.Load())
 	}
 	client.cfg.CallTimeout = 25 * time.Millisecond

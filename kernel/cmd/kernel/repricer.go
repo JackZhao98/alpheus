@@ -116,7 +116,7 @@ func (s *server) executeClaimedRepriceCancel(ctx context.Context, claimed *store
 	var preEffect *store.PreEffectManifest
 	var preEffectErr error
 	if s.tradingMode() == config.ModeLive {
-		preEffect, preEffectErr = s.captureLivePreEffect(ctx, claimed, op)
+		preEffect, preEffectErr = s.captureLivePreEffect(ctx, claimed, op, false)
 	}
 	if preEffectErr != nil {
 		_, resolveErr := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{

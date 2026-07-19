@@ -70,6 +70,21 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
+type freshReadContextKey struct{}
+
+// WithFreshReads marks a money-path context whose Provider reads must cross
+// the MCP transport instead of accepting the normal bounded query cache. The
+// successful response still refreshes that cache for non-authoritative UI and
+// research callers.
+func WithFreshReads(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshReadContextKey{}, true)
+}
+
+func requiresFreshReads(ctx context.Context) bool {
+	fresh, _ := ctx.Value(freshReadContextKey{}).(bool)
+	return fresh
+}
+
 type tokenBucket struct {
 	mu       sync.Mutex
 	tokens   float64
@@ -302,14 +317,19 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (js
 	if err != nil {
 		return nil, err
 	}
-	if data, ok := c.cacheGet(key); ok {
-		return data, nil
+	fresh := requiresFreshReads(ctx)
+	if !fresh {
+		if data, ok := c.cacheGet(key); ok {
+			return data, nil
+		}
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if data, ok := c.cacheGet(key); ok {
-		return data, nil
+	if !fresh {
+		if data, ok := c.cacheGet(key); ok {
+			return data, nil
+		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.cfg.CallTimeout)
 	defer cancel()

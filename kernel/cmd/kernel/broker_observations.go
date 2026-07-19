@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/rhmcp"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
@@ -35,10 +37,26 @@ type observedAccount struct {
 }
 
 type preEffectFacts struct {
-	SnapshotCompletedAt time.Time          `json:"snapshot_completed_at"`
-	Quote               *broker.Quote      `json:"quote,omitempty"`
-	Instrument          *broker.Instrument `json:"instrument,omitempty"`
-	TargetOrder         *broker.ReadOrder  `json:"target_order,omitempty"`
+	SnapshotCompletedAt time.Time            `json:"snapshot_completed_at"`
+	Quote               *broker.Quote        `json:"quote,omitempty"`
+	Instrument          *broker.Instrument   `json:"instrument,omitempty"`
+	TargetOrder         *broker.ReadOrder    `json:"target_order,omitempty"`
+	Evaluation          *preEffectEvaluation `json:"evaluation"`
+}
+
+type preEffectEvaluation struct {
+	ActivePolicyRevisionID int64        `json:"active_policy_revision_id"`
+	ActivePolicyGeneration int64        `json:"active_policy_generation"`
+	ActivePolicyDigest     string       `json:"active_policy_digest"`
+	LocalOpenRisk          units.Micros `json:"local_open_risk"`
+	LocalHeldCash          units.Micros `json:"local_held_cash"`
+	OtherLocalCloseQty     units.Qty    `json:"other_local_close_qty"`
+	ExternalPositionRisk   units.Micros `json:"external_position_risk"`
+	ExternalWorkingRisk    units.Micros `json:"external_working_risk"`
+	ExternalWorkingClose   units.Qty    `json:"external_working_close_qty"`
+	AggregateOpenRisk      units.Micros `json:"aggregate_open_risk"`
+	EffectiveBuyingPower   units.Micros `json:"effective_buying_power"`
+	FreshnessExpiresAt     time.Time    `json:"freshness_expires_at"`
 }
 
 func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*providerSnapshot, error) {
@@ -218,20 +236,23 @@ func brokerOrdersValid(orders []broker.ReadOrder, source string, completedAt tim
 // captureLivePreEffect refreshes the whole shared account and then records the
 // action-specific facts required for the imminent Provider call. It performs
 // no mutation and returns only a short-lived, immutable manifest.
-func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation) (*store.PreEffectManifest, error) {
+func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation, replay bool) (*store.PreEffectManifest, error) {
 	if s.tradingMode() != config.ModeLive {
 		return nil, fmt.Errorf("pre-effect manifests are live-only")
 	}
-	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	// Interactive/read-model traffic may use the bounded MCP cache. Money-path
+	// authority may not: every pre-effect family must cross the transport.
+	freshCtx := rhmcp.WithFreshReads(ctx)
+	bindingCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
 	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
 	cancel()
 	if bindingErr != nil {
 		return nil, bindingErr
 	}
-	snapshot, err := s.captureProviderSnapshot(ctx, "pre_effect")
+	snapshot, err := s.captureProviderSnapshot(freshCtx, "pre_effect")
 	if err != nil {
 		s.recordPreEffectRefusal(attempt, "account_snapshot_unavailable")
-		return nil, fmt.Errorf("pre-effect account snapshot unavailable")
+		return nil, fmt.Errorf("%w: account snapshot", errPreEffectUnavailable)
 	}
 	effect := ""
 	facts := preEffectFacts{SnapshotCompletedAt: snapshot.Observation.CompletedAt}
@@ -248,13 +269,13 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		provider := s.marketProvider()
 		if provider == nil {
 			s.recordPreEffectRefusal(attempt, "market_provider_unavailable")
-			return nil, fmt.Errorf("pre-effect market provider unavailable")
+			return nil, fmt.Errorf("%w: market provider", errPreEffectUnavailable)
 		}
 		symbol := operationSymbol(op)
-		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		quoteCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
 		quote, quoteErr := provider.Quote(quoteCtx, symbol)
 		cancel()
-		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		instrumentCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
 		instrument, instrumentErr := provider.Instrument(instrumentCtx, symbol)
 		cancel()
 		maxAge := attempt.QuoteMaxAgeSec
@@ -265,7 +286,7 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 			instrumentErr != nil || !preEffectInstrumentMatches(op, attempt, instrument) ||
 			!preEffectQuoteMatches(op, quote, instrument) {
 			s.recordPreEffectRefusal(attempt, "market_facts_invalid")
-			return nil, fmt.Errorf("pre-effect market facts are unavailable or invalid")
+			return nil, fmt.Errorf("%w: market facts", errPreEffectUnavailable)
 		}
 		facts.Quote, facts.Instrument = &quote, &instrument
 	case "cancel":
@@ -286,17 +307,17 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		}
 		if facts.TargetOrder == nil {
 			s.recordPreEffectRefusal(attempt, "cancel_target_not_working")
-			return nil, fmt.Errorf("pre-effect cancel target is not a current working order")
+			return nil, fmt.Errorf("%w: cancel target is not working", errPreEffectRejected)
 		}
 		if effect == "replace_cancel" {
 			provider := s.marketProvider()
 			if provider == nil {
-				return nil, fmt.Errorf("pre-effect replacement market provider unavailable")
+				return nil, fmt.Errorf("%w: replacement market provider", errPreEffectUnavailable)
 			}
-			quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			quoteCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
 			quote, quoteErr := provider.Quote(quoteCtx, operationSymbol(op))
 			cancel()
-			instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			instrumentCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
 			instrument, instrumentErr := provider.Instrument(instrumentCtx, operationSymbol(op))
 			cancel()
 			maxAge := attempt.QuoteMaxAgeSec
@@ -306,14 +327,25 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 			if quoteErr != nil || !quote.Usable(maxAge, time.Now().UTC()) || instrumentErr != nil ||
 				!preEffectQuoteMatches(op, quote, instrument) || !instrument.PrecisionSane() {
 				s.recordPreEffectRefusal(attempt, "replacement_facts_invalid")
-				return nil, fmt.Errorf("pre-effect replacement facts are unavailable or invalid")
+				return nil, fmt.Errorf("%w: replacement market facts", errPreEffectUnavailable)
 			}
 			facts.Quote, facts.Instrument = &quote, &instrument
 		}
 	default:
 		return nil, fmt.Errorf("pre-effect intent is unsupported")
 	}
-	expiresAt := time.Now().UTC().Add(s.brokerCallTimeout())
+	row, err := s.store.GetOperation(attempt.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	evaluation, err := s.evaluateLivePreEffect(
+		freshCtx, snapshot, attempt, row, op, facts.Quote, facts.Instrument, facts.TargetOrder, replay,
+	)
+	if err != nil {
+		s.recordPreEffectRefusal(attempt, "aggregate_gate_failed")
+		return nil, err
+	}
+	facts.Evaluation = evaluation
 	manifest, err := s.store.RecordPreEffectManifest(store.PreEffectManifestInput{
 		AttemptID: attempt.ID, FencingToken: attempt.Attempt,
 		AccountID: snapshot.Observation.AccountID, Effect: effect,
@@ -321,13 +353,408 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		ObservationGeneration:     snapshot.Observation.Generation,
 		ObservationManifestDigest: snapshot.Observation.ManifestDigest,
 		TargetBrokerOrderID:       attempt.TargetBrokerOrderID,
-		Facts:                     facts, ExpiresAt: expiresAt,
+		Facts:                     facts, ExpiresAt: evaluation.FreshnessExpiresAt, Ledger: "live",
+		ActivePolicyRevisionID: evaluation.ActivePolicyRevisionID,
+		ActivePolicyGeneration: evaluation.ActivePolicyGeneration,
+		ActivePolicyDigest:     evaluation.ActivePolicyDigest,
+		ExpectedLocalOpenRisk:  evaluation.LocalOpenRisk,
+		ExpectedLocalHeldCash:  evaluation.LocalHeldCash,
+		ExpectedOtherCloseQty:  evaluation.OtherLocalCloseQty,
 	})
 	if err != nil {
 		s.recordPreEffectRefusal(attempt, "manifest_persistence_failed")
+		if errors.Is(err, store.ErrPreEffectStale) {
+			return nil, fmt.Errorf("%w: %v", errPreEffectRejected, err)
+		}
 		return nil, err
 	}
 	return manifest, nil
+}
+
+func (s *server) evaluateLivePreEffect(
+	ctx context.Context,
+	snapshot *providerSnapshot,
+	attempt *store.ExecutionAttempt,
+	row *store.OperationRow,
+	op risk.Operation,
+	quote *broker.Quote,
+	instrument *broker.Instrument,
+	target *broker.ReadOrder,
+	replay bool,
+) (*preEffectEvaluation, error) {
+	var evaluation *preEffectEvaluation
+	err := s.store.WithLedgerLock(false, func(gate store.OperationGate) error {
+		active, err := gate.KernelPolicyAuthority()
+		if err != nil {
+			return err
+		}
+		bound, err := gate.BoundKernelPolicy(row)
+		if err != nil {
+			return err
+		}
+		databaseNow, err := gate.DatabaseNow()
+		if err != nil {
+			return err
+		}
+		reviewApproved := row.Class == "C" && row.Status == "approved"
+		maxAgeSec := minInt(bound.Policy.QuoteMaxAgeSec, active.Policy.QuoteMaxAgeSec)
+		if maxAgeSec <= 0 || snapshot.Observation.StartedAt.IsZero() ||
+			snapshot.Observation.StartedAt.After(databaseNow) {
+			return fmt.Errorf("provider snapshot freshness is invalid")
+		}
+		freshnessExpiresAt := snapshot.Observation.StartedAt.Add(time.Duration(maxAgeSec) * time.Second)
+		if quote != nil {
+			if !quote.Usable(maxAgeSec, databaseNow) {
+				return fmt.Errorf("quote became stale at pre-effect barrier")
+			}
+			freshnessExpiresAt = earlierTime(freshnessExpiresAt, quote.AsOf.Add(time.Duration(maxAgeSec)*time.Second))
+		}
+		if instrument != nil {
+			if instrument.AsOf.IsZero() || instrument.AsOf.After(databaseNow) ||
+				databaseNow.Sub(instrument.AsOf) > time.Duration(maxAgeSec)*time.Second {
+				return fmt.Errorf("instrument became stale at pre-effect barrier")
+			}
+			freshnessExpiresAt = earlierTime(freshnessExpiresAt, instrument.AsOf.Add(time.Duration(maxAgeSec)*time.Second))
+		}
+		if !databaseNow.Before(freshnessExpiresAt) {
+			return fmt.Errorf("provider snapshot became stale at pre-effect barrier")
+		}
+		if preEffectRequiresProposalTTL(attempt, op) {
+			if !reviewApproved && (row.ExpiresAt.IsZero() || !databaseNow.Before(row.ExpiresAt)) {
+				return fmt.Errorf("proposal is stale at pre-effect barrier")
+			}
+		}
+		resources, err := gate.LedgerResources("live", attempt.OperationID)
+		if err != nil {
+			return err
+		}
+		otherClose, err := gate.HeldCloseQuantityExcluding("live", operationSymbol(op), attempt.OperationID)
+		if err != nil {
+			return err
+		}
+		e := &preEffectEvaluation{
+			ActivePolicyRevisionID: active.ID, ActivePolicyGeneration: active.Generation,
+			ActivePolicyDigest: active.Digest, LocalOpenRisk: resources.OpenRisk,
+			LocalHeldCash: resources.HeldCash, OtherLocalCloseQty: otherClose,
+			FreshnessExpiresAt: freshnessExpiresAt,
+		}
+		if replay && attempt.Intent == "place" && sameReferenceOrderVisible(snapshot.Orders, attempt.ClientOrderID) {
+			return fmt.Errorf("same-reference Provider candidate appeared before replay")
+		}
+		effectOp := op
+		if attempt.Intent == "place" && attempt.Seq > 1 {
+			effectOp.Qty = attempt.Qty
+			if effectOp.Action == "open" {
+				remaining, err := gate.HeldOpenResources(attempt.OperationID)
+				if err != nil {
+					return err
+				}
+				effectOp.DerivedMaxRisk = remaining.OpenRisk
+				effectOp.RequiredCash = remaining.HeldCash
+				effectOp.MaxRiskUSD = nil
+			}
+		}
+		switch attempt.Intent {
+		case "place":
+			if effectOp.Action == "open" {
+				positionRisk, workingRisk, err := aggregateExternalOpenRisk(snapshot, gate)
+				if err != nil {
+					return err
+				}
+				e.ExternalPositionRisk, e.ExternalWorkingRisk = positionRisk, workingRisk
+				e.AggregateOpenRisk, err = addMicros(resources.OpenRisk, positionRisk, workingRisk)
+				if err != nil {
+					return err
+				}
+				e.EffectiveBuyingPower, err = spendableBuyingPower(snapshot.Account.BuyingPower, resources.HeldCash)
+				if err != nil {
+					return err
+				}
+				window, err := s.databaseMarketWindow(gate)
+				if err != nil {
+					return err
+				}
+				trades, err := gate.CountTradesForDayExcluding(false, window.start, window.end, attempt.OperationID)
+				if err != nil {
+					return err
+				}
+				day := risk.DayState{
+					TradesToday: trades, OpenRisk: e.AggregateOpenRisk,
+					Equity: snapshot.Account.Equity, EquityKnown: snapshot.Account.EquityKnown,
+					BuyingPower: e.EffectiveBuyingPower,
+				}
+				boundVerdict := risk.ClassifyAt(effectOp, bound.Policy, day, quote, databaseNow)
+				activeVerdict := risk.ClassifyAt(effectOp, active.Policy, day, quote, databaseNow)
+				if boundVerdict.Class == "REJECT" || activeVerdict.Class == "REJECT" ||
+					(!reviewApproved && (boundVerdict.Class != "B" || activeVerdict.Class != "B")) {
+					return fmt.Errorf("open authority became stale: bound=%s active=%s", firstReason(boundVerdict), firstReason(activeVerdict))
+				}
+			} else if effectOp.Action == "close" {
+				externalClose, err := validateFreshCloseCapacity(snapshot, effectOp, otherClose)
+				if err != nil {
+					return err
+				}
+				e.ExternalWorkingClose = externalClose
+			} else {
+				return fmt.Errorf("place operation changed semantics")
+			}
+		case "cancel":
+			if target == nil || target.BrokerOrderID != attempt.TargetBrokerOrderID {
+				return fmt.Errorf("cancel target changed at pre-effect barrier")
+			}
+			if op.Action == "cancel" {
+				mayOpen, mayClose, err := workingOrderEffects(*target, snapshot.Positions)
+				if err != nil || !mayOpen || mayClose {
+					return fmt.Errorf("cancel target is not proven risk-reducing")
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported pre-effect intent")
+		}
+		evaluation = e
+		return nil
+	})
+	if err == nil || errors.Is(err, store.ErrUnavailable) || errors.Is(err, errPreEffectRejected) {
+		return evaluation, err
+	}
+	return nil, fmt.Errorf("%w: %v", errPreEffectRejected, err)
+}
+
+func preEffectRequiresProposalTTL(attempt *store.ExecutionAttempt, op risk.Operation) bool {
+	if attempt.Intent == "cancel" && op.Action != "cancel" {
+		return false
+	}
+	// A replacement place is durable recovery of an already-authorized working
+	// order and intentionally survives the original proposal TTL. It still
+	// crosses every current-policy, aggregate-risk and Provider-fact barrier.
+	return attempt.Intent != "place" || attempt.Seq <= 1
+}
+
+func aggregateExternalOpenRisk(snapshot *providerSnapshot, gate store.OperationGate) (units.Micros, units.Micros, error) {
+	var positionRisk, workingRisk units.Micros
+	seenPositions := map[string]bool{}
+	for _, position := range snapshot.Positions {
+		if position.Kind == "option" {
+			return 0, 0, fmt.Errorf("option-position coexistence is not certified")
+		}
+		key := position.Kind + "\x00" + position.Symbol
+		if seenPositions[key] {
+			return 0, 0, fmt.Errorf("aggregate position identity is ambiguous")
+		}
+		seenPositions[key] = true
+		if position.Qty < 0 {
+			return 0, 0, fmt.Errorf("external short position cannot authorize new risk")
+		}
+		internalQty, err := gate.OpenExposureQuantity("live", position.Symbol, position.Kind)
+		if err != nil {
+			return 0, 0, err
+		}
+		if internalQty < 0 {
+			return 0, 0, fmt.Errorf("internal exposure quantity is invalid")
+		}
+		if position.Qty <= internalQty {
+			continue
+		}
+		extra := position.Qty - internalQty
+		if !position.AvgPriceKnown || position.AvgPrice <= 0 {
+			return 0, 0, fmt.Errorf("external position risk is unknown")
+		}
+		riskAmount, err := units.MulQtyPrice(extra, position.AvgPrice, position.Multiplier, true)
+		if err != nil {
+			return 0, 0, err
+		}
+		positionRisk, err = units.Add(positionRisk, riskAmount)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	origins := map[string]string{}
+	for _, object := range snapshot.View.Objects {
+		if object.Family == store.BrokerFamilyOrders {
+			origins[object.ObjectKey] = object.Origin
+		}
+	}
+	for _, order := range snapshot.Orders {
+		if origins[order.BrokerOrderID] == "alpheus" {
+			continue
+		}
+		if order.Kind == "option" {
+			return 0, 0, fmt.Errorf("external option-order coexistence is not certified")
+		}
+		mayOpen, mayClose, err := workingOrderEffects(order, snapshot.Positions)
+		if err != nil || (mayOpen && mayClose) {
+			return 0, 0, fmt.Errorf("working order effect is ambiguous")
+		}
+		if !mayOpen {
+			continue
+		}
+		if order.Side != "buy" || !order.LimitPriceKnown || order.LimitPrice <= 0 {
+			return 0, 0, fmt.Errorf("working opening order risk is unbounded")
+		}
+		remaining := order.Qty - order.FilledQty
+		multiplier := int64(1)
+		if order.Kind == "option" {
+			multiplier = 100
+		}
+		riskAmount, err := units.MulQtyPrice(remaining, order.LimitPrice, multiplier, true)
+		if err != nil {
+			return 0, 0, err
+		}
+		workingRisk, err = units.Add(workingRisk, riskAmount)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return positionRisk, workingRisk, nil
+}
+
+func validateFreshCloseCapacity(snapshot *providerSnapshot, op risk.Operation, otherLocal units.Qty) (units.Qty, error) {
+	var matched *broker.Position
+	for i := range snapshot.Positions {
+		position := &snapshot.Positions[i]
+		if position.Symbol != operationSymbol(op) || position.Qty == 0 {
+			continue
+		}
+		if matched != nil {
+			return 0, fmt.Errorf("close position identity is ambiguous")
+		}
+		matched = position
+	}
+	if matched == nil || matched.Kind != op.Kind || matched.Multiplier != op.Multiplier || op.InstrumentID == "" ||
+		(matched.Kind == "option" && matched.InstrumentID != op.InstrumentID) ||
+		(matched.Kind == "equity" && matched.InstrumentID != "" && matched.InstrumentID != op.InstrumentID) {
+		return 0, fmt.Errorf("close position changed at pre-effect barrier")
+	}
+	wantSide := "sell"
+	if matched.Qty < 0 {
+		wantSide = "buy"
+	}
+	if op.Side != wantSide {
+		return 0, fmt.Errorf("close direction changed at pre-effect barrier")
+	}
+	positionQty, err := units.AbsQty(matched.Qty)
+	if err != nil {
+		return 0, err
+	}
+	var externalClose units.Qty
+	origins := map[string]string{}
+	for _, object := range snapshot.View.Objects {
+		if object.Family == store.BrokerFamilyOrders {
+			origins[object.ObjectKey] = object.Origin
+		}
+	}
+	for _, order := range snapshot.Orders {
+		if origins[order.BrokerOrderID] == "alpheus" {
+			continue
+		}
+		mayOpen, mayClose, effectErr := workingOrderEffects(order, snapshot.Positions)
+		if effectErr != nil || (mayOpen && mayClose) {
+			return 0, fmt.Errorf("working close order effect is ambiguous")
+		}
+		if mayClose && order.Symbol == matched.Symbol && order.Kind == matched.Kind {
+			externalClose, effectErr = units.AddQty(externalClose, order.Qty-order.FilledQty)
+			if effectErr != nil {
+				return 0, effectErr
+			}
+		}
+	}
+	reserved, err := units.AddQty(otherLocal, externalClose)
+	if err != nil {
+		return 0, err
+	}
+	if reserved > positionQty || op.Qty > positionQty-reserved {
+		return 0, fmt.Errorf("proposal is stale: aggregate closable quantity changed")
+	}
+	return externalClose, nil
+}
+
+func workingOrderEffects(order broker.ReadOrder, positions []broker.Position) (bool, bool, error) {
+	remaining := order.Qty - order.FilledQty
+	if remaining <= 0 {
+		return false, false, fmt.Errorf("working order has no remaining quantity")
+	}
+	declaredClose := false
+	switch order.PositionEffect {
+	case "open":
+		return true, false, nil
+	case "close":
+		declaredClose = true
+	case "unknown":
+	default:
+		return false, false, fmt.Errorf("working order effect is invalid")
+	}
+	var position *broker.Position
+	for i := range positions {
+		candidate := &positions[i]
+		identityMatches := false
+		if order.InstrumentID != "" && candidate.InstrumentID != "" {
+			identityMatches = candidate.InstrumentID == order.InstrumentID
+		} else {
+			identityMatches = candidate.Symbol == order.Symbol && candidate.Kind == order.Kind
+		}
+		if !identityMatches || candidate.Qty == 0 {
+			continue
+		}
+		if position != nil {
+			return false, false, fmt.Errorf("working order position match is ambiguous")
+		}
+		position = candidate
+	}
+	if position == nil {
+		if declaredClose {
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+	positionQty, err := units.AbsQty(position.Qty)
+	if err != nil {
+		return false, false, err
+	}
+	closingSide := "sell"
+	if position.Qty < 0 {
+		closingSide = "buy"
+	}
+	if order.Side != closingSide {
+		if declaredClose {
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+	if remaining > positionQty {
+		return true, true, nil
+	}
+	return false, true, nil
+}
+
+func sameReferenceOrderVisible(orders []broker.ReadOrder, clientOrderID string) bool {
+	if strings.TrimSpace(clientOrderID) == "" {
+		return false
+	}
+	for _, order := range orders {
+		if order.ClientOrderID == clientOrderID {
+			return true
+		}
+	}
+	return false
+}
+
+func addMicros(values ...units.Micros) (units.Micros, error) {
+	var total units.Micros
+	var err error
+	for _, value := range values {
+		total, err = units.Add(total, value)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func earlierTime(left, right time.Time) time.Time {
+	if right.Before(left) {
+		return right
+	}
+	return left
 }
 
 func preEffectInstrumentMatches(op risk.Operation, attempt *store.ExecutionAttempt, instrument broker.Instrument) bool {

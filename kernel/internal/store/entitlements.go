@@ -131,6 +131,16 @@ func (t *ledgerTx) HeldCloseQuantity(ledger, symbol string) (units.Qty, error) {
 	return units.Qty(quantity), normalizeDBError(err)
 }
 
+func (t *ledgerTx) HeldCloseQuantityExcluding(ledger, symbol, operationID string) (units.Qty, error) {
+	var quantity int64
+	err := t.tx.QueryRowContext(t.ctx, `SELECT COALESCE(sum(remaining_qty),0)
+		FROM close_reservation
+		WHERE ledger=$1 AND symbol=$2 AND state='held'
+		  AND (NULLIF($3,'') IS NULL OR operation_id<>NULLIF($3,'')::uuid)`,
+		ledger, symbol, operationID).Scan(&quantity)
+	return units.Qty(quantity), normalizeDBError(err)
+}
+
 func (t *ledgerTx) InsertTradeGrant(grant TradeGrant) error {
 	var authorizedRisk any
 	var liveCanaryRevisionID any
@@ -547,6 +557,11 @@ func (s *Store) markAttemptSent(id string, fencingToken int, replay bool, replay
 		return false, normalizeDBError(err)
 	}
 	defer tx.Rollback()
+	if manifestID != "" {
+		if err := lockPreEffectEvaluationScope(ctx, tx, manifestID); err != nil {
+			return false, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
 		return false, normalizeDBError(err)
 	}

@@ -516,6 +516,39 @@ func m11UnknownReplayFixture(t *testing.T) (*server, *memoryStore, *candidateExe
 	return nil, nil, nil, store.ExecutionAttempt{}
 }
 
+func TestSameRefReplayStopsWhenCandidateAppearsInPreEffectSnapshot(t *testing.T) {
+	s, st, execution, attempt := m11UnknownReplayFixture(t)
+	venue, ok := s.accountProvider().(*broker.Fake)
+	if !ok {
+		t.Fatal("fixture account provider is not FakeBroker")
+	}
+	result, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+		ClientOrderID: attempt.ClientOrderID, Symbol: "EQ", Side: "buy", PositionEffect: "open",
+		Qty: units.MustQty("1"), Limit: units.MustMicros("1"), Kind: "equity",
+	})
+	if err != nil || result.State != "submitted" {
+		t.Fatalf("seed late Provider candidate: result=%+v err=%v", result, err)
+	}
+	claimed, err := st.ClaimRecoverableAttemptLive(
+		attempt.ID, "candidate-race-recovery", "unknown", attempt.Attempt, 30*time.Second,
+	)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); !errors.Is(err, errPreEffectRejected) {
+		t.Fatalf("reconcile error=%v", err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	placeCalls, findCalls, _ := execution.callCounts()
+	if err != nil || gateErr != nil || placeCalls != 1 || findCalls != 1 || current.State != "unknown" ||
+		current.ReplayCount != 0 || current.ProviderErrorCode != "pre_effect_rejected" ||
+		gate.UnknownAttemptID != attempt.ID {
+		t.Fatalf("attempt=%+v gate=%+v calls=%d/%d err=%v gate_err=%v",
+			current, gate, placeCalls, findCalls, err, gateErr)
+	}
+}
+
 func TestSameRefReplayExpiresWithoutProviderEffect(t *testing.T) {
 	s, st, execution, attempt := m11UnknownReplayFixture(t)
 	st.mu.Lock()
@@ -718,6 +751,7 @@ func m11StagePendingEquityOpen(t *testing.T) (*server, *memoryStore, *candidateE
 		Qty: units.MustQty("1"), QtyIncrement: units.MustQty("1"), Multiplier: 1,
 		WorkingPrice: units.MustMicros("10"), ApprovedPriceCap: units.MustMicros("10"),
 		DerivedMaxRisk: units.MustMicros("10"), RequiredCash: units.MustMicros("10"),
+		Plan: map[string]string{"stop": "x", "invalidation": "x", "time_stop": "x", "target": "x"},
 	}
 	operationID := store.NewID()
 	if err := st.InsertOperation(operationID, op.Proposer, "B", "auto_approved", op, risk.Verdict{Class: "B"}, nil); err != nil {

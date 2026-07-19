@@ -69,6 +69,24 @@ func (t *ledgerTx) LedgerResources(ledger, excludeOperationID string) (LedgerRes
 	return ledgerResources(t.ctx, t.tx, ledger, excludeOperationID)
 }
 
+func (t *ledgerTx) HeldOpenResources(operationID string) (LedgerResources, error) {
+	var resources LedgerResources
+	var count, risk, cash int64
+	err := t.tx.QueryRowContext(t.ctx, `SELECT count(*),COALESCE(sum(remaining_risk_micros),0),
+		COALESCE(sum(remaining_cash_micros),0) FROM open_reservation
+		WHERE operation_id=$1 AND ledger='live' AND resource_state='held'`, operationID).Scan(
+		&count, &risk, &cash,
+	)
+	if err != nil {
+		return resources, normalizeDBError(err)
+	}
+	if count != 1 || risk <= 0 || cash <= 0 {
+		return resources, fmt.Errorf("operation has no exact held open reservation")
+	}
+	resources.OpenRisk, resources.HeldCash = units.Micros(risk), units.Micros(cash)
+	return resources, nil
+}
+
 func (s *Store) LedgerResources(ledger, excludeOperationID string) (LedgerResources, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()

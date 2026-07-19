@@ -461,6 +461,19 @@ func (m *memoryStore) HeldCloseQuantity(ledger, symbol string) (units.Qty, error
 	return quantity, nil
 }
 
+func (m *memoryStore) HeldCloseQuantityExcluding(ledger, symbol, operationID string) (units.Qty, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var held units.Qty
+	for _, reservation := range m.reservations {
+		if reservation.Ledger == ledger && reservation.Symbol == symbol && reservation.State == "held" &&
+			(operationID == "" || reservation.OperationID != operationID) {
+			held += reservation.RemainingQty
+		}
+	}
+	return held, nil
+}
+
 func (m *memoryStore) InsertTradeGrant(grant store.TradeGrant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -545,9 +558,26 @@ func (m *memoryStore) RecordBrokerObservation(input store.BrokerObservationInput
 			if err != nil {
 				return nil, err
 			}
+			origin, evidence := "external", "unmatched"
+			if family.Family == store.BrokerFamilyOrders {
+				var observed broker.ReadOrder
+				if json.Unmarshal(canonical, &observed) == nil {
+					for _, local := range m.orders {
+						attempt := m.attempts[local.ExecutionAttemptID]
+						exactID := local.BrokerOrderID != "" && local.BrokerOrderID == observed.BrokerOrderID
+						exactClient := observed.ClientOrderID != "" && local.ClientOrderID == observed.ClientOrderID
+						if (exactID || exactClient) && attempt.ProviderAccountID == input.AccountID &&
+							local.Symbol == observed.Symbol && local.Side == observed.Side && local.Kind == observed.Kind &&
+							local.Qty == observed.Qty && observed.LimitPriceKnown && local.Limit == observed.LimitPrice {
+							origin, evidence = "alpheus", "exact_broker_order_id"
+							break
+						}
+					}
+				}
+			}
 			objects = append(objects, store.BrokerObservedObject{
 				Family: family.Family, ObjectKey: item.ObjectKey, ObservedAt: item.ObservedAt,
-				Canonical: canonical, Origin: "external", Evidence: "unmatched",
+				Canonical: canonical, Origin: origin, Evidence: evidence,
 			})
 		}
 	}
@@ -617,6 +647,11 @@ func (m *memoryStore) RecordPreEffectManifest(input store.PreEffectManifestInput
 		ObservationManifestDigest: input.ObservationManifestDigest,
 		TargetBrokerOrderID:       input.TargetBrokerOrderID, Facts: facts,
 		FactsDigest: fmt.Sprintf("%x", digest[:]), ExpiresAt: input.ExpiresAt, CreatedAt: time.Now().UTC(),
+		Ledger: input.Ledger, ActivePolicyRevisionID: input.ActivePolicyRevisionID,
+		ActivePolicyGeneration: input.ActivePolicyGeneration, ActivePolicyDigest: input.ActivePolicyDigest,
+		ExpectedLocalOpenRisk: input.ExpectedLocalOpenRisk,
+		ExpectedLocalHeldCash: input.ExpectedLocalHeldCash,
+		ExpectedOtherCloseQty: input.ExpectedOtherCloseQty,
 	}
 	m.preEffectManifests[manifest.ID] = manifest
 	copy := manifest
@@ -677,6 +712,24 @@ func (m *memoryStore) LedgerResources(ledger, excludeOperationID string) (store.
 			resources.OpenRisk += reservation.RemainingRisk
 			resources.HeldCash += reservation.RemainingCash
 		}
+	}
+	return resources, nil
+}
+
+func (m *memoryStore) HeldOpenResources(operationID string) (store.LedgerResources, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var resources store.LedgerResources
+	count := 0
+	for _, reservation := range m.openReservations {
+		if reservation.OperationID == operationID && reservation.Ledger == "live" && reservation.ResourceState == "held" {
+			count++
+			resources.OpenRisk += reservation.RemainingRisk
+			resources.HeldCash += reservation.RemainingCash
+		}
+	}
+	if count != 1 || resources.OpenRisk <= 0 || resources.HeldCash <= 0 {
+		return store.LedgerResources{}, fmt.Errorf("operation has no exact held open reservation")
 	}
 	return resources, nil
 }

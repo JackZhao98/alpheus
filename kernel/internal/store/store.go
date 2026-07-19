@@ -43,6 +43,7 @@ var (
 	ErrLiveExecutionSuspended     = errors.New("live execution suspended")
 	ErrLiveSendHalted             = errors.New("live send halted")
 	ErrReplayWindowExpired        = errors.New("replay window expired")
+	ErrPreEffectStale             = errors.New("pre-effect authority stale")
 	ErrInvalidControlWarningQuery = errors.New("invalid control warning query")
 	ErrUnavailable                = errors.New("database unavailable")
 )
@@ -70,6 +71,8 @@ type OperationGate interface {
 	LockLedger(shadow bool) error
 	LockLedgerSymbol(ledger, symbol string) error
 	HeldCloseQuantity(ledger, symbol string) (units.Qty, error)
+	HeldCloseQuantityExcluding(ledger, symbol, operationID string) (units.Qty, error)
+	HeldOpenResources(operationID string) (LedgerResources, error)
 	InsertTradeGrant(grant TradeGrant) error
 	TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (TradeGrantUsage, error)
 	LiveCanaryAuthority(marketDay time.Time) (*LiveCanaryRevision, error)

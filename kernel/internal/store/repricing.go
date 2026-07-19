@@ -35,10 +35,10 @@ func (s *Store) StageRepriceCancel(orderID string) (*ExecutionAttempt, error) {
 		}
 		return nil, normalizeDBError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(ledger == "shadow")); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
 		return nil, normalizeDBError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(ledger == "shadow")); err != nil {
 		return nil, normalizeDBError(err)
 	}
 	order, err := scanOrder(tx.QueryRowContext(ctx,
@@ -103,6 +103,14 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 		FROM execution_attempt a JOIN orders o ON o.broker_order_id=a.target_broker_order_id
 		WHERE a.id=$1`, cancelAttemptID).Scan(&targetBrokerOrderID, &ledger); err != nil {
 		return nil, normalizeDBError(err)
+	}
+	if replacement != nil {
+		// A replacement is authorized under the current policy, so freeze that
+		// policy before taking the ledger lock. This preserves the same global
+		// policy -> ledger order used by proposal and review transactions.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
+			return nil, normalizeDBError(err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(ledger == "shadow")); err != nil {
 		return nil, normalizeDBError(err)

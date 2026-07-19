@@ -777,6 +777,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	var window marketWindow
 	var quote *broker.Quote
+	var closeInstrument *broker.Instrument
 	if op.Action == "open" || op.Action == "close" {
 		sym := op.Symbol
 		if sym == "" {
@@ -787,6 +788,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		if quoteErr == nil {
 			quote = &q
+		}
+		if op.Action == "close" && s.tradingMode() == config.ModeLive && !op.Shadow {
+			instrumentCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+			instrument, instrumentErr := s.marketProvider().Instrument(instrumentCtx, sym)
+			cancel()
+			if instrumentErr == nil {
+				closeInstrument = &instrument
+			}
 		}
 	}
 	if op.Action == "open" {
@@ -926,6 +935,15 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				normalized, err := normalizeClose(probe, positions)
 				if err != nil {
 					return fmt.Errorf("%w: %v", errInvalidClose, err)
+				}
+				if normalized.Kind == "equity" && normalized.InstrumentID == "" {
+					if closeInstrument == nil || closeInstrument.InstrumentID == "" ||
+						closeInstrument.Symbol != symbol || closeInstrument.Kind != "equity" ||
+						closeInstrument.Multiplier != normalized.Multiplier || !closeInstrument.PrecisionSane() {
+						return fmt.Errorf("%w: equity position instrument identity is unavailable", errInvalidClose)
+					}
+					normalized.InstrumentID = closeInstrument.InstrumentID
+					normalized.QtyIncrement = closeInstrument.QtyIncrement
 				}
 				exposureQty, err := gate.OpenExposureQuantity(ledger, symbol, normalized.Kind)
 				if err != nil {
@@ -1236,6 +1254,22 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
+		if errors.Is(err, errPreEffectRejected) {
+			resp["status"] = "failed"
+			resp["attempt_id"] = executionAttempt.ID
+			resp["attempt_state"] = "failed"
+			resp["error"] = "proposal_stale"
+			writeJSON(w, http.StatusConflict, resp)
+			return
+		}
+		if errors.Is(err, errPreEffectUnavailable) {
+			resp["status"] = "failed"
+			resp["attempt_id"] = executionAttempt.ID
+			resp["attempt_state"] = "failed"
+			resp["error"] = "pre_effect_unavailable"
+			writeJSON(w, http.StatusBadGateway, resp)
+			return
+		}
 		if errors.Is(err, errBrokerMutationFailed) {
 			resp["status"] = "failed"
 			resp["attempt_id"] = executionAttempt.ID
@@ -1316,6 +1350,8 @@ var (
 	errBrokerDataUnavailable        = errors.New("broker data unavailable")
 	errBrokerMutationFailed         = errors.New("broker mutation failed")
 	errBrokerResultUnknown          = errors.New("broker result uncertain")
+	errPreEffectRejected            = errors.New("pre-effect proposal rejected")
+	errPreEffectUnavailable         = errors.New("pre-effect facts unavailable")
 	errInvalidClose                 = errors.New("invalid close")
 	errPaperExecutionFailed         = errors.New("paper execution failed")
 	errReviewGateRejected           = errors.New("review gate rejected")
@@ -1509,12 +1545,28 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 	}
 	var preEffect *store.PreEffectManifest
 	if s.tradingMode() == config.ModeLive {
-		preEffect, err = s.captureLivePreEffect(ctx, attempt, op)
+		preEffect, err = s.captureLivePreEffect(ctx, attempt, op, replay)
 	}
 	if err != nil {
+		if replay {
+			code := "pre_effect_unavailable"
+			message := "pre-effect refresh failed before same-reference replay"
+			if errors.Is(err, errPreEffectRejected) {
+				code = "pre_effect_rejected"
+				message = "pre-effect barrier rejected same-reference replay"
+			}
+			unknownErr := s.keepAttemptUnknown(attempt, message, code, "")
+			return nil, errors.Join(err, unknownErr)
+		}
+		providerCode := "pre_effect_unavailable"
+		lastError := "pre-effect refresh failed"
+		if errors.Is(err, errPreEffectRejected) {
+			providerCode = "proposal_stale"
+			lastError = "proposal rejected at pre-effect barrier"
+		}
 		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
-			State: "failed", LastError: "pre-effect refresh failed",
-			ProviderErrorCode: "pre_effect_unavailable",
+			State: "failed", LastError: lastError,
+			ProviderErrorCode: providerCode,
 			OperationStatus:   "failed", ReleaseReservation: true,
 		})
 		if resolveErr != nil {
@@ -1551,6 +1603,23 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 				return nil, fmt.Errorf("halt suppressed provider send but cleanup lost fencing: state=%s fencing_token=%d", current.State, current.Attempt)
 			}
 			return nil, errors.Join(markErr, errBrokerMutationFailed)
+		}
+		if replay && (markErr != nil || !marked) {
+			code := "replay_send_fence_lost"
+			message := "same-reference replay send fence was not available"
+			if errors.Is(markErr, store.ErrPreEffectStale) {
+				code = "pre_effect_rejected"
+				message = "pre-effect authority changed before same-reference replay"
+			}
+			unknownErr := s.keepAttemptUnknown(attempt, message, code, "")
+			return nil, errors.Join(markErr, unknownErr, fmt.Errorf("provider replay send was not durably marked"))
+		}
+		if errors.Is(markErr, store.ErrPreEffectStale) {
+			_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+				State: "failed", LastError: "proposal changed before provider send",
+				ProviderErrorCode: "proposal_stale", OperationStatus: "failed", ReleaseReservation: true,
+			})
+			return nil, errors.Join(errPreEffectRejected, markErr, resolveErr)
 		}
 		if markErr != nil || !marked {
 			return nil, errors.Join(markErr, fmt.Errorf("provider send was not durably marked"))
