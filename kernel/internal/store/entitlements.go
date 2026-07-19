@@ -515,6 +515,20 @@ func (s *Store) GetLiveExecutionGate() (LiveExecutionGate, error) {
 }
 
 func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *ProviderIntentEvidence) (bool, error) {
+	return s.markAttemptSent(id, fencingToken, replay, replayGuard, replayEvidence, "")
+}
+
+// MarkAttemptSentWithManifest is the only send transition used by the live
+// kernel. The immutable pre-effect manifest is verified and bound in the same
+// transaction which consumes first-send or same-reference replay authority.
+func (s *Store) MarkAttemptSentWithManifest(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *ProviderIntentEvidence, manifestID string) (bool, error) {
+	if strings.TrimSpace(manifestID) == "" {
+		return false, fmt.Errorf("pre-effect manifest is required")
+	}
+	return s.markAttemptSent(id, fencingToken, replay, replayGuard, replayEvidence, manifestID)
+}
+
+func (s *Store) markAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *ProviderIntentEvidence, manifestID string) (bool, error) {
 	if replay {
 		if replayEvidence == nil || strings.TrimSpace(replayEvidence.AccountID) == "" ||
 			len(replayEvidence.Canonical) == 0 || !json.Valid(replayEvidence.Canonical) ||
@@ -626,8 +640,20 @@ func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool, replay
 		}
 		return false, nil
 	}
+	if manifestID != "" {
+		sendOrdinal := 0
+		if replay {
+			sendOrdinal = 1
+		}
+		if err := validatePreEffectManifestForSend(
+			ctx, tx, manifestID, id, fencingToken, sendOrdinal, databaseNow,
+		); err != nil {
+			return false, err
+		}
+	}
 	if err := insertEvent(ctx, tx, "execution_attempt_sent", map[string]any{
 		"attempt_id": id, "fencing_token": fencingToken, "replay": replay,
+		"pre_effect_manifest_id": manifestID,
 	}); err != nil {
 		return false, normalizeDBError(err)
 	}

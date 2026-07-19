@@ -113,17 +113,22 @@ func (s *server) executePendingRepriceCancel(ctx context.Context, cancelAttempt 
 }
 
 func (s *server) executeClaimedRepriceCancel(ctx context.Context, claimed *store.ExecutionAttempt, order *store.Order, op risk.Operation, policyReason string) error {
-	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-	bindingErr := s.assertLiveAccountBinding(bindingCtx, order.OperationID)
-	cancel()
-	if bindingErr != nil {
+	var preEffect *store.PreEffectManifest
+	var preEffectErr error
+	if s.tradingMode() == config.ModeLive {
+		preEffect, preEffectErr = s.captureLivePreEffect(ctx, claimed, op)
+	}
+	if preEffectErr != nil {
 		_, resolveErr := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
-			State: "failed", LastError: "account binding failed",
+			State: "failed", LastError: "pre-effect refresh failed",
+			ProviderErrorCode: "pre_effect_unavailable",
 		})
-		return errors.Join(bindingErr, resolveErr)
+		return errors.Join(preEffectErr, resolveErr)
 	}
 	if s.tradingMode() == config.ModeLive {
-		marked, markErr := s.store.MarkAttemptSent(claimed.ID, claimed.Attempt, false, 0, nil)
+		marked, markErr := s.store.MarkAttemptSentWithManifest(
+			claimed.ID, claimed.Attempt, false, 0, nil, preEffect.ID,
+		)
 		if markErr != nil || !marked {
 			return errors.Join(markErr, fmt.Errorf("provider cancel send was not durably marked"))
 		}

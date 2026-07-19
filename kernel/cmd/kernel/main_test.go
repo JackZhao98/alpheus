@@ -87,6 +87,7 @@ type memoryStore struct {
 	brokerObservationGen   int64
 	brokerAccountView      *store.BrokerAccountView
 	brokerObservationViews map[string]*store.BrokerAccountView
+	preEffectManifests     map[string]store.PreEffectManifest
 }
 
 func newMemoryStore() *memoryStore {
@@ -117,17 +118,18 @@ func newMemoryStore() *memoryStore {
 		shadowAccount: store.ShadowAccount{
 			Cash: units.MustMicros("300"), BuyingPower: units.MustMicros("300"),
 		},
-		shadowPositions: map[string]store.ShadowPosition{},
-		exposureQty:     map[string]units.Qty{},
-		firstExposureOp: map[string]string{},
-		attempts:        map[string]store.ExecutionAttempt{},
-		orders:          map[string]store.Order{},
-		fills:           map[string]memoryFill{},
-		verdicts:        map[string]json.RawMessage{},
-		blackboards:     map[string]json.RawMessage{},
-		eventPayloads:   map[string][]any{},
-		dayOpenEquity:   map[string]units.Micros{},
-		realizedPnL:     map[string]units.Micros{},
+		shadowPositions:    map[string]store.ShadowPosition{},
+		exposureQty:        map[string]units.Qty{},
+		firstExposureOp:    map[string]string{},
+		attempts:           map[string]store.ExecutionAttempt{},
+		orders:             map[string]store.Order{},
+		fills:              map[string]memoryFill{},
+		verdicts:           map[string]json.RawMessage{},
+		blackboards:        map[string]json.RawMessage{},
+		preEffectManifests: map[string]store.PreEffectManifest{},
+		eventPayloads:      map[string][]any{},
+		dayOpenEquity:      map[string]units.Micros{},
+		realizedPnL:        map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},
@@ -589,6 +591,38 @@ func (m *memoryStore) LoadBrokerAccountView(accountID string) (*store.BrokerAcco
 	return &copy, nil
 }
 
+func (m *memoryStore) RecordPreEffectManifest(input store.PreEffectManifestInput) (*store.PreEffectManifest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	attempt, ok := m.attempts[input.AttemptID]
+	view := m.brokerObservationViews[input.ObservationID]
+	if !ok || attempt.State != "claimed" || attempt.Attempt != input.FencingToken ||
+		view == nil || view.Observation.Status != "complete" ||
+		view.Observation.AccountID != input.AccountID || view.Observation.Generation != input.ObservationGeneration ||
+		view.Observation.ManifestDigest != input.ObservationManifestDigest || !time.Now().UTC().Before(input.ExpiresAt) {
+		return nil, fmt.Errorf("pre-effect manifest is invalid")
+	}
+	if input.ID == "" {
+		input.ID = store.NewID()
+	}
+	facts, err := json.Marshal(input.Facts)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(facts)
+	manifest := store.PreEffectManifest{
+		ID: input.ID, AttemptID: input.AttemptID, FencingToken: input.FencingToken,
+		AccountID: input.AccountID, Effect: input.Effect, ObservationID: input.ObservationID,
+		ObservationGeneration:     input.ObservationGeneration,
+		ObservationManifestDigest: input.ObservationManifestDigest,
+		TargetBrokerOrderID:       input.TargetBrokerOrderID, Facts: facts,
+		FactsDigest: fmt.Sprintf("%x", digest[:]), ExpiresAt: input.ExpiresAt, CreatedAt: time.Now().UTC(),
+	}
+	m.preEffectManifests[manifest.ID] = manifest
+	copy := manifest
+	return &copy, nil
+}
+
 func (m *memoryStore) KernelPolicyAuthority() (*store.KernelPolicyRevision, error) {
 	return m.LoadKernelPolicyAuthority()
 }
@@ -987,6 +1021,17 @@ func (m *memoryStore) MarkAttemptSent(id string, fencingToken int, replay bool, 
 	}
 	m.attempts[id] = attempt
 	return true, nil
+}
+
+func (m *memoryStore) MarkAttemptSentWithManifest(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence, manifestID string) (bool, error) {
+	m.mu.Lock()
+	manifest, ok := m.preEffectManifests[manifestID]
+	valid := ok && manifest.AttemptID == id && manifest.FencingToken == fencingToken && time.Now().UTC().Before(manifest.ExpiresAt)
+	m.mu.Unlock()
+	if !valid {
+		return false, fmt.Errorf("pre-effect manifest is invalid")
+	}
+	return m.MarkAttemptSent(id, fencingToken, replay, replayGuard, replayEvidence)
 }
 
 func (m *memoryStore) GetLiveExecutionGate() (store.LiveExecutionGate, error) {
@@ -1784,6 +1829,14 @@ func setQuote(b *broker.Fake, symbol, bid, ask string, openInterest int) {
 }
 
 func placeOrder(b *broker.Fake, symbol, side, qty, limit, kind string) (broker.OrderResult, error) {
+	multiplier := int64(1)
+	if kind == "option" {
+		multiplier = 100
+	}
+	b.SetInstrument(broker.Instrument{
+		Symbol: symbol, InstrumentID: "fake-instrument-" + symbol,
+		Kind: kind, Multiplier: multiplier,
+	})
 	return b.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
 		Symbol: symbol, Side: side, Qty: units.MustQty(qty), Limit: units.MustMicros(limit), Kind: kind,
 	})

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"alpheus/kernel/internal/broker"
+	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
 )
@@ -30,6 +32,13 @@ type observedAccount struct {
 	CashKnown     bool         `json:"cash_known"`
 	Source        string       `json:"source"`
 	AsOf          time.Time    `json:"as_of"`
+}
+
+type preEffectFacts struct {
+	SnapshotCompletedAt time.Time          `json:"snapshot_completed_at"`
+	Quote               *broker.Quote      `json:"quote,omitempty"`
+	Instrument          *broker.Instrument `json:"instrument,omitempty"`
+	TargetOrder         *broker.ReadOrder  `json:"target_order,omitempty"`
 }
 
 func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*providerSnapshot, error) {
@@ -60,7 +69,8 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 	accountFamily := store.BrokerObservationFamilyInput{
 		Family: store.BrokerFamilyAccount, Status: "error", ErrorCode: "unavailable", CompletedAt: accountCompleted,
 	}
-	if accountErr == nil && account.ExternalID == accountID && account.Source != "" && !account.AsOf.IsZero() {
+	if accountErr == nil && account.ExternalID == accountID && account.Source != "" &&
+		!account.AsOf.IsZero() && !account.AsOf.After(accountCompleted) {
 		snapshot.Account = account
 		source = account.Source
 		accountFamily.Status, accountFamily.ErrorCode = "success", ""
@@ -193,7 +203,7 @@ func brokerOrdersValid(orders []broker.ReadOrder, source string, completedAt tim
 		if order.BrokerOrderID == "" || order.Symbol == "" || (order.Side != "buy" && order.Side != "sell") ||
 			(order.Kind != "equity" && order.Kind != "option") ||
 			(order.PositionEffect != "open" && order.PositionEffect != "close" && order.PositionEffect != "unknown") ||
-			order.Qty <= 0 || order.FilledQty < 0 || order.FilledQty > order.Qty ||
+			strings.TrimSpace(order.State) == "" || order.Qty <= 0 || order.FilledQty < 0 || order.FilledQty > order.Qty ||
 			order.Source != source || order.AsOf.IsZero() || order.AsOf.After(completedAt) || seen[order.BrokerOrderID] {
 			return false
 		}
@@ -203,6 +213,143 @@ func brokerOrdersValid(orders []broker.ReadOrder, source string, completedAt tim
 		seen[order.BrokerOrderID] = true
 	}
 	return true
+}
+
+// captureLivePreEffect refreshes the whole shared account and then records the
+// action-specific facts required for the imminent Provider call. It performs
+// no mutation and returns only a short-lived, immutable manifest.
+func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.ExecutionAttempt, op risk.Operation) (*store.PreEffectManifest, error) {
+	if s.tradingMode() != config.ModeLive {
+		return nil, fmt.Errorf("pre-effect manifests are live-only")
+	}
+	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
+	cancel()
+	if bindingErr != nil {
+		return nil, bindingErr
+	}
+	snapshot, err := s.captureProviderSnapshot(ctx, "pre_effect")
+	if err != nil {
+		s.recordPreEffectRefusal(attempt, "account_snapshot_unavailable")
+		return nil, fmt.Errorf("pre-effect account snapshot unavailable")
+	}
+	effect := ""
+	facts := preEffectFacts{SnapshotCompletedAt: snapshot.Observation.CompletedAt}
+	switch attempt.Intent {
+	case "place":
+		if op.Action == "open" {
+			effect = "place_open"
+		} else if op.Action == "close" {
+			effect = "place_close"
+		}
+		if effect == "" {
+			return nil, fmt.Errorf("pre-effect place action is invalid")
+		}
+		provider := s.marketProvider()
+		if provider == nil {
+			s.recordPreEffectRefusal(attempt, "market_provider_unavailable")
+			return nil, fmt.Errorf("pre-effect market provider unavailable")
+		}
+		symbol := operationSymbol(op)
+		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		quote, quoteErr := provider.Quote(quoteCtx, symbol)
+		cancel()
+		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+		instrument, instrumentErr := provider.Instrument(instrumentCtx, symbol)
+		cancel()
+		maxAge := attempt.QuoteMaxAgeSec
+		if maxAge <= 0 {
+			maxAge = s.limits.QuoteMaxAgeSec
+		}
+		if quoteErr != nil || !quote.Usable(maxAge, time.Now().UTC()) ||
+			instrumentErr != nil || !preEffectInstrumentMatches(op, attempt, instrument) ||
+			!preEffectQuoteMatches(op, quote, instrument) {
+			s.recordPreEffectRefusal(attempt, "market_facts_invalid")
+			return nil, fmt.Errorf("pre-effect market facts are unavailable or invalid")
+		}
+		facts.Quote, facts.Instrument = &quote, &instrument
+	case "cancel":
+		if op.Action == "cancel" {
+			effect = "cancel_order"
+		} else if op.Action == "open" || op.Action == "close" {
+			effect = "replace_cancel"
+		}
+		if effect == "" {
+			return nil, fmt.Errorf("pre-effect cancel action is invalid")
+		}
+		for i := range snapshot.Orders {
+			if snapshot.Orders[i].BrokerOrderID == attempt.TargetBrokerOrderID {
+				target := snapshot.Orders[i]
+				facts.TargetOrder = &target
+				break
+			}
+		}
+		if facts.TargetOrder == nil {
+			s.recordPreEffectRefusal(attempt, "cancel_target_not_working")
+			return nil, fmt.Errorf("pre-effect cancel target is not a current working order")
+		}
+		if effect == "replace_cancel" {
+			provider := s.marketProvider()
+			if provider == nil {
+				return nil, fmt.Errorf("pre-effect replacement market provider unavailable")
+			}
+			quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			quote, quoteErr := provider.Quote(quoteCtx, operationSymbol(op))
+			cancel()
+			instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
+			instrument, instrumentErr := provider.Instrument(instrumentCtx, operationSymbol(op))
+			cancel()
+			maxAge := attempt.QuoteMaxAgeSec
+			if maxAge <= 0 {
+				maxAge = s.limits.QuoteMaxAgeSec
+			}
+			if quoteErr != nil || !quote.Usable(maxAge, time.Now().UTC()) || instrumentErr != nil ||
+				!preEffectQuoteMatches(op, quote, instrument) || !instrument.PrecisionSane() {
+				s.recordPreEffectRefusal(attempt, "replacement_facts_invalid")
+				return nil, fmt.Errorf("pre-effect replacement facts are unavailable or invalid")
+			}
+			facts.Quote, facts.Instrument = &quote, &instrument
+		}
+	default:
+		return nil, fmt.Errorf("pre-effect intent is unsupported")
+	}
+	expiresAt := time.Now().UTC().Add(s.brokerCallTimeout())
+	manifest, err := s.store.RecordPreEffectManifest(store.PreEffectManifestInput{
+		AttemptID: attempt.ID, FencingToken: attempt.Attempt,
+		AccountID: snapshot.Observation.AccountID, Effect: effect,
+		ObservationID:             snapshot.Observation.ID,
+		ObservationGeneration:     snapshot.Observation.Generation,
+		ObservationManifestDigest: snapshot.Observation.ManifestDigest,
+		TargetBrokerOrderID:       attempt.TargetBrokerOrderID,
+		Facts:                     facts, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		s.recordPreEffectRefusal(attempt, "manifest_persistence_failed")
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func preEffectInstrumentMatches(op risk.Operation, attempt *store.ExecutionAttempt, instrument broker.Instrument) bool {
+	return instrument.InstrumentID != "" && instrument.InstrumentID == op.InstrumentID &&
+		instrument.Kind == op.Kind && instrument.Multiplier == op.Multiplier &&
+		instrument.Source != "" && !instrument.AsOf.IsZero() && !instrument.AsOf.After(time.Now().UTC()) &&
+		instrument.PrecisionSane() && instrument.SupportsPrice(attempt.Limit) &&
+		instrument.QtyIncrement > 0 && attempt.Qty%instrument.QtyIncrement == 0
+}
+
+func preEffectQuoteMatches(op risk.Operation, quote broker.Quote, instrument broker.Instrument) bool {
+	symbolMatches := quote.Symbol == operationSymbol(op)
+	if op.Kind == "option" {
+		symbolMatches = symbolMatches || quote.Symbol == instrument.InstrumentID
+	}
+	return symbolMatches && quote.Source != "" && quote.Source == instrument.Source
+}
+
+func (s *server) recordPreEffectRefusal(attempt *store.ExecutionAttempt, reason string) {
+	_ = s.store.InsertEvent("execution_pre_effect_refused", map[string]any{
+		"attempt_id": attempt.ID, "fencing_token": attempt.Attempt, "reason": reason,
+	})
 }
 
 func brokerFillsValid(fills []broker.ReadFill, source string, completedAt time.Time) bool {

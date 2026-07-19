@@ -84,7 +84,8 @@ type storeAPI interface {
 	ClaimPendingAttemptLive(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
 	ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
 	PrepareAttemptProviderIntent(id string, fencingToken int, accountID string, canonical json.RawMessage, fingerprint []byte) (bool, error)
-	MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence) (bool, error)
+	RecordPreEffectManifest(input store.PreEffectManifestInput) (*store.PreEffectManifest, error)
+	MarkAttemptSentWithManifest(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence, manifestID string) (bool, error)
 	GetLiveExecutionGate() (store.LiveExecutionGate, error)
 	ListRecoverableAttempts(pendingAge time.Duration, limit int) ([]store.ExecutionAttempt, error)
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
@@ -1506,22 +1507,24 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 			}
 		}
 	}
-	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
-	cancel()
-	if bindingErr != nil {
+	var preEffect *store.PreEffectManifest
+	if s.tradingMode() == config.ModeLive {
+		preEffect, err = s.captureLivePreEffect(ctx, attempt, op)
+	}
+	if err != nil {
 		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
-			State: "failed", LastError: "account binding failed",
-			OperationStatus: "failed", ReleaseReservation: true,
+			State: "failed", LastError: "pre-effect refresh failed",
+			ProviderErrorCode: "pre_effect_unavailable",
+			OperationStatus:   "failed", ReleaseReservation: true,
 		})
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		return nil, bindingErr
+		return nil, err
 	}
 	if s.tradingMode() == config.ModeLive {
-		marked, markErr := s.store.MarkAttemptSent(
-			attempt.ID, attempt.Attempt, replay, s.brokerCallTimeout(), replayEvidence,
+		marked, markErr := s.store.MarkAttemptSentWithManifest(
+			attempt.ID, attempt.Attempt, replay, s.brokerCallTimeout(), replayEvidence, preEffect.ID,
 		)
 		if errors.Is(markErr, store.ErrReplayWindowExpired) {
 			unknownErr := s.keepAttemptUnknown(attempt, "same-ref replay window expired", "replay_window_expired", "")
