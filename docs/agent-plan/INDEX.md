@@ -52,6 +52,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
+| Agent Platform implementation tracker | AP0-1 code complete; AP0 remains incomplete and fail-closed; AP0-2 Schema Freeze Pack is next | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -93,8 +94,9 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    plan amendment v1.9.1. The real Canary will run later against the final
    applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
 2. K1, B0, Lean v1, the Charter closeout and refreshed AP0 audit are complete.
-   Implement AP0 only; its digest-bound release verification mechanism must be
-   accepted before AP1.
+   AP0-1 has landed, but AP0 remains incomplete. Implement AP0-2 through AP0-6
+   from [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); complete AP0 and
+   accept its digest-bound release verification before AP1.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
