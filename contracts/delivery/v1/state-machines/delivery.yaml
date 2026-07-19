@@ -1,0 +1,23 @@
+{
+  "schema_revision": 1,
+  "outbox": {
+    "initial": "available",
+    "states": ["available", "delivered", "leased", "quarantined"],
+    "transitions": [
+      {"from": "available", "to": "leased", "requires": ["database_clock", "new_lease_token"]},
+      {"from": "leased", "to": "leased", "requires": ["expired_lease", "same_event_identity", "new_lease_token"]},
+      {"from": "leased", "to": "delivered", "requires": ["matching_unexpired_lease_token"]},
+      {"from": "leased", "to": "quarantined", "requires": ["matching_unexpired_lease_token", "stable_reason_code", "quarantine_capacity"]},
+      {"from": "quarantined", "to": "available", "requires": ["explicit_replay_request", "incremented_replay_generation", "same_event_causation_and_digest"]}
+    ],
+    "forbidden": ["blind_resend", "delivered_to_available", "identity_rewrite", "global_order_inference"]
+  },
+  "quarantine": {
+    "initial": "active",
+    "states": ["active", "replay_requested", "resolved"],
+    "transitions": [
+      {"from": "active", "to": "replay_requested", "requires": ["delivery_repair_role", "incremented_generation", "audit_reason"]},
+      {"from": "replay_requested", "to": "resolved", "requires": ["matching_generation", "inbox_receipt_or_explicit_disposition"]}
+    ]
+  }
+}

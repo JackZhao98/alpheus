@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/delivery/v1/schema/delivery.schema.json",
+  "title": "Alpheus AP0 Durable Delivery v1",
+  "oneOf": [
+    {"$ref": "#/$defs/InboxReceipt"},
+    {"$ref": "#/$defs/OutboxRecord"},
+    {"$ref": "#/$defs/QuarantineRecord"}
+  ],
+  "$defs": {
+    "Lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispatcher_id", "lease_token", "claimed_at", "expires_at"],
+      "properties": {
+        "dispatcher_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "lease_token": {"type": "string", "format": "uuid"},
+        "claimed_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"},
+        "expires_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"}
+      }
+    },
+    "OutboxRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "event", "destination", "state", "available_at", "attempt_count"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "event": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/EventEnvelope"},
+        "destination": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "state": {"enum": ["available", "delivered", "leased", "quarantined"]},
+        "available_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"},
+        "attempt_count": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "lease": {"$ref": "#/$defs/Lease"},
+        "delivered_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"},
+        "quarantined_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"}
+      },
+      "oneOf": [
+        {
+          "properties": {"state": {"const": "available"}, "attempt_count": {"const": 0}},
+          "not": {"anyOf": [{"required": ["lease"]}, {"required": ["delivered_at"]}, {"required": ["quarantined_at"]}]}
+        },
+        {
+          "properties": {"state": {"const": "leased"}, "attempt_count": {"minimum": 1}},
+          "required": ["lease"],
+          "not": {"anyOf": [{"required": ["delivered_at"]}, {"required": ["quarantined_at"]}]}
+        },
+        {
+          "properties": {"state": {"const": "delivered"}, "attempt_count": {"minimum": 1}},
+          "required": ["delivered_at"],
+          "not": {"anyOf": [{"required": ["lease"]}, {"required": ["quarantined_at"]}]}
+        },
+        {
+          "properties": {"state": {"const": "quarantined"}, "attempt_count": {"minimum": 1}},
+          "required": ["quarantined_at"],
+          "not": {"anyOf": [{"required": ["lease"]}, {"required": ["delivered_at"]}]}
+        }
+      ]
+    },
+    "InboxReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "consumer_id", "event_id", "event_digest", "source_owner", "owner_sequence", "effect_digest", "applied_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "consumer_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "event_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "event_digest": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Digest"},
+        "source_owner": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Owner"},
+        "owner_sequence": {"type": "integer", "minimum": 1},
+        "effect_digest": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Digest"},
+        "applied_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"}
+      }
+    },
+    "QuarantineRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "consumer_id", "event_id", "event_digest", "source_owner", "owner_sequence", "reason_code", "attempt_count", "state", "first_failed_at", "last_failed_at", "replay_generation"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "consumer_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "event_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "event_digest": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Digest"},
+        "source_owner": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Owner"},
+        "owner_sequence": {"type": "integer", "minimum": 1},
+        "reason_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "attempt_count": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "state": {"enum": ["active", "replay_requested", "resolved"]},
+        "first_failed_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"},
+        "last_failed_at": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/UTCInstant"},
+        "replay_generation": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+      },
+      "oneOf": [
+        {"properties": {"state": {"const": "active"}}},
+        {"properties": {"state": {"enum": ["replay_requested", "resolved"]}, "replay_generation": {"minimum": 1}}}
+      ]
+    }
+  }
+}

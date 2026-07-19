@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/security/v1/schema/security.schema.json",
+  "title": "Alpheus AP0 Security Profiles v1",
+  "oneOf": [
+    {"$ref": "#/$defs/ProfileConfig"},
+    {"$ref": "#/$defs/ProfileSet"}
+  ],
+  "$defs": {
+    "AbsoluteSecretPath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 1024,
+      "pattern": "^/"
+    },
+    "SecretFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 2,
+      "properties": {
+        "connector_session": {"$ref": "#/$defs/AbsoluteSecretPath"},
+        "database_url": {"$ref": "#/$defs/AbsoluteSecretPath"},
+        "model_api_key": {"$ref": "#/$defs/AbsoluteSecretPath"},
+        "service_token": {"$ref": "#/$defs/AbsoluteSecretPath"}
+      },
+      "required": ["database_url", "service_token"]
+    },
+    "ProfileConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "profile", "principal_id", "audience", "database_role", "secret_files"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "profile": {"enum": ["activator", "control-api", "delegation-engine", "grace-engine", "grace-intake", "research-gateway", "validator", "worker"]},
+        "principal_id": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/OpaqueID"},
+        "audience": {"$ref": "../../../common/v1/schema/common.schema.json#/$defs/Audience"},
+        "database_role": {"type": "string", "pattern": "^alpheus_[a-z_]+$"},
+        "secret_files": {"$ref": "#/$defs/SecretFiles"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"profile": {"const": "control-api"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "control_api"}, "database_role": {"const": "alpheus_agent_control_api"}, "secret_files": {"not": {"anyOf": [{"required": ["connector_session"]}, {"required": ["model_api_key"]}]}}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "worker"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "worker"}, "database_role": {"const": "alpheus_agent_worker"}, "secret_files": {"not": {"required": ["connector_session"]}}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "research-gateway"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "research_gateway"}, "database_role": {"const": "alpheus_research_gateway"}, "secret_files": {"not": {"required": ["model_api_key"]}}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "grace-intake"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "grace_intake"}, "database_role": {"const": "alpheus_grace_intake"}, "secret_files": {"maxProperties": 2}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "grace-engine"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "grace_engine"}, "database_role": {"const": "alpheus_grace_engine"}, "secret_files": {"maxProperties": 2}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "delegation-engine"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "delegation_engine"}, "database_role": {"const": "alpheus_delegation_engine"}, "secret_files": {"maxProperties": 2}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "validator"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "validator"}, "database_role": {"const": "alpheus_agent_validator"}, "secret_files": {"maxProperties": 2}}}
+        },
+        {
+          "if": {"properties": {"profile": {"const": "activator"}}, "required": ["profile"]},
+          "then": {"properties": {"audience": {"const": "activator"}, "database_role": {"const": "alpheus_agent_activator"}, "secret_files": {"maxProperties": 2}}}
+        }
+      ]
+    },
+    "ProfileSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "profiles"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "profiles": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/ProfileConfig"}}
+      }
+    }
+  }
+}

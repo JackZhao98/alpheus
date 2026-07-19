@@ -402,6 +402,13 @@ func ValidateEffectClass(effect EffectClass) error {
 	return nil
 }
 
+func ValidateOwner(owner Owner) error {
+	if !knownOwner(owner) {
+		return ErrInvalidContract
+	}
+	return nil
+}
+
 func validSHA256(value string) bool {
 	if len(value) != 64 || strings.ToLower(value) != value {
 		return false

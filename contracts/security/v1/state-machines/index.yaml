@@ -1,0 +1,1 @@
+{"schema_revision": 1, "state_machines": [], "note": "Credential profiles are immutable deployment inputs, not mutable business state."}

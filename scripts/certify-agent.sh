@@ -47,6 +47,21 @@ if ! go -C agent-platform test -json ./contractvalidate >"$ARTIFACT_DIR/contract
 	exit 1
 fi
 
+if ! "$ROOT/scripts/check-agent-secret-leaks.sh" >"$ARTIFACT_DIR/secret-leaks.txt" 2>&1; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"secret-leaks"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="secret-leaks"><failure>secret leak probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=secret-leaks" >&2
+	exit 1
+fi
+
+if ! AGENT_DB_PROBE_ARTIFACT_DIR="$ARTIFACT_DIR/db-role-probe" \
+	"$ROOT/scripts/test-agent-db-roles.sh" >"$ARTIFACT_DIR/db-role-probe.txt" 2>&1; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"db-role-probe"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="db-role-probe"><failure>database role/delivery probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=db-role-probe" >&2
+	exit 1
+fi
+
 if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2>&1; then
 	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-test-race"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
 	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-test-race"><failure>tests failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
@@ -54,7 +69,7 @@ if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2
 	exit 1
 fi
 
-printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","contract-pack","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="%s" tests="5" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="contract-pack"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","contract-pack","secret-leaks","db-role-probe","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+printf '<testsuite name="%s" tests="7" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="contract-pack"/><testcase name="secret-leaks"/><testcase name="db-role-probe"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
 echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=mandatory-ap0-probes-not-implemented" >&2
 exit 1

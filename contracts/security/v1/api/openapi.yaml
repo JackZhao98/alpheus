@@ -1,0 +1,6 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Alpheus AP0 Security Profile", "version": "1.0.0", "description": "Deployment configuration only; no HTTP endpoint."},
+  "paths": {},
+  "components": {"schemas": {"ProfileSet": {"$ref": "../schema/security.schema.json#/$defs/ProfileSet"}}}
+}

@@ -1,0 +1,9 @@
+{
+  "schema_revision": 1,
+  "undelivered_outbox": "until_delivered_or_explicitly_resolved",
+  "delivered_outbox": "at_least_producer_max_replay_horizon",
+  "inbox_receipt_or_tombstone": "at_least_producer_max_replay_horizon",
+  "quarantine": "until_explicit_resolution_plus_audit_horizon",
+  "policy_source": "agent_control.delivery_policy",
+  "garbage_collection": "cannot_make_a_delivered_event_logically_new"
+}

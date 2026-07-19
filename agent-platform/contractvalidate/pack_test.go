@@ -54,8 +54,8 @@ func TestPackInventoryIsComplete(t *testing.T) {
 	declaredTypes = append(declaredTypes, manifest.Commands...)
 	declaredTypes = append(declaredTypes, manifest.Events...)
 	sort.Strings(declaredTypes)
-	if strings.Join(declaredTypes, ",") != strings.Join(SupportedTypes(), ",") {
-		t.Fatalf("validator/manifest type drift\nvalidator: %v\nmanifest: %v", SupportedTypes(), declaredTypes)
+	if strings.Join(declaredTypes, ",") != strings.Join(CommonTypes(), ",") {
+		t.Fatalf("validator/manifest type drift\nvalidator: %v\nmanifest: %v", CommonTypes(), declaredTypes)
 	}
 	paths := append([]string{}, manifest.Assets.Schemas...)
 	paths = append(paths, manifest.Assets.API, manifest.Assets.Events, manifest.Assets.StateMachines,

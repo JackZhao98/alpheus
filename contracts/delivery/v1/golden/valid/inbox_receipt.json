@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "consumer_id": "grace-intake",
+  "event_id": "event-1",
+  "event_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_owner": "agent_control",
+  "owner_sequence": 1,
+  "effect_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "applied_at": "2026-07-19T12:00:02Z"
+}

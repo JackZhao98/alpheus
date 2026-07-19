@@ -1,0 +1,7 @@
+{
+  "schema_revision": 1,
+  "profile_config_without_values": "deployment_lifetime_plus_audit_horizon",
+  "secret_values": "never_persisted_by_agent_platform",
+  "secret_paths": "redacted_from_public_logs_and_web",
+  "role_grant_evidence": "retain_forever"
+}

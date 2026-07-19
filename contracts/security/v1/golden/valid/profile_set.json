@@ -1,0 +1,28 @@
+{
+  "schema_revision": 1,
+  "profiles": [
+    {
+      "schema_revision": 1,
+      "profile": "control-api",
+      "principal_id": "control-1",
+      "audience": "control_api",
+      "database_role": "alpheus_agent_control_api",
+      "secret_files": {
+        "database_url": "/run/secrets/control-database-url",
+        "service_token": "/run/secrets/control-service-token"
+      }
+    },
+    {
+      "schema_revision": 1,
+      "profile": "worker",
+      "principal_id": "worker-1",
+      "audience": "worker",
+      "database_role": "alpheus_agent_worker",
+      "secret_files": {
+        "database_url": "/run/secrets/worker-database-url",
+        "model_api_key": "/run/secrets/worker-model-api-key",
+        "service_token": "/run/secrets/worker-service-token"
+      }
+    }
+  ]
+}

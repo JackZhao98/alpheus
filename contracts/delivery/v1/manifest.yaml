@@ -1,0 +1,46 @@
+{
+  "pack": "alpheus.delivery",
+  "owner": "agent_control",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": ["inbox_receipt", "outbox_record", "quarantine_record"],
+  "commands": [],
+  "events": [],
+  "state_machines": ["outbox", "quarantine"],
+  "assets": {
+    "schemas": ["schema/delivery.schema.json"],
+    "api": "api/openapi.yaml",
+    "events": "events/asyncapi.yaml",
+    "state_machines": "state-machines/delivery.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": [
+      "golden/valid/inbox_receipt.json",
+      "golden/valid/outbox_available.json",
+      "golden/valid/quarantine_active.json"
+    ],
+    "invalid": [
+      "golden/invalid/outbox_delivered_with_lease.json",
+      "golden/invalid/quarantine_replay_without_generation.json"
+    ],
+    "digests": [
+      "golden/digest/inbox_receipt.sha256",
+      "golden/digest/outbox_available.sha256",
+      "golden/digest/quarantine_active.sha256"
+    ]
+  },
+  "delivery": {
+    "transport": "at_least_once",
+    "consumer_effect": "at_most_once_per_consumer_event_identity",
+    "global_order": false,
+    "owner_sequence_gap": "stop_until_replay_or_explicit_repair",
+    "retry": "retain_event_causation_and_body_digest",
+    "poison": "bounded_quarantine_with_alert_and_explicit_replay"
+  }
+}

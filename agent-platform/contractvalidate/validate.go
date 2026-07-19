@@ -13,7 +13,9 @@ import (
 
 	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
+	"alpheus/agentplatform/delivery"
 	"alpheus/agentplatform/release"
+	"alpheus/agentplatform/security"
 )
 
 const maxContractBytes = 1 << 20
@@ -35,12 +37,42 @@ var commonTypes = map[string]func() validatable{
 	"run_origin":              func() validatable { return &contracts.RunOrigin{} },
 }
 
+var securityDeliveryTypes = map[string]func() validatable{
+	"inbox_receipt":     func() validatable { return &delivery.InboxReceipt{} },
+	"outbox_record":     func() validatable { return &delivery.OutboxRecord{} },
+	"profile_config":    func() validatable { return &security.ProfileConfig{} },
+	"profile_set":       func() validatable { return &security.ProfileSet{} },
+	"quarantine_record": func() validatable { return &delivery.QuarantineRecord{} },
+}
+
 func SupportedTypes() []string {
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+1)
+	for name := range commonTypes {
+		values = append(values, name)
+	}
+	for name := range securityDeliveryTypes {
+		values = append(values, name)
+	}
+	values = append(values, "release_manifest")
+	sort.Strings(values)
+	return values
+}
+
+func CommonTypes() []string {
 	values := make([]string, 0, len(commonTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
+	sort.Strings(values)
+	return values
+}
+
+func SecurityDeliveryTypes() []string {
+	values := make([]string, 0, len(securityDeliveryTypes))
+	for name := range securityDeliveryTypes {
+		values = append(values, name)
+	}
 	sort.Strings(values)
 	return values
 }
@@ -68,6 +100,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 		return strict, digest, err
 	}
 	factory, ok := commonTypes[contractType]
+	if !ok {
+		factory, ok = securityDeliveryTypes[contractType]
+	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)
 	}

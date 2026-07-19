@@ -1,0 +1,37 @@
+{
+  "pack": "alpheus.security",
+  "owner": "platform_governance",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": ["profile_config", "profile_set"],
+  "commands": [],
+  "events": [],
+  "state_machines": [],
+  "assets": {
+    "schemas": ["schema/security.schema.json"],
+    "api": "api/openapi.yaml",
+    "events": "events/asyncapi.yaml",
+    "state_machines": "state-machines/index.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": ["golden/valid/profile_set.json"],
+    "invalid": [
+      "golden/invalid/profile_audience_escalation.json",
+      "golden/invalid/profile_set_shared_secret.json"
+    ],
+    "digests": ["golden/digest/profile_set.sha256"]
+  },
+  "secret_policy": {
+    "configuration_contains_paths_only": true,
+    "inline_values_forbidden": true,
+    "cross_profile_secret_files_forbidden": true,
+    "cross_profile_principals_forbidden": true,
+    "cross_profile_database_roles_forbidden": true
+  }
+}

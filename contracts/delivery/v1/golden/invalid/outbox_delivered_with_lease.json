@@ -1,0 +1,23 @@
+{
+  "schema_revision": 1,
+  "event": {
+    "schema_revision": 1,
+    "event_id": "event-1",
+    "event_type": "artifact_published",
+    "owner": "agent_control",
+    "actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+    "record": {"owner": "agent_control", "record_type": "user_request", "record_id": "request-1", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "body_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "causation_id": "task-1",
+    "correlation_id": "run-1",
+    "owner_sequence": 1,
+    "occurred_at": "2026-07-19T12:00:00Z",
+    "committed_at": "2026-07-19T12:00:01Z"
+  },
+  "destination": "grace-intake",
+  "state": "delivered",
+  "available_at": "2026-07-19T12:00:01Z",
+  "attempt_count": 1,
+  "lease": {"dispatcher_id": "dispatcher-1", "lease_token": "123e4567-e89b-42d3-a456-426614174000", "claimed_at": "2026-07-19T12:00:02Z", "expires_at": "2026-07-19T12:01:02Z"},
+  "delivered_at": "2026-07-19T12:00:03Z"
+}
