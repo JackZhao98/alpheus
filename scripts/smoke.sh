@@ -63,7 +63,7 @@ curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer
 echo "== 3c) close again while flat -> expect 400 and no broker effect =="
 curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"close","symbol":"SMOKE","qty":1}'; echo; echo
 
-echo "== 4) cancel unknown order -> expect order state rejected =="
+echo "== 4) cancel unknown order -> expect rejected proposal and no broker effect =="
 curl -s -X POST $K/operations -H 'Content-Type: application/json' -d '{"proposer":"smoke","action":"cancel","broker_order_id":"missing-order"}'; echo; echo
 
 echo "== 5) naked short -> expect rejected =="

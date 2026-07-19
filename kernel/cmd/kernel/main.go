@@ -778,6 +778,18 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	var window marketWindow
 	var quote *broker.Quote
 	var closeInstrument *broker.Instrument
+	var decisionSnapshot *providerSnapshot
+	if !op.Shadow && (op.Action == "close" || op.Action == "cancel") {
+		decisionSnapshot, err = s.captureProviderSnapshot(r.Context(), "decision")
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "broker decision snapshot unavailable"})
+			return
+		}
+		bindDecisionObservation(&op, decisionSnapshot)
+		if op.Action == "cancel" {
+			classifyCancelDecision(decisionSnapshot, &op)
+		}
+	}
 	if op.Action == "open" || op.Action == "close" {
 		sym := op.Symbol
 		if sym == "" {
@@ -816,6 +828,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	status := "auto_approved"
 	var replay *store.OperationRow
 	var executionAttempt *store.ExecutionAttempt
+	var controlEpisode *store.ExternalControlEpisode
 	var committedProposalError error
 	if err := s.store.WithProposalLock(identity, op.Shadow, op.Action == "open", func(gate store.OperationGate) error {
 		verifyOpenMarketDay := func() error {
@@ -917,13 +930,25 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				}
 				op.Side, op.Kind, op.Multiplier, op.VerifiedReduction = "sell", paper.Kind, paper.Multiplier, true
 			} else {
-				brokerCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-				positions, err := s.accountProvider().Positions(brokerCtx)
-				cancel()
-				if err != nil {
-					return fmt.Errorf("%w: positions", errBrokerDataUnavailable)
+				if decisionSnapshot == nil {
+					return fmt.Errorf("%w: decision snapshot", errBrokerDataUnavailable)
 				}
-				positionQty, err := closablePositionQuantity(symbol, positions)
+				positions := decisionSnapshot.Positions
+				if s.tradingMode() == config.ModeSim {
+					// Simulation has no live execution latch/pre-effect barrier. Its
+					// in-memory Provider read is non-networked, so refresh under the symbol
+					// gate to preserve the same no-reversal invariant as Live.
+					positionsCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+					positions, err = s.accountProvider().Positions(positionsCtx)
+					cancel()
+					if err != nil {
+						return fmt.Errorf("%w: positions", errBrokerDataUnavailable)
+					}
+					if !samePositionDecision(op, decisionSnapshot.Positions, positions) {
+						return fmt.Errorf("%w: decision position changed", errInvalidClose)
+					}
+				}
+				positionQty, err := closablePositionQuantity(op, positions)
 				if err != nil {
 					return fmt.Errorf("%w: %v", errInvalidClose, err)
 				}
@@ -961,13 +986,47 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return err
 				}
-				closable := minQty(positionQty, exposureQty)
-				if held > closable || op.Qty > closable-held {
+				externalWorking, err := externalWorkingCloseQuantity(decisionSnapshot, normalized)
+				if err != nil {
+					return fmt.Errorf("%w: %v", errInvalidClose, err)
+				}
+				reserved, err := units.AddQty(held, externalWorking)
+				if err != nil || reserved > positionQty || op.Qty > positionQty-reserved {
 					committedProposalError = errInsufficientClosableQuantity
 					return nil
 				}
 				normalized.Qty = op.Qty
+				trackedQty := minQty(op.Qty, exposureQty)
+				externalQty := op.Qty - trackedQty
+				normalized.TrackedCloseQty = trackedQty
+				normalized.ExternalCloseQty = externalQty
+				normalized.DecisionObservationID = op.DecisionObservationID
+				normalized.DecisionObservationGeneration = op.DecisionObservationGeneration
+				normalized.DecisionObservationDigest = op.DecisionObservationDigest
+				normalized.BrokerPositionID = matchingPositionID(op, positions)
+				for i := range positions {
+					if positions[i].PositionID == normalized.BrokerPositionID {
+						normalized.DecisionPositionQty = positions[i].Qty
+						break
+					}
+				}
+				normalized.BrokerObjectOrigin = observedObjectOrigin(
+					decisionSnapshot, store.BrokerFamilyPositions, normalized.BrokerPositionID,
+				)
 				op = normalized
+				if positionQty != exposureQty {
+					origin := "mixed"
+					if exposureQty == 0 {
+						origin = "external"
+					}
+					controlEpisode = &store.ExternalControlEpisode{
+						ID: store.NewID(), OperationID: opID, ControlAction: "close_position",
+						Origin: origin, BrokerObservationID: op.DecisionObservationID,
+						ObservationGeneration: op.DecisionObservationGeneration,
+						ObjectKey:             op.BrokerPositionID, RequestedQty: op.Qty,
+						TrackedQty: trackedQty, ExternalQty: externalQty,
+					}
+				}
 			}
 			if op.ClosesOperationID != "" {
 				if !validUUID(op.ClosesOperationID) {
@@ -1033,6 +1092,28 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			"id": opID, "op": op, "verdict": v, "kernel_policy": policyBinding,
 		}); err != nil {
 			return err
+		}
+		if op.Action == "cancel" && op.VerifiedReduction &&
+			(op.BrokerObjectOrigin == "external" || op.BrokerObjectOrigin == "ambiguous") {
+			controlEpisode = &store.ExternalControlEpisode{
+				ID: store.NewID(), OperationID: opID, ControlAction: "cancel_order",
+				Origin: op.BrokerObjectOrigin, BrokerObservationID: op.DecisionObservationID,
+				ObservationGeneration: op.DecisionObservationGeneration, ObjectKey: op.BrokerOrderID,
+			}
+		}
+		if controlEpisode != nil && (v.Class == "A" || v.Class == "B") {
+			if err := gate.InsertExternalControlEpisode(*controlEpisode); err != nil {
+				return err
+			}
+			if err := gate.InsertEvent("external_control_episode_created", map[string]any{
+				"operation_id": opID, "episode_id": controlEpisode.ID,
+				"control_action": controlEpisode.ControlAction, "origin": controlEpisode.Origin,
+				"broker_observation_id": controlEpisode.BrokerObservationID,
+				"object_key":            controlEpisode.ObjectKey, "requested_qty": controlEpisode.RequestedQty,
+				"tracked_qty": controlEpisode.TrackedQty, "external_qty": controlEpisode.ExternalQty,
+			}); err != nil {
+				return err
+			}
 		}
 		if v.Class == "B" && op.Action == "open" {
 			var canaryRevisionID int64
@@ -1372,18 +1453,58 @@ func operationSymbol(op risk.Operation) string {
 	return op.Underlying
 }
 
-func closablePositionQuantity(symbol string, positions []broker.Position) (units.Qty, error) {
-	for _, position := range positions {
-		if position.Symbol != symbol || position.Qty == 0 {
+func closablePositionQuantity(op risk.Operation, positions []broker.Position) (units.Qty, error) {
+	symbol := operationSymbol(op)
+	var matched *broker.Position
+	for i := range positions {
+		position := &positions[i]
+		if position.Symbol != symbol || position.Qty == 0 ||
+			(op.PositionID != "" && position.PositionID != op.PositionID) {
 			continue
 		}
-		quantity, err := units.AbsQty(position.Qty)
+		if matched != nil {
+			return 0, fmt.Errorf("close position identity is ambiguous for %s", symbol)
+		}
+		matched = position
+	}
+	if matched != nil {
+		quantity, err := units.AbsQty(matched.Qty)
 		if err != nil {
 			return 0, fmt.Errorf("position quantity is out of range")
 		}
 		return quantity, nil
 	}
 	return 0, fmt.Errorf("close requires an existing position for %s", symbol)
+}
+
+func matchingPositionID(op risk.Operation, positions []broker.Position) string {
+	symbol := operationSymbol(op)
+	for _, position := range positions {
+		if position.Symbol == symbol && position.Qty != 0 &&
+			(op.PositionID == "" || position.PositionID == op.PositionID) {
+			return position.PositionID
+		}
+	}
+	return ""
+}
+
+func samePositionDecision(op risk.Operation, decision, current []broker.Position) bool {
+	symbol := operationSymbol(op)
+	find := func(positions []broker.Position) *broker.Position {
+		for i := range positions {
+			if positions[i].Symbol == symbol && positions[i].Qty != 0 &&
+				(op.PositionID == "" || positions[i].PositionID == op.PositionID) {
+				return &positions[i]
+			}
+		}
+		return nil
+	}
+	left, right := find(decision), find(current)
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.PositionID == right.PositionID && left.InstrumentID == right.InstrumentID &&
+		left.Qty == right.Qty && left.Kind == right.Kind && left.Multiplier == right.Multiplier
 }
 
 func minQty(left, right units.Qty) units.Qty {
@@ -1898,6 +2019,7 @@ type proposeRequest struct {
 	Setup             string            `json:"setup"`
 	Shadow            bool              `json:"shadow"`
 	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
+	PositionID        string            `json:"position_id,omitempty"`
 	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
 }
 
@@ -1926,7 +2048,7 @@ func hashClientIntent(op risk.Operation) ([sha256.Size]byte, error) {
 		Underlying: op.Underlying, Symbol: op.Symbol, Side: op.Side,
 		Qty: op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
 		Short: op.Short, Plan: op.Plan, Thesis: op.Thesis, Setup: op.Setup,
-		Shadow: op.Shadow, BrokerOrderID: op.BrokerOrderID,
+		Shadow: op.Shadow, BrokerOrderID: op.BrokerOrderID, PositionID: op.PositionID,
 		ClosesOperationID: op.ClosesOperationID,
 	}
 	encoded, err := json.Marshal(intent)
@@ -1944,6 +2066,7 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 		Short: request.Short, Plan: request.Plan, Thesis: request.Thesis,
 		Setup: request.Setup, Shadow: request.Shadow,
 		BrokerOrderID:     request.BrokerOrderID,
+		PositionID:        request.PositionID,
 		ClosesOperationID: request.ClosesOperationID,
 	}
 	symbol := op.Symbol
@@ -1972,6 +2095,7 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
 	case "close":
+		op.PositionID = strings.TrimSpace(op.PositionID)
 		if strings.TrimSpace(symbol) == "" {
 			return op, fmt.Errorf("close requires symbol or underlying")
 		}
@@ -2011,6 +2135,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 	}
 	if op.Action != "close" && strings.TrimSpace(op.ClosesOperationID) != "" {
 		return op, fmt.Errorf("closes_operation_id is meaningful only on close")
+	}
+	if op.Action != "close" && strings.TrimSpace(op.PositionID) != "" {
+		return op, fmt.Errorf("position_id is meaningful only on close")
 	}
 	return op, nil
 }
@@ -2152,9 +2279,12 @@ func normalizeClose(op risk.Operation, positions []broker.Position) (risk.Operat
 	}
 	var position *broker.Position
 	for i := range positions {
-		if positions[i].Symbol == symbol && positions[i].Qty != 0 {
+		if positions[i].Symbol == symbol && positions[i].Qty != 0 &&
+			(op.PositionID == "" || positions[i].PositionID == op.PositionID) {
+			if position != nil {
+				return op, fmt.Errorf("close position identity is ambiguous for %s", symbol)
+			}
 			position = &positions[i]
-			break
 		}
 	}
 	if position == nil {

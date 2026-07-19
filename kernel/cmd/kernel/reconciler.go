@@ -455,7 +455,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 				if err != nil {
 					return err
 				}
-				quantity, err = closablePositionQuantity(reservation.Symbol, positions)
+				quantity, err = closablePositionQuantity(op, positions)
 				if err != nil {
 					return nil
 				}
@@ -478,7 +478,10 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 					return err
 				}
 			}
-			closable := minQty(quantity, exposure)
+			closable, valid := recoveredCloseCapacity(op, quantity, exposure)
+			if !valid {
+				return nil
+			}
 			held, err := gate.HeldCloseQuantity(reservation.Ledger, reservation.Symbol)
 			if err != nil {
 				return err
@@ -503,8 +506,8 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			return failErr
 		}
 	case "cancel":
-		// A pending cancel has not reached the broker; its durable target id is
-		// sufficient authority to claim and execute it now.
+		// A pending cancel has not reached the broker. Live execution still
+		// requires the exact decision fingerprint and a fresh pre-effect target.
 	default:
 		_, failErr := s.store.FailPendingAttempt(attempt.ID, "unsupported recovered operation")
 		return failErr
@@ -610,7 +613,7 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 			if err != nil {
 				return err
 			}
-			quantity, err = closablePositionQuantity(reservation.Symbol, positions)
+			quantity, err = closablePositionQuantity(op, positions)
 			if err != nil {
 				return nil
 			}
@@ -629,7 +632,10 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 		if err != nil {
 			return err
 		}
-		closable := minQty(quantity, exposure)
+		closable, valid := recoveredCloseCapacity(op, quantity, exposure)
+		if !valid {
+			return nil
+		}
 		if held < reservation.RemainingQty {
 			return fmt.Errorf("held close quantity is smaller than its reservation")
 		}
@@ -638,6 +644,17 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 		return nil
 	})
 	return covered, err
+}
+
+func recoveredCloseCapacity(op risk.Operation, providerQty, exposureQty units.Qty) (units.Qty, bool) {
+	if op.DecisionObservationID == "" {
+		return minQty(providerQty, exposureQty), true
+	}
+	total, err := units.AddQty(op.TrackedCloseQty, op.ExternalCloseQty)
+	if err != nil || total != op.Qty || op.TrackedCloseQty > exposureQty {
+		return 0, false
+	}
+	return providerQty, true
 }
 
 func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.ExecutionAttempt, now time.Time) error {

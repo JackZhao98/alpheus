@@ -88,6 +88,9 @@ type memoryStore struct {
 	brokerAccountView      *store.BrokerAccountView
 	brokerObservationViews map[string]*store.BrokerAccountView
 	preEffectManifests     map[string]store.PreEffectManifest
+	externalControls       map[string]store.ExternalControlEpisode
+	controlTrackedFilled   map[string]units.Qty
+	controlExternalFilled  map[string]units.Qty
 }
 
 func newMemoryStore() *memoryStore {
@@ -118,18 +121,21 @@ func newMemoryStore() *memoryStore {
 		shadowAccount: store.ShadowAccount{
 			Cash: units.MustMicros("300"), BuyingPower: units.MustMicros("300"),
 		},
-		shadowPositions:    map[string]store.ShadowPosition{},
-		exposureQty:        map[string]units.Qty{},
-		firstExposureOp:    map[string]string{},
-		attempts:           map[string]store.ExecutionAttempt{},
-		orders:             map[string]store.Order{},
-		fills:              map[string]memoryFill{},
-		verdicts:           map[string]json.RawMessage{},
-		blackboards:        map[string]json.RawMessage{},
-		preEffectManifests: map[string]store.PreEffectManifest{},
-		eventPayloads:      map[string][]any{},
-		dayOpenEquity:      map[string]units.Micros{},
-		realizedPnL:        map[string]units.Micros{},
+		shadowPositions:       map[string]store.ShadowPosition{},
+		exposureQty:           map[string]units.Qty{},
+		firstExposureOp:       map[string]string{},
+		attempts:              map[string]store.ExecutionAttempt{},
+		orders:                map[string]store.Order{},
+		fills:                 map[string]memoryFill{},
+		verdicts:              map[string]json.RawMessage{},
+		blackboards:           map[string]json.RawMessage{},
+		preEffectManifests:    map[string]store.PreEffectManifest{},
+		externalControls:      map[string]store.ExternalControlEpisode{},
+		controlTrackedFilled:  map[string]units.Qty{},
+		controlExternalFilled: map[string]units.Qty{},
+		eventPayloads:         map[string][]any{},
+		dayOpenEquity:         map[string]units.Micros{},
+		realizedPnL:           map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},
@@ -692,6 +698,16 @@ func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation)
 	defer m.mu.Unlock()
 	bindMemoryPolicy(m.operationRows[reservation.OperationID], &reservation.KernelPolicyRevisionID, &reservation.KernelPolicyGeneration, &reservation.KernelPolicyDigest)
 	m.reservations[reservation.ID] = reservation
+	return nil
+}
+
+func (m *memoryStore) InsertExternalControlEpisode(episode store.ExternalControlEpisode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.externalControls[episode.OperationID]; exists {
+		return errors.New("duplicate external control episode")
+	}
+	m.externalControls[episode.OperationID] = episode
 	return nil
 }
 
@@ -1587,11 +1603,27 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate, pre
 				m.shadowPositions[order.Symbol] = position
 			}
 		case "close":
-			if m.m3aActive || order.Ledger == "shadow" {
-				if m.exposureQty[key] < fill.Qty {
+			trackedFill := fill.Qty
+			if episode, controlled := m.externalControls[order.OperationID]; controlled {
+				trackedRemaining := episode.TrackedQty - m.controlTrackedFilled[order.OperationID]
+				if trackedRemaining < 0 {
 					return store.ErrFillIntegrity
 				}
-				m.exposureQty[key] -= fill.Qty
+				if trackedFill > trackedRemaining {
+					trackedFill = trackedRemaining
+				}
+				externalFill := fill.Qty - trackedFill
+				if externalFill < 0 || externalFill > episode.ExternalQty-m.controlExternalFilled[order.OperationID] {
+					return store.ErrFillIntegrity
+				}
+				m.controlTrackedFilled[order.OperationID] += trackedFill
+				m.controlExternalFilled[order.OperationID] += externalFill
+			}
+			if m.m3aActive || order.Ledger == "shadow" {
+				if m.exposureQty[key] < trackedFill {
+					return store.ErrFillIntegrity
+				}
+				m.exposureQty[key] -= trackedFill
 			}
 			if order.Ledger == "shadow" {
 				position := m.shadowPositions[order.Symbol]
@@ -2279,17 +2311,17 @@ func TestExecuteRefusesUnverifiedClose(t *testing.T) {
 
 func TestProposeCancelUnknownOrder(t *testing.T) {
 	st := newMemoryStore()
-	s := &server{limits: config.Limits{}, broker: newFake("300"), store: st}
+	b := newFake("300")
+	s := &server{limits: config.Limits{}, broker: b, store: st}
 	w, body := postOperation(t, s, `{"proposer":"test","action":"cancel","broker_order_id":"missing-order"}`)
-	if w.Code != http.StatusOK || body["class"] != "A" {
+	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
 		t.Fatalf("status=%d body=%v", w.Code, body)
 	}
-	order, ok := body["order"].(map[string]any)
-	if !ok || order["state"] != "rejected" {
-		t.Fatalf("order=%v, want rejected", body["order"])
+	if _, ok := body["order"]; ok {
+		t.Fatalf("garbage cancel reached broker: body=%v", body)
 	}
-	if len(st.events) == 0 || st.events[len(st.events)-1] != "order_update" {
-		t.Fatalf("events=%v, want trailing order_update", st.events)
+	if orders, err := b.OpenOrders(context.Background()); err != nil || len(orders) != 0 {
+		t.Fatalf("garbage cancel changed broker: orders=%v err=%v", orders, err)
 	}
 }
 

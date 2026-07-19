@@ -145,6 +145,7 @@ func TestExternalWorkingCloseConsumesClosableQuantityWithoutReversal(t *testing.
 	op := risk.Operation{
 		Action: "close", Symbol: "CLOSE", Side: "sell", Kind: "equity",
 		InstrumentID: "instrument-close", Multiplier: 1, Qty: units.MustQty("1"),
+		BrokerPositionID: "equity:CLOSE", DecisionPositionQty: units.MustQty("2"),
 	}
 	external, err := validateFreshCloseCapacity(snapshot, op, 0)
 	if err != nil || external != units.MustQty("1") {
@@ -153,6 +154,67 @@ func TestExternalWorkingCloseConsumesClosableQuantityWithoutReversal(t *testing.
 	op.Qty = units.MustQty("2")
 	if _, err := validateFreshCloseCapacity(snapshot, op, 0); err == nil {
 		t.Fatal("aggregate close reservations allowed a position reversal")
+	}
+}
+
+func TestExternalOpeningOrderCancelCreatesNewAuditedLifecycle(t *testing.T) {
+	venue := newFake("300")
+	setQuote(venue, "EXTCANCEL", "9.90", "10", 1_000)
+	target, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+		ClientOrderID: "manual-ref", Symbol: "EXTCANCEL", Side: "buy",
+		PositionEffect: "open", Qty: units.MustQty("1"), Limit: units.MustMicros("9"), Kind: "equity",
+	})
+	if err != nil || target.State != "submitted" {
+		t.Fatalf("seed external opening order: target=%+v err=%v", target, err)
+	}
+	st := newMemoryStore()
+	s := &server{limits: dualLedgerLimits(), broker: venue, store: st}
+	response, body := postOperation(t, s, `{"action":"cancel","broker_order_id":"`+target.BrokerOrderID+`"}`)
+	if response.Code != http.StatusOK || body["class"] != "A" || body["status"] != "executed" {
+		t.Fatalf("status=%d body=%v", response.Code, body)
+	}
+	current, err := venue.GetOrder(context.Background(), target.BrokerOrderID)
+	if err != nil || current.State != "cancelled" {
+		t.Fatalf("external order not cancelled: order=%+v err=%v", current, err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.externalControls) != 1 {
+		t.Fatalf("external control episodes=%d want=1", len(st.externalControls))
+	}
+	for operationID, episode := range st.externalControls {
+		if operationID == "" || episode.ControlAction != "cancel_order" || episode.Origin != "external" ||
+			episode.ObjectKey != target.BrokerOrderID || episode.BrokerObservationID == "" {
+			t.Fatalf("episode=%+v", episode)
+		}
+	}
+}
+
+func TestProtectiveExternalOrderCancelIsRejectedWithoutProviderEffect(t *testing.T) {
+	venue := newFake("300")
+	setQuote(venue, "PROTECT", "9.90", "10", 1_000)
+	if opened, err := placeOrder(venue, "PROTECT", "buy", "1", "10", "equity"); err != nil || opened.State != "filled" {
+		t.Fatalf("seed position: order=%+v err=%v", opened, err)
+	}
+	target, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+		ClientOrderID: "protective-ref", Symbol: "PROTECT", Side: "sell",
+		PositionEffect: "close", Qty: units.MustQty("1"), Limit: units.MustMicros("11"), Kind: "equity",
+	})
+	if err != nil || target.State != "submitted" {
+		t.Fatalf("seed protective order: target=%+v err=%v", target, err)
+	}
+	st := newMemoryStore()
+	s := &server{limits: dualLedgerLimits(), broker: venue, store: st}
+	response, body := postOperation(t, s, `{"action":"cancel","broker_order_id":"`+target.BrokerOrderID+`"}`)
+	if response.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
+		t.Fatalf("status=%d body=%v", response.Code, body)
+	}
+	current, err := venue.GetOrder(context.Background(), target.BrokerOrderID)
+	if err != nil || current.State != "submitted" {
+		t.Fatalf("protective order changed: order=%+v err=%v", current, err)
+	}
+	if len(st.externalControls) != 0 {
+		t.Fatalf("rejected cancel created external control episode: %+v", st.externalControls)
 	}
 }
 
@@ -205,6 +267,7 @@ func TestFreshEquityCloseAcceptsProviderPositionWithoutInstrumentID(t *testing.T
 	op := risk.Operation{
 		Action: "close", Symbol: "CLOSE", Side: "sell", Kind: "equity",
 		InstrumentID: "exact-market-instrument", Multiplier: 1, Qty: units.MustQty("1"),
+		BrokerPositionID: "equity:CLOSE", DecisionPositionQty: units.MustQty("1"),
 	}
 	if _, err := validateFreshCloseCapacity(snapshot, op, 0); err != nil {
 		t.Fatalf("equity position identity rejected: %v", err)
@@ -212,6 +275,22 @@ func TestFreshEquityCloseAcceptsProviderPositionWithoutInstrumentID(t *testing.T
 	snapshot.Positions[0].InstrumentID = "conflicting-instrument"
 	if _, err := validateFreshCloseCapacity(snapshot, op, 0); err == nil {
 		t.Fatal("conflicting equity instrument identity was accepted")
+	}
+}
+
+func TestClosePositionIDDisambiguatesCanonicalBrokerPosition(t *testing.T) {
+	positions := []broker.Position{
+		{PositionID: "position-a", Symbol: "SAME", Qty: units.MustQty("1"), Kind: "equity", Multiplier: 1},
+		{PositionID: "position-b", Symbol: "SAME", Qty: units.MustQty("2"), Kind: "equity", Multiplier: 1},
+	}
+	op := risk.Operation{Action: "close", Symbol: "SAME", Qty: units.MustQty("1")}
+	if _, err := normalizeClose(op, positions); err == nil {
+		t.Fatal("ambiguous symbol-only close selected a broker position")
+	}
+	op.PositionID = "position-b"
+	normalized, err := normalizeClose(op, positions)
+	if err != nil || normalized.Side != "sell" || normalized.Kind != "equity" {
+		t.Fatalf("canonical position close: op=%+v err=%v", normalized, err)
 	}
 }
 

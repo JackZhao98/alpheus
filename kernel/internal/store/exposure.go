@@ -299,11 +299,51 @@ func applyOpenExposureFill(ctx context.Context, tx *sql.Tx, order *Order, fillID
 }
 
 func applyCloseExposureFill(ctx context.Context, tx *sql.Tx, order *Order, closeFillID string, fill FillInput) error {
-	if order.Side != "sell" {
-		return fmt.Errorf("%w: long-only close fill is not a sell", ErrFillIntegrity)
+	if order.Side != "sell" && order.Side != "buy" {
+		return fmt.Errorf("%w: close fill side is invalid", ErrFillIntegrity)
 	}
-	if fill.Price < order.Limit {
+	if (order.Side == "sell" && fill.Price < order.Limit) ||
+		(order.Side == "buy" && fill.Price > order.Limit) {
 		return fmt.Errorf("%w: close fill violates approved limit", ErrFillIntegrity)
+	}
+
+	var episodeID string
+	var trackedTarget, externalTarget int64
+	episodeErr := tx.QueryRowContext(ctx, `SELECT id,tracked_qty,external_qty
+		FROM external_control_episode
+		WHERE operation_id=$1 AND control_action='close_position'`, order.OperationID).Scan(
+		&episodeID, &trackedTarget, &externalTarget,
+	)
+	hasEpisode := episodeErr == nil
+	if episodeErr != nil && episodeErr != sql.ErrNoRows {
+		return episodeErr
+	}
+	if !hasEpisode && order.Side != "sell" {
+		return fmt.Errorf("%w: internally tracked close fill is not a sell", ErrFillIntegrity)
+	}
+
+	trackedForFill := int64(fill.Qty)
+	var alreadyTracked, alreadyExternal int64
+	if hasEpisode {
+		if err := tx.QueryRowContext(ctx, `SELECT
+			COALESCE((SELECT sum(a.qty) FROM exposure_close_allocation a
+			 JOIN fills f ON f.id=a.close_fill_id JOIN orders o ON o.id=f.order_id
+			 WHERE o.operation_id=$1),0),
+			COALESCE((SELECT sum(a.qty) FROM external_control_fill_allocation a
+			 JOIN fills f ON f.id=a.close_fill_id JOIN orders o ON o.id=f.order_id
+			 WHERE o.operation_id=$1),0)`, order.OperationID).Scan(&alreadyTracked, &alreadyExternal); err != nil {
+			return err
+		}
+		if alreadyTracked < 0 || alreadyExternal < 0 || alreadyTracked > trackedTarget || alreadyExternal > externalTarget {
+			return fmt.Errorf("%w: external control allocation exceeds authority", ErrFillIntegrity)
+		}
+		trackedRemaining := trackedTarget - alreadyTracked
+		if trackedForFill > trackedRemaining {
+			trackedForFill = trackedRemaining
+		}
+		if order.Side == "buy" && trackedForFill != 0 {
+			return fmt.Errorf("%w: short close cannot consume long-only exposure", ErrFillIntegrity)
+		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT open_fill_id,opened_qty,closed_qty,
 		entry_cost_micros,remaining_cost_basis_micros,remaining_risk_micros
@@ -328,7 +368,7 @@ func applyCloseExposureFill(ctx context.Context, tx *sql.Tx, order *Order, close
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	remainingFill := int64(fill.Qty)
+	remainingFill := trackedForFill
 	for _, lot := range lots {
 		if remainingFill == 0 {
 			break
@@ -374,6 +414,24 @@ func applyCloseExposureFill(ctx context.Context, tx *sql.Tx, order *Order, close
 	}
 	if remainingFill != 0 {
 		return fmt.Errorf("%w: close fill exceeds FIFO exposure", ErrFillIntegrity)
+	}
+	if hasEpisode {
+		externalForFill := int64(fill.Qty) - trackedForFill
+		if externalForFill < 0 || externalForFill > externalTarget-alreadyExternal {
+			return fmt.Errorf("%w: external close fill exceeds control authority", ErrFillIntegrity)
+		}
+		if externalForFill > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO external_control_fill_allocation
+				(close_fill_id,episode_id,qty) VALUES ($1,$2,$3)`, closeFillID, episodeID, externalForFill); err != nil {
+				return err
+			}
+			if err := insertEvent(ctx, tx, "external_close_fill_allocated", map[string]any{
+				"operation_id": order.OperationID, "episode_id": episodeID,
+				"close_fill_id": closeFillID, "qty": units.Qty(externalForFill),
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	if order.Ledger == "shadow" {
 		if err := applyShadowCloseFill(ctx, tx, order, fill); err != nil {

@@ -82,10 +82,14 @@ func TestClassificationPaths(t *testing.T) {
 		verdict.Reasons[0] != "uncovered_short" {
 		t.Fatalf("sell open dependency priority=%+v", verdict)
 	}
-	for _, action := range []string{"cancel", "tighten_stop"} {
-		if verdict := Classify(Operation{Action: action}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
-			t.Fatalf("%s=%+v, want A", action, verdict)
-		}
+	if verdict := Classify(Operation{Action: "cancel", VerifiedReduction: true}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
+		t.Fatalf("verified cancel=%+v, want A", verdict)
+	}
+	if verdict := Classify(Operation{Action: "cancel"}, limitsForTest(), testDay(), nil); verdict.Class != "REJECT" {
+		t.Fatalf("unverified cancel=%+v, want REJECT", verdict)
+	}
+	if verdict := Classify(Operation{Action: "tighten_stop"}, limitsForTest(), testDay(), nil); verdict.Class != "A" {
+		t.Fatalf("tighten_stop=%+v, want A", verdict)
 	}
 	if verdict := Classify(Operation{Action: "OPEN"}, limitsForTest(), testDay(), nil); verdict.Class != "REJECT" ||
 		!strings.Contains(verdict.Reasons[0], "unknown action") {

@@ -405,7 +405,7 @@ func (p *timeoutAccountProvider) Account(ctx context.Context) (broker.AccountSta
 	return broker.AccountState{}, ctx.Err()
 }
 
-func TestTimedOutOpenCommitsNoAttemptWhileVerifiedCloseProceeds(t *testing.T) {
+func TestUnavailableDecisionSnapshotCommitsNoOpenOrCloseAttempt(t *testing.T) {
 	venue := newFake("300")
 	setQuote(venue, "BLOCK", "9.90", "10", 1_000)
 	setQuote(venue, "EXIT", "9.90", "10", 1_000)
@@ -442,7 +442,7 @@ func TestTimedOutOpenCommitsNoAttemptWhileVerifiedCloseProceeds(t *testing.T) {
 
 	closeResponse, closeBody := postOperation(t, s,
 		`{"proposer":"exit","action":"close","symbol":"EXIT","qty":1}`)
-	if closeResponse.Code != http.StatusOK || closeBody["class"] != "A" || closeBody["status"] != "executed" {
+	if closeResponse.Code != http.StatusBadGateway || closeBody["error"] != "broker decision snapshot unavailable" {
 		t.Fatalf("close status=%d body=%v", closeResponse.Code, closeBody)
 	}
 	open := <-openResult
@@ -452,9 +452,7 @@ func TestTimedOutOpenCommitsNoAttemptWhileVerifiedCloseProceeds(t *testing.T) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for _, operation := range st.operations {
-		if operation.Action == "open" {
-			t.Fatalf("timed-out open committed: %+v", operation)
-		}
+		t.Fatalf("unavailable Provider snapshot committed operation: %+v", operation)
 	}
 }
 
@@ -532,8 +530,9 @@ func TestCloseUsesSmallerOfPositionAndExposureAndEmitsMismatch(t *testing.T) {
 		positionQty string
 		exposureQty string
 		closeQty    string
+		accepted    bool
 	}{
-		{name: "broker exceeds exposure", positionQty: "2", exposureQty: "1", closeQty: "2"},
+		{name: "broker exceeds exposure", positionQty: "2", exposureQty: "1", closeQty: "2", accepted: true},
 		{name: "exposure exceeds broker", positionQty: "1", exposureQty: "2", closeQty: "2"},
 	}
 	for _, testCase := range tests {
@@ -549,7 +548,11 @@ func TestCloseUsesSmallerOfPositionAndExposureAndEmitsMismatch(t *testing.T) {
 			s := &server{limits: dualLedgerLimits(), broker: venue, store: st}
 			response, body := postOperation(t, s,
 				`{"action":"close","symbol":"MISMATCH","qty":`+testCase.closeQty+`}`)
-			if response.Code != http.StatusBadRequest || body["error"] != "insufficient closable quantity" {
+			if testCase.accepted {
+				if response.Code != http.StatusOK || body["class"] != "A" || body["status"] != "executed" {
+					t.Fatalf("status=%d body=%v", response.Code, body)
+				}
+			} else if response.Code != http.StatusBadRequest || body["error"] != "insufficient closable quantity" {
 				t.Fatalf("status=%d body=%v", response.Code, body)
 			}
 			st.mu.Lock()
@@ -560,15 +563,36 @@ func TestCloseUsesSmallerOfPositionAndExposureAndEmitsMismatch(t *testing.T) {
 				}
 			}
 			operationCount := len(st.operations)
+			var episode *store.ExternalControlEpisode
+			for _, candidate := range st.externalControls {
+				copy := candidate
+				episode = &copy
+			}
 			st.mu.Unlock()
 			if !mismatchEvent {
 				t.Fatalf("events=%v, want position_exposure_mismatch", st.events)
 			}
-			if operationCount != 0 {
-				t.Fatalf("rejected mismatch persisted %d operations", operationCount)
+			wantOperations := 0
+			if testCase.accepted {
+				wantOperations = 1
+			}
+			if operationCount != wantOperations {
+				t.Fatalf("persisted operations=%d want=%d", operationCount, wantOperations)
+			}
+			if testCase.accepted {
+				if episode == nil || episode.Origin != "mixed" ||
+					episode.TrackedQty != units.MustQty("1") || episode.ExternalQty != units.MustQty("1") {
+					t.Fatalf("external control episode=%+v", episode)
+				}
+			} else if episode != nil {
+				t.Fatalf("rejected close created episode=%+v", episode)
 			}
 			positions, err := venue.Positions(context.Background())
-			if err != nil || len(positions) != 1 || positions[0].Qty != units.MustQty(testCase.positionQty) {
+			if testCase.accepted {
+				if err != nil || len(positions) != 0 {
+					t.Fatalf("external close did not reduce aggregate position: positions=%v err=%v", positions, err)
+				}
+			} else if err != nil || len(positions) != 1 || positions[0].Qty != units.MustQty(testCase.positionQty) {
 				t.Fatalf("rejected close changed broker: positions=%v err=%v", positions, err)
 			}
 		})

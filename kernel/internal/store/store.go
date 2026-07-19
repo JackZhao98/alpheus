@@ -77,6 +77,7 @@ type OperationGate interface {
 	TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (TradeGrantUsage, error)
 	LiveCanaryAuthority(marketDay time.Time) (*LiveCanaryRevision, error)
 	InsertCloseReservation(reservation CloseReservation) error
+	InsertExternalControlEpisode(episode ExternalControlEpisode) error
 	InsertExecutionAttempt(attempt ExecutionAttempt) error
 	InsertOrder(order Order) error
 	InsertOpenReservation(reservation OpenReservation) error

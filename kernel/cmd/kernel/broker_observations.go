@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,6 +60,115 @@ type preEffectEvaluation struct {
 	AggregateOpenRisk      units.Micros `json:"aggregate_open_risk"`
 	EffectiveBuyingPower   units.Micros `json:"effective_buying_power"`
 	FreshnessExpiresAt     time.Time    `json:"freshness_expires_at"`
+}
+
+func bindDecisionObservation(op *risk.Operation, snapshot *providerSnapshot) {
+	if op == nil || snapshot == nil || snapshot.Observation == nil {
+		return
+	}
+	op.DecisionObservationID = snapshot.Observation.ID
+	op.DecisionObservationGeneration = snapshot.Observation.Generation
+	op.DecisionObservationDigest = snapshot.Observation.ManifestDigest
+}
+
+func observedObjectOrigin(snapshot *providerSnapshot, family, key string) string {
+	if snapshot == nil || snapshot.View == nil {
+		return ""
+	}
+	for _, object := range snapshot.View.Objects {
+		if object.Family == family && object.ObjectKey == key {
+			return object.Origin
+		}
+	}
+	return ""
+}
+
+func observedWorkingOrder(snapshot *providerSnapshot, brokerOrderID string) *broker.ReadOrder {
+	if snapshot == nil {
+		return nil
+	}
+	for i := range snapshot.Orders {
+		if snapshot.Orders[i].BrokerOrderID == brokerOrderID {
+			order := snapshot.Orders[i]
+			return &order
+		}
+	}
+	return nil
+}
+
+func classifyCancelDecision(snapshot *providerSnapshot, op *risk.Operation) {
+	bindDecisionObservation(op, snapshot)
+	target := observedWorkingOrder(snapshot, op.BrokerOrderID)
+	if target == nil {
+		op.CancelTargetEffect = "missing"
+		return
+	}
+	op.BrokerObjectOrigin = observedObjectOrigin(snapshot, store.BrokerFamilyOrders, target.BrokerOrderID)
+	op.CancelTargetFingerprint = cancelTargetFingerprint(*target)
+	mayOpen, mayClose, err := workingOrderEffects(*target, snapshot.Positions)
+	switch {
+	case err != nil || (mayOpen && mayClose):
+		op.CancelTargetEffect = "ambiguous"
+	case mayOpen:
+		op.CancelTargetEffect = "opening"
+		op.VerifiedReduction = true
+	case mayClose:
+		op.CancelTargetEffect = "closing"
+	default:
+		op.CancelTargetEffect = "ambiguous"
+	}
+}
+
+func cancelTargetFingerprint(order broker.ReadOrder) string {
+	semantic := struct {
+		BrokerOrderID  string       `json:"broker_order_id"`
+		InstrumentID   string       `json:"instrument_id"`
+		Symbol         string       `json:"symbol"`
+		Side           string       `json:"side"`
+		Kind           string       `json:"kind"`
+		PositionEffect string       `json:"position_effect"`
+		State          string       `json:"state"`
+		Qty            units.Qty    `json:"qty"`
+		FilledQty      units.Qty    `json:"filled_qty"`
+		LimitPrice     units.Micros `json:"limit_price"`
+		LimitKnown     bool         `json:"limit_price_known"`
+	}{
+		BrokerOrderID: order.BrokerOrderID, InstrumentID: order.InstrumentID,
+		Symbol: order.Symbol, Side: order.Side, Kind: order.Kind,
+		PositionEffect: order.PositionEffect, State: order.State, Qty: order.Qty,
+		FilledQty: order.FilledQty, LimitPrice: order.LimitPrice, LimitKnown: order.LimitPriceKnown,
+	}
+	encoded, err := json.Marshal(semantic)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+func externalWorkingCloseQuantity(snapshot *providerSnapshot, op risk.Operation) (units.Qty, error) {
+	if snapshot == nil || snapshot.View == nil {
+		return 0, fmt.Errorf("broker order observation is unavailable")
+	}
+	var external units.Qty
+	for _, order := range snapshot.Orders {
+		if observedObjectOrigin(snapshot, store.BrokerFamilyOrders, order.BrokerOrderID) == "alpheus" {
+			continue
+		}
+		mayOpen, mayClose, err := workingOrderEffects(order, snapshot.Positions)
+		if err != nil || (mayOpen && mayClose) {
+			return 0, fmt.Errorf("working close order effect is ambiguous")
+		}
+		if !mayClose || order.Symbol != operationSymbol(op) || order.Kind != op.Kind {
+			continue
+		}
+		remaining := order.Qty - order.FilledQty
+		external, err = units.AddQty(external, remaining)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return external, nil
 }
 
 func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*providerSnapshot, error) {
@@ -158,7 +270,10 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 	if observation.Status != "complete" {
 		return snapshot, fmt.Errorf("provider snapshot is partial")
 	}
-	view, err := s.store.LoadBrokerAccountView(accountID)
+	// Bind the returned canonical view to this exact immutable observation.
+	// Reading the mutable account head here would allow a concurrent refresh to
+	// pair one call's Provider slices with another call's origin evidence.
+	view, err := s.store.LoadBrokerObservation(observation.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +619,8 @@ func (s *server) evaluateLivePreEffect(
 			}
 			if op.Action == "cancel" {
 				mayOpen, mayClose, err := workingOrderEffects(*target, snapshot.Positions)
-				if err != nil || !mayOpen || mayClose {
+				if err != nil || !mayOpen || mayClose || op.CancelTargetEffect != "opening" ||
+					op.CancelTargetFingerprint == "" || cancelTargetFingerprint(*target) != op.CancelTargetFingerprint {
 					return fmt.Errorf("cancel target is not proven risk-reducing")
 				}
 			}
@@ -620,7 +736,8 @@ func validateFreshCloseCapacity(snapshot *providerSnapshot, op risk.Operation, o
 		}
 		matched = position
 	}
-	if matched == nil || matched.Kind != op.Kind || matched.Multiplier != op.Multiplier || op.InstrumentID == "" ||
+	if matched == nil || matched.PositionID != op.BrokerPositionID || matched.Qty != op.DecisionPositionQty ||
+		matched.Kind != op.Kind || matched.Multiplier != op.Multiplier || op.InstrumentID == "" ||
 		(matched.Kind == "option" && matched.InstrumentID != op.InstrumentID) ||
 		(matched.Kind == "equity" && matched.InstrumentID != "" && matched.InstrumentID != op.InstrumentID) {
 		return 0, fmt.Errorf("close position changed at pre-effect barrier")

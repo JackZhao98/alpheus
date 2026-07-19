@@ -189,7 +189,7 @@ func (t *ledgerTx) ResumeBreaker(ledger, reason string, marketDay, observedAt ti
 }
 
 func localRealizedPnL(ctx context.Context, tx *sql.Tx, ledger string, start, end time.Time) (units.Micros, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT f.id,f.qty,f.price_micros,f.fees_micros,
+	rows, err := tx.QueryContext(ctx, `SELECT f.id,f.qty,a.qty,f.price_micros,f.fees_micros,
 		o.multiplier,a.matched_cost_micros
 		FROM fills f
 		JOIN orders o ON o.id=f.order_id
@@ -201,28 +201,29 @@ func localRealizedPnL(ctx context.Context, tx *sql.Tx, ledger string, start, end
 	}
 	defer rows.Close()
 	type closeFill struct {
-		qty, price, fees, multiplier int64
-		matched                      *big.Int
+		totalQty, matchedQty, price, fees, multiplier int64
+		matched                                       *big.Int
 	}
 	byID := map[string]*closeFill{}
 	order := []string{}
 	for rows.Next() {
 		var id string
-		var qty, price, fees, multiplier, matched int64
-		if err := rows.Scan(&id, &qty, &price, &fees, &multiplier, &matched); err != nil {
+		var totalQty, allocationQty, price, fees, multiplier, matched int64
+		if err := rows.Scan(&id, &totalQty, &allocationQty, &price, &fees, &multiplier, &matched); err != nil {
 			return 0, normalizeDBError(err)
 		}
 		fill := byID[id]
 		if fill == nil {
-			fill = &closeFill{qty: qty, price: price, fees: fees, multiplier: multiplier, matched: new(big.Int)}
+			fill = &closeFill{totalQty: totalQty, price: price, fees: fees, multiplier: multiplier, matched: new(big.Int)}
 			byID[id] = fill
 			order = append(order, id)
-		} else if fill.qty != qty || fill.price != price || fill.fees != fees || fill.multiplier != multiplier {
+		} else if fill.totalQty != totalQty || fill.price != price || fill.fees != fees || fill.multiplier != multiplier {
 			return 0, fmt.Errorf("close fill economics changed across FIFO allocations")
 		}
-		if matched < 0 {
+		if allocationQty <= 0 || matched < 0 {
 			return 0, fmt.Errorf("negative matched cost")
 		}
+		fill.matchedQty += allocationQty
 		fill.matched.Add(fill.matched, big.NewInt(matched))
 	}
 	if err := rows.Err(); err != nil {
@@ -233,11 +234,18 @@ func localRealizedPnL(ctx context.Context, tx *sql.Tx, ledger string, start, end
 		fill := byID[id]
 		// Exit proceeds round down, against the account. The durable matched
 		// costs were already rounded against the account when M3A allocated them.
-		proceeds, err := units.MulQtyPrice(units.Qty(fill.qty), units.Micros(fill.price), fill.multiplier, false)
+		if fill.matchedQty <= 0 || fill.matchedQty > fill.totalQty {
+			return 0, fmt.Errorf("close fill allocation quantity is invalid")
+		}
+		proceeds, err := units.MulQtyPrice(units.Qty(fill.matchedQty), units.Micros(fill.price), fill.multiplier, false)
 		if err != nil {
 			return 0, err
 		}
-		pnl := new(big.Int).Sub(big.NewInt(int64(proceeds)), big.NewInt(fill.fees))
+		allocatedFees, err := proportionalInt64(fill.fees, fill.matchedQty, fill.totalQty, true)
+		if err != nil {
+			return 0, err
+		}
+		pnl := new(big.Int).Sub(big.NewInt(int64(proceeds)), big.NewInt(allocatedFees))
 		pnl.Sub(pnl, fill.matched)
 		total.Add(total, pnl)
 	}

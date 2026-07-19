@@ -27,17 +27,28 @@ type Operation struct {
 	Setup             string            `json:"setup,omitempty"`
 	Shadow            bool              `json:"shadow"`
 	BrokerOrderID     string            `json:"broker_order_id,omitempty"`
+	PositionID        string            `json:"position_id,omitempty"`
 	ClosesOperationID string            `json:"closes_operation_id,omitempty"`
 
 	// Kernel-derived execution and risk facts. None of these fields exist on
 	// the request DTO decoded by the HTTP handler.
-	DerivedMaxRisk   units.Micros `json:"derived_max_risk,omitempty"`
-	RequiredCash     units.Micros `json:"required_cash,omitempty"`
-	ApprovedPriceCap units.Micros `json:"approved_price_cap,omitempty"`
-	WorkingPrice     units.Micros `json:"working_price,omitempty"`
-	Multiplier       int64        `json:"multiplier,omitempty"`
-	QtyIncrement     units.Qty    `json:"qty_increment,omitempty"`
-	InstrumentID     string       `json:"instrument_id,omitempty"`
+	DerivedMaxRisk                units.Micros `json:"derived_max_risk,omitempty"`
+	RequiredCash                  units.Micros `json:"required_cash,omitempty"`
+	ApprovedPriceCap              units.Micros `json:"approved_price_cap,omitempty"`
+	WorkingPrice                  units.Micros `json:"working_price,omitempty"`
+	Multiplier                    int64        `json:"multiplier,omitempty"`
+	QtyIncrement                  units.Qty    `json:"qty_increment,omitempty"`
+	InstrumentID                  string       `json:"instrument_id,omitempty"`
+	DecisionObservationID         string       `json:"decision_observation_id,omitempty"`
+	DecisionObservationGeneration int64        `json:"decision_observation_generation,omitempty"`
+	DecisionObservationDigest     string       `json:"decision_observation_digest,omitempty"`
+	BrokerObjectOrigin            string       `json:"broker_object_origin,omitempty"`
+	BrokerPositionID              string       `json:"broker_position_id,omitempty"`
+	DecisionPositionQty           units.Qty    `json:"decision_position_qty,omitempty"`
+	CancelTargetEffect            string       `json:"cancel_target_effect,omitempty"`
+	CancelTargetFingerprint       string       `json:"cancel_target_fingerprint,omitempty"`
+	TrackedCloseQty               units.Qty    `json:"tracked_close_qty,omitempty"`
+	ExternalCloseQty              units.Qty    `json:"external_close_qty,omitempty"`
 
 	VerifiedReduction bool   `json:"-"`
 	RejectReason      string `json:"-"`
@@ -64,8 +75,6 @@ type Verdict struct {
 	Reasons []string        `json:"reasons"`
 }
 
-var reducing = map[string]bool{"cancel": true, "tighten_stop": true}
-
 func reject(reason string) Verdict {
 	return Verdict{Class: "REJECT", Reasons: []string{reason}}
 }
@@ -81,7 +90,13 @@ func ClassifyAt(op Operation, limits config.Limits, day DayState, quote *broker.
 		}
 		return reject("close is not verified against a position")
 	}
-	if reducing[op.Action] {
+	if op.Action == "cancel" {
+		if op.VerifiedReduction {
+			return Verdict{Class: "A", Reasons: []string{"verified risk reduction"}}
+		}
+		return reject("cancel target is not verified risk-reducing")
+	}
+	if op.Action == "tighten_stop" {
 		return Verdict{Class: "A", Reasons: []string{"risk-reducing"}}
 	}
 	if op.Action != "open" {
