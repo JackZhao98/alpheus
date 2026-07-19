@@ -1,0 +1,6 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Alpheus Governance Internal API Boundary", "version": "1"},
+  "paths": {},
+  "x-boundary": "No network API in AP0; owner and activator use distinct one-shot database credentials."
+}

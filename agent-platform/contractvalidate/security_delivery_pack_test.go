@@ -44,6 +44,7 @@ func TestSecurityRoleSQLCoversEveryProfile(t *testing.T) {
 		"alpheus_agent_migrator", "alpheus_agent_delivery_dispatcher",
 		"alpheus_agent_delivery_repair", "alpheus_agent_diagnostics",
 		"alpheus_blob_gc", "alpheus_blob_diagnostics",
+		"alpheus_platform_owner", "alpheus_platform_halt",
 	} {
 		if !strings.Contains(text, "'"+role+"'") {
 			t.Fatalf("required operational role %s missing", role)

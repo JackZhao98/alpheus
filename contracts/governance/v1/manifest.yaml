@@ -1,0 +1,65 @@
+{
+  "pack": "alpheus.governance",
+  "owner": "platform_governance",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": [
+    "activation_receipt",
+    "effect_class_head",
+    "effect_class_revision",
+    "governance_event",
+    "kill_switch_head",
+    "kill_switch_revision",
+    "platform_mode_head",
+    "platform_mode_revision"
+  ],
+  "commands": [],
+  "events": [],
+  "state_machines": ["governance_head"],
+  "assets": {
+    "schemas": ["schema/governance.schema.json"],
+    "api": "api/openapi.yaml",
+    "events": "events/asyncapi.yaml",
+    "state_machines": "state-machines/governance.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": [
+      "golden/valid/activation_receipt.json",
+      "golden/valid/effect_class_head.json",
+      "golden/valid/effect_class_revision.json",
+      "golden/valid/governance_event.json",
+      "golden/valid/kill_switch_head.json",
+      "golden/valid/kill_switch_revision.json",
+      "golden/valid/platform_mode_head.json",
+      "golden/valid/platform_mode_revision.json"
+    ],
+    "invalid": [
+      "golden/invalid/receipt_stale_generation.json",
+      "golden/invalid/switch_unknown.json"
+    ],
+    "digests": [
+      "golden/digest/activation_receipt.sha256",
+      "golden/digest/effect_class_head.sha256",
+      "golden/digest/effect_class_revision.sha256",
+      "golden/digest/governance_event.sha256",
+      "golden/digest/kill_switch_head.sha256",
+      "golden/digest/kill_switch_revision.sha256",
+      "golden/digest/platform_mode_head.sha256",
+      "golden/digest/platform_mode_revision.sha256"
+    ]
+  },
+  "governance": {
+    "global_mode_is_ceiling_only": true,
+    "canary_is_scoped_rollout_not_global_mode": true,
+    "missing_or_invalid": "disabled_or_halted",
+    "upward_transition": "current_receipt_plus_exact_expected_generation",
+    "downward_transition": "separate_least_privilege_path",
+    "activation_receipt": "single_use"
+  }
+}

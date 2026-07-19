@@ -15,6 +15,7 @@ import (
 	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/delivery"
+	"alpheus/agentplatform/governance"
 	"alpheus/agentplatform/release"
 	"alpheus/agentplatform/security"
 )
@@ -54,8 +55,19 @@ var blobTypes = map[string]func() validatable{
 	"blob_reference":       func() validatable { return &blob.ReferenceBinding{} },
 }
 
+var governanceTypes = map[string]func() validatable{
+	"activation_receipt":     func() validatable { return &governance.ActivationReceipt{} },
+	"effect_class_head":      func() validatable { return &governance.EffectClassHead{} },
+	"effect_class_revision":  func() validatable { return &governance.EffectClassRevision{} },
+	"governance_event":       func() validatable { return &governance.GovernanceEvent{} },
+	"kill_switch_head":       func() validatable { return &governance.KillSwitchHead{} },
+	"kill_switch_revision":   func() validatable { return &governance.KillSwitchRevision{} },
+	"platform_mode_head":     func() validatable { return &governance.PlatformModeHead{} },
+	"platform_mode_revision": func() validatable { return &governance.PlatformModeRevision{} },
+}
+
 func SupportedTypes() []string {
-	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+1)
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
@@ -63,6 +75,9 @@ func SupportedTypes() []string {
 		values = append(values, name)
 	}
 	for name := range blobTypes {
+		values = append(values, name)
+	}
+	for name := range governanceTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
@@ -98,6 +113,15 @@ func BlobTypes() []string {
 	return values
 }
 
+func GovernanceTypes() []string {
+	values := make([]string, 0, len(governanceTypes))
+	for name := range governanceTypes {
+		values = append(values, name)
+	}
+	sort.Strings(values)
+	return values
+}
+
 // Validate returns canonical JSON and its contract-domain digest.
 func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, maxContractBytes+1))
@@ -126,6 +150,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	}
 	if !ok {
 		factory, ok = blobTypes[contractType]
+	}
+	if !ok {
+		factory, ok = governanceTypes[contractType]
 	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)

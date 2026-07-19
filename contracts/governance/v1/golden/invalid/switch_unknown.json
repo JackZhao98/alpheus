@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "revision_id": "40000000-0000-4000-8000-000000000099",
+  "generation": 1,
+  "switch_id": "everything_on",
+  "state": "enabled",
+  "author": {"principal_id": "owner-1", "kind": "user", "audience": "activator"},
+  "reason_code": "invalid_switch",
+  "created_at": "2026-07-19T18:00:00Z"
+}

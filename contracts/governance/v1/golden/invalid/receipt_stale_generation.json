@@ -1,0 +1,23 @@
+{
+  "schema_revision": 1,
+  "receipt_id": "20000000-0000-4000-8000-000000000099",
+  "target_kind": "platform_mode",
+  "target_id": "global",
+  "target_revision": {
+    "owner": "platform_governance",
+    "record_type": "platform_mode_revision",
+    "record_id": "10000000-0000-4000-8000-000000000001",
+    "schema_revision": 1,
+    "record_digest": "f7f90411c78345e498d6dfa0b8dedc35e8a0ea9cbc3b4cc09b3c727e0e5e9f7b",
+    "generation": 1
+  },
+  "expected_head_generation": 1,
+  "transition": "raise",
+  "actor": {"principal_id": "owner-1", "kind": "user", "audience": "activator"},
+  "deployment_mode_ceiling": "shadow",
+  "deployment_effect_ceiling": "operation_intent",
+  "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reason_code": "stale_generation",
+  "issued_at": "2026-07-19T18:00:00Z",
+  "expires_at": "2026-07-19T18:05:00Z"
+}

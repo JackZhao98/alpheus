@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/governance/v1/governance.schema.json",
+  "title": "Alpheus AP0 Governance Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/PlatformModeRevision"},
+    {"$ref": "#/$defs/PlatformModeHead"},
+    {"$ref": "#/$defs/EffectClassRevision"},
+    {"$ref": "#/$defs/EffectClassHead"},
+    {"$ref": "#/$defs/KillSwitchRevision"},
+    {"$ref": "#/$defs/KillSwitchHead"},
+    {"$ref": "#/$defs/ActivationReceipt"},
+    {"$ref": "#/$defs/GovernanceEvent"}
+  ],
+  "$defs": {
+    "Identifier": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u0020\\u007f]+$"},
+    "Name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "Digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "Timestamp": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "PlatformMode": {"enum": ["disabled", "live_autonomous", "live_confirmed", "read_only", "shadow"]},
+    "EffectClass": {"enum": ["broker_mutation", "exact_confirmation", "external_read", "none", "operation_intent"]},
+    "GovernedEffectClass": {"enum": ["broker_mutation", "exact_confirmation", "external_read", "operation_intent"]},
+    "GateState": {"enum": ["enabled", "halted"]},
+    "SwitchID": {"enum": [
+      "agent_operation_emission", "agent_release_activation", "autonomous_live",
+      "capability_external_execution", "delegation_activation", "exact_confirmation_live",
+      "grace_publication", "product_crypto", "product_equity", "product_option",
+      "shadow_integration", "strategy_activation"
+    ]},
+    "SubjectKind": {"enum": ["effect_class", "kill_switch", "platform_mode"]},
+    "Transition": {"enum": ["halt", "lower", "raise", "resume"]},
+    "AuditActor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["principal_id", "kind", "audience"],
+      "properties": {
+        "principal_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"enum": ["kernel", "user", "workload"]},
+        "audience": {"enum": ["activator", "control_api", "delegation_engine", "grace_engine", "grace_intake", "kernel", "kernel_admin", "research_gateway", "validator", "worker"]}
+      }
+    },
+    "RecordRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest"],
+      "properties": {
+        "owner": {"const": "platform_governance"},
+        "record_type": {"$ref": "#/$defs/Name"},
+        "record_id": {"$ref": "#/$defs/Identifier"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"}
+      }
+    },
+    "RevisionRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest", "generation"],
+      "properties": {
+        "owner": {"const": "platform_governance"},
+        "record_type": {"$ref": "#/$defs/Name"},
+        "record_id": {"$ref": "#/$defs/Identifier"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "PlatformModeRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "revision_id", "generation", "mode", "author", "reason_code", "created_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "mode": {"$ref": "#/$defs/PlatformMode"},
+        "author": {"$ref": "#/$defs/AuditActor"}, "reason_code": {"$ref": "#/$defs/Name"},
+        "created_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "EffectClassRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "revision_id", "generation", "effect_class", "state", "author", "reason_code", "created_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "effect_class": {"$ref": "#/$defs/GovernedEffectClass"},
+        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/AuditActor"},
+        "reason_code": {"$ref": "#/$defs/Name"}, "created_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "KillSwitchRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "revision_id", "generation", "switch_id", "state", "author", "reason_code", "created_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "switch_id": {"$ref": "#/$defs/SwitchID"},
+        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/AuditActor"},
+        "reason_code": {"$ref": "#/$defs/Name"}, "created_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "PlatformModeHead": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "head_id", "generation", "revision", "mode", "activated_by", "activated_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "head_id": {"const": "global"},
+        "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
+        "mode": {"$ref": "#/$defs/PlatformMode"}, "activation_receipt": {"$ref": "#/$defs/RecordRef"},
+        "activated_by": {"$ref": "#/$defs/AuditActor"}, "activated_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "EffectClassHead": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "head_id", "generation", "revision", "effect_class", "state", "activated_by", "activated_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "head_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
+        "effect_class": {"$ref": "#/$defs/GovernedEffectClass"}, "state": {"$ref": "#/$defs/GateState"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/AuditActor"},
+        "activated_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "KillSwitchHead": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "head_id", "generation", "revision", "switch_id", "state", "activated_by", "activated_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "head_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
+        "switch_id": {"$ref": "#/$defs/SwitchID"}, "state": {"$ref": "#/$defs/GateState"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/AuditActor"},
+        "activated_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "ActivationReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "receipt_id", "target_kind", "target_id", "target_revision", "expected_head_generation", "transition", "actor", "deployment_mode_ceiling", "deployment_effect_ceiling", "request_digest", "reason_code", "issued_at", "expires_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "receipt_id": {"$ref": "#/$defs/Identifier"},
+        "target_kind": {"$ref": "#/$defs/SubjectKind"}, "target_id": {"$ref": "#/$defs/Identifier"},
+        "target_revision": {"$ref": "#/$defs/RevisionRef"}, "expected_head_generation": {"type": "integer", "minimum": 0},
+        "transition": {"$ref": "#/$defs/Transition"}, "actor": {"$ref": "#/$defs/AuditActor"},
+        "deployment_mode_ceiling": {"$ref": "#/$defs/PlatformMode"},
+        "deployment_effect_ceiling": {"$ref": "#/$defs/EffectClass"},
+        "request_digest": {"$ref": "#/$defs/Digest"}, "reason_code": {"$ref": "#/$defs/Name"},
+        "issued_at": {"$ref": "#/$defs/Timestamp"}, "expires_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "GovernanceEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "event_id", "subject_kind", "subject_id", "generation", "transition", "current_revision", "actor", "occurred_at", "reason_code"],
+      "properties": {
+        "schema_revision": {"const": 1}, "event_id": {"$ref": "#/$defs/Identifier"},
+        "subject_kind": {"$ref": "#/$defs/SubjectKind"}, "subject_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1}, "transition": {"$ref": "#/$defs/Transition"},
+        "previous_revision": {"$ref": "#/$defs/RevisionRef"}, "current_revision": {"$ref": "#/$defs/RevisionRef"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "actor": {"$ref": "#/$defs/AuditActor"},
+        "occurred_at": {"$ref": "#/$defs/Timestamp"}, "reason_code": {"$ref": "#/$defs/Name"}
+      }
+    }
+  }
+}

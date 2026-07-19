@@ -39,7 +39,7 @@ func validateContract(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("validate-contract", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	file := flags.String("file", "", "contract JSON file")
-	contractType := flags.String("type", "", "common contract type")
+	contractType := flags.String("type", "", "boundary contract type")
 	expectedDigest := flags.String("expect-digest", "", "optional exact contract SHA-256")
 	if err := flags.Parse(args); err != nil {
 		return err

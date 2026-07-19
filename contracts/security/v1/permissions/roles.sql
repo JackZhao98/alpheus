@@ -12,6 +12,8 @@ BEGIN
         'alpheus_agent_delivery_repair',
         'alpheus_agent_validator',
         'alpheus_agent_activator',
+        'alpheus_platform_owner',
+        'alpheus_platform_halt',
         'alpheus_research_gateway',
         'alpheus_grace_intake',
         'alpheus_grace_engine',
@@ -37,6 +39,8 @@ CREATE SCHEMA IF NOT EXISTS agent_control AUTHORIZATION alpheus_agent_migrator;
 REVOKE ALL ON SCHEMA agent_control FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS blob AUTHORIZATION alpheus_agent_migrator;
 REVOKE ALL ON SCHEMA blob FROM PUBLIC;
+CREATE SCHEMA IF NOT EXISTS platform_governance AUTHORIZATION alpheus_agent_migrator;
+REVOKE ALL ON SCHEMA platform_governance FROM PUBLIC;
 GRANT USAGE ON SCHEMA agent_control TO
     alpheus_agent_control_api,
     alpheus_agent_delivery_dispatcher,
@@ -54,4 +58,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
 ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
     REVOKE ALL ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
+    REVOKE ALL ON SEQUENCES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA platform_governance
+    REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA platform_governance
+    REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA platform_governance
     REVOKE ALL ON SEQUENCES FROM PUBLIC;

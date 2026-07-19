@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "revision_id": "30000000-0000-4000-8000-000000000001",
+  "generation": 1,
+  "effect_class": "operation_intent",
+  "state": "enabled",
+  "author": {"principal_id": "owner-1", "kind": "user", "audience": "activator"},
+  "reason_code": "enable_shadow_intent",
+  "created_at": "2026-07-19T18:00:00Z"
+}

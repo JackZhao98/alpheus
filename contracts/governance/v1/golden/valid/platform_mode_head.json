@@ -1,0 +1,18 @@
+{
+  "schema_revision": 1,
+  "head_id": "global",
+  "generation": 1,
+  "revision": {
+    "owner": "platform_governance", "record_type": "platform_mode_revision",
+    "record_id": "10000000-0000-4000-8000-000000000001", "schema_revision": 1,
+    "record_digest": "f7f90411c78345e498d6dfa0b8dedc35e8a0ea9cbc3b4cc09b3c727e0e5e9f7b", "generation": 1
+  },
+  "mode": "shadow",
+  "activation_receipt": {
+    "owner": "platform_governance", "record_type": "activation_receipt",
+    "record_id": "20000000-0000-4000-8000-000000000001", "schema_revision": 1,
+    "record_digest": "26fb6f13a99a18c89c19c5f74d4cbeebd8d2d064ef5e65d053318fc72ff79794"
+  },
+  "activated_by": {"principal_id": "activator-1", "kind": "workload", "audience": "activator"},
+  "activated_at": "2026-07-19T18:01:00Z"
+}

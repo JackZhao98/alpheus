@@ -1,0 +1,7 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {"title": "Alpheus Governance Event Boundary", "version": "1"},
+  "channels": {},
+  "operations": {},
+  "x-boundary": "AP0 persists append-only governance events; distribution starts only at its owning later stage."
+}

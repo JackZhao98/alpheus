@@ -1,0 +1,19 @@
+{
+  "schema_revision": 1,
+  "head_id": "operation_intent",
+  "generation": 1,
+  "revision": {
+    "owner": "platform_governance", "record_type": "effect_class_revision",
+    "record_id": "30000000-0000-4000-8000-000000000001", "schema_revision": 1,
+    "record_digest": "12e02047bc40a84fdd0557be9dd35bbba6e2ad1c464ec2456635fd087b06b450", "generation": 1
+  },
+  "effect_class": "operation_intent",
+  "state": "enabled",
+  "activation_receipt": {
+    "owner": "platform_governance", "record_type": "activation_receipt",
+    "record_id": "20000000-0000-4000-8000-000000000001", "schema_revision": 1,
+    "record_digest": "26fb6f13a99a18c89c19c5f74d4cbeebd8d2d064ef5e65d053318fc72ff79794"
+  },
+  "activated_by": {"principal_id": "activator-1", "kind": "workload", "audience": "activator"},
+  "activated_at": "2026-07-19T18:01:00Z"
+}
