@@ -2,16 +2,24 @@
 
 > Audit date: **2026-07-18**
 >
-> Audit input baseline: `d8c977ccdd86b28550da526a56ec010cdf63adac`
-> Corrected architecture candidate:
+> Historical audit input baseline: `d8c977ccdd86b28550da526a56ec010cdf63adac`
+> Historical corrected architecture candidate:
 > `aa4df069e979a119782224ec2a488f942f0dcff6`
-> (this follow-up changes audit metadata only)
+> (current Lean/policy amendments require new digests after freeze)
 >
-> Result: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS**
+> Result: **HISTORICAL AUDIT — REVIEW REOPENED FOR LEAN V1 AND KERNEL POLICY**
 >
-> Authorization: **`AUTHORIZED_FOR_AP0` WITHHELD**
+> Authorization: **AP0 RELEASE WITHHELD**
 
 ## 1. Decision
+
+This document records the previous full-topology audit. The product destination
+and closed safety findings remain useful evidence, but its final topology,
+synchronous GRACE acknowledgement, rolling lease and release verdict are under
+re-review by [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) and Kernel policy
+amendment [`../plan/06_POLICY_OWNERSHIP.md`](../plan/06_POLICY_OWNERSHIP.md).
+It cannot issue AP0 authorization until that amendment is frozen and this audit
+is refreshed against new digests.
 
 The corrected Agent Platform architecture is coherent around one intended
 product destination:
@@ -27,17 +35,17 @@ effect resolution. AP13 exact confirmation is a transitional qualification and
 exception route. AP14 is the mandatory first autonomous canary. AP15 is scoped
 autonomous production.
 
-The audit found no surviving document-level path by which an Agent, prompt,
+The previous audit found no document-level path by which an Agent, prompt,
 Skill, Tool, Web client, Memory item, research source, Strategy experiment,
 GRACE score, or Delegation proposal can directly mutate a broker or manufacture
 Kernel permission. The architecture findings discovered during this audit were
 closed in the same document revision.
 
 AP0 is nevertheless not authorized. The Kernel clock blocker is closed and its
-complete certification is green, but M11 is still in progress, the required
-M11 rollback acceptance/evidence is not complete, and the post-M11 Charter
-amendment has not landed. These are hard release gates, not optional follow-up
-work.
+complete certification is green, but M11 v1.7 recovery/Halt, v1.8 K0 canary
+authority, the separately confirmed canary stop/recovery evidence, K1, Lean v1
+freeze and the post-M11 Charter/audit closeout remain incomplete. These are hard
+release gates, not optional follow-up work.
 
 ## 2. Scope and method
 
@@ -221,55 +229,48 @@ Closure evidence includes:
 The production Robinhood deployment remained read-only and was neither joined
 nor restarted. R-01 is no longer an open release blocker.
 
-### R-02 — M11 canary and rollback evidence are incomplete
+### R-02 — M11 canary stop/recovery evidence is incomplete
 
 The Kernel plan index still marks M11 `IN PROGRESS`. The production deployment
 remains read-only, and the first Alpheus-routed one-share Live canary still needs
-its separately confirmed exact ticket. The canonical M11 acceptance text also
-does not yet specify the complete rollback proof required by this roadmap.
+its separately confirmed exact ticket. Plan amendments v1.7 (`5df440c`) and
+v1.8 (`4328327`) now define the missing pre-canary code gates: bounded same-ref
+recovery, transactional Live admission/Halt serialization and database-
+authoritative canary policy. Those code changes and non-money acceptance are
+not yet landed.
 
-Before any canary, use the frozen Kernel amendment process to add a v1.7
-evidence amendment covering at least:
-
-- stop new Live admission/send and restore read-only configuration;
-- preserve and reconcile any real order/fill/position;
-- prove zero unresolved unknown attempt, unsafe reservation, or orphaned grant;
-- prove cancel/reconcile/verified reduction remain available; and
-- record exact account, operation, order, fill, PnL, mode, and cleanup evidence.
-
-Then execute only the already specified one-share equity canary under a fresh
-confirmation, run the rollback proof, and mark M11 `LANDED` only if every frozen
-acceptance item passes. This audit authorizes no real-money order.
+After they land, execute only the already specified one-share equity canary
+under a fresh confirmation. Halt new risk, preserve the Live recovery adapter,
+reconcile/adopt/cancel or ingest every real order/fill/position/PnL fact, prove
+the gate/accounting clean, and only then return deployment to `read_only`. A
+real fill is never rolled back; any reduction is a new Kernel-verified effect.
+Mark M11 `LANDED` only if every frozen acceptance item passes. This audit
+authorizes no real-money order.
 
 ### R-03 — Post-M11 Charter amendment is not landed
 
-The current Charter still excludes the new Agent schemas/services, Research
-Gateway, Strategy Lab, and additional Web scope. After M11 lands, a dedicated
-pre-AP0 governance commit must amend the Charter and pin the exact service,
-database, Provider, and authority boundaries from this plan.
+The current Charter still excludes the new Agent schemas/process profiles,
+Research Gateway, Strategy Lab and additional Web scope. After M11/K1 land and
+Lean v1 freezes, a dedicated pre-AP0 governance commit must amend the Charter
+and pin the exact deployment, credential, database, Provider and authority
+boundaries from the lean plan.
 
-### R-04 — AP0 release token has not been issued
+### R-04 — AP0 protected release record is not approved
 
 After R-02 and R-03 close, a narrow release check must verify the M11
 evidence, Charter, roadmap, corrected architecture commit, and audit digests and
-confirm no new authority/fail-open finding. An owner authorization and an
-independent architecture-review attestation must then land in a separate,
-committed, digest-pinned `AP0_RELEASE.md`. At minimum that record contains every
-verified digest, reviewer identity, owner acceptance, decision, and database or
-trusted release time. Only that record may contain the named release token
-(shown here as a field, not an issued authorization):
+confirm no new authority/fail-open finding. An owner-signed/protected release
+record plus independent architecture-review attestation must bind every verified
+digest, reviewer identity, owner decision and trusted release time. CI/startup
+verifies that protection and exact content; a string in Markdown has no
+authority.
 
-```text
-future_release_token_name = AUTHORIZED_FOR_AP0
-```
-
-The implementation Agent, Worker, CI job, and ordinary maintainer cannot issue
-that token by typing it into a plan or commit message. The token opens AP0 only.
-AP0's first commit must be its contract-only Schema Freeze Pack. Only after that
-Pack is separately reviewed and accepted may the remaining AP0-scoped
-non-runtime scaffold, validators, and fresh-test-database roles/migrations be
-implemented. It does not authorize AP1 or later work, production activation,
-runtime effects, GRACE implementation, Delegation activation, or Live trading.
+The implementation Agent, Worker, CI job and ordinary maintainer cannot create
+the owner decision. The record opens AP0 only. After Lean v1 freeze, AP0 uses a
+contract-first commit for money, authority, cross-process and public-event
+boundaries; internal types may evolve in their cohesive module with tests. The
+record does not authorize AP1 or later work, production activation, runtime
+effects, GRACE implementation, Delegation activation or Live trading.
 
 ## 7. Intentional later gates
 
@@ -288,11 +289,12 @@ closes:
 
 ## 8. Dependency and rollback verdict
 
-The corrected sequence is valid:
+The previous sequence remains a candidate rollout order, but Lean v1 must be
+frozen and re-audited before this verdict becomes current:
 
 ```text
-M11 closeout
--> pre-AP0 Charter closeout and audit release check
+M11 closeout -> K1 -> Lean v1 freeze
+-> pre-AP0 Charter closeout and refreshed audit/release check
 -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
 -> AP9 || AP10 -> AP11 -> AP12 -> AP13 -> AP14 -> AP15
@@ -302,21 +304,24 @@ AP2/AP3 and AP9/AP10 are the only declared parallel branches. No later authority
 is needed to implement an earlier stage. The legacy direct Runtime proposer is
 disabled before AP1 claims triggers, avoiding two schedulers/proposers.
 
-Rollback order is also valid after the correction: deny new admission and send
-first, freeze upward activation/lease advance, preserve reconciliation/cancel/
-verified reduction, drain or latch in-flight effects, stop writers, roll back
+Application/deployment rollback order is also valid after the correction: deny
+new admission and send first, freeze upward activation/lease advance, preserve
+reconciliation/cancel/verified reduction, drain or latch in-flight effects,
+stop writers, roll back
 compatible applications, and retain forward-compatible schema plus immutable
-authority/audit history.
+authority/audit history. It never deletes, reverses or relabels a real broker
+effect; those facts are reconciled forward.
 
 ## 9. Final authorization statement
 
 ```text
-ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS
-AUTHORIZED_FOR_AP0: WITHHELD
+ARCHITECTURE_REVIEW_REOPENED
+AP0_RELEASE_STATUS: WITHHELD
 ```
 
 No Agent Platform implementation should begin from this audit alone. The next
-module is the M11 v1.7 rollback-acceptance documentation amendment, committed
-and pushed independently. Only after that amendment is reviewed may the
-separately confirmed one-share canary, rollback evidence, and M11 landing commit
-proceed; the canary is never implied or authorized by the documentation module.
+code module is M11 v1.7 recovery/Halt plus v1.8 K0 canary policy authority,
+committed and pushed by cohesive function. Only after its non-money acceptance
+may the separately confirmed one-share canary and M11 landing proceed; neither
+this audit nor the Lean amendment authorizes that order. K1, Lean v1 freeze,
+Charter closeout and a refreshed audit/release record precede AP0.

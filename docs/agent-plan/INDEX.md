@@ -1,7 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS — `AUTHORIZED_FOR_AP0`
-> withheld pending M11 and Charter closeout**
+> Status: **LEAN V1 REVIEW OPEN — AP0 withheld pending M11,
+> K1, amendment freeze, Charter closeout and refreshed audit**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -17,22 +17,27 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
 ## AI reading order
 
 1. Read this index.
-2. Read only the module file relevant to the current discussion or task.
-3. Read `GRACE.md` when work concerns delayed behavior evaluation, credibility,
+2. Read [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) before topology,
+   deployment, Control Plane, collaboration, GRACE intake, Delegation freshness,
+   Evidence/Memory persistence, contracts or implementation-roadmap work.
+3. Read only the module file relevant to the current discussion or task.
+4. Read `GRACE.md` when work concerns delayed behavior evaluation, credibility,
    real outcomes, attribution, or Post Mortem boundaries. Then read
    `GRACE_QUANTITATIVE.md` for schemas, scoring rules, statistical models,
    ratings, maturity, and model validation.
-4. Read `DELEGATION.md` and then `DELEGATION_POLICY.md` when work concerns
+5. Read `DELEGATION.md` and then `DELEGATION_POLICY.md` when work concerns
    autonomous authority, GRACE eligibility mapping, capability templates,
    grants, human confirmation interaction, budgets, or Kernel authorization.
-5. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
+6. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
    cross-module APIs, Provider access, or failure behavior.
-6. Read `BUILD_ROADMAP.md` before planning implementation, schemas, services,
+7. Read `BUILD_ROADMAP.md` before planning implementation, schemas, services,
    migrations, rollout, or milestone acceptance.
-7. Read `FINAL_ARCHITECTURE_AUDIT.md` before claiming AP0 or any later stage is
+8. Read `FINAL_ARCHITECTURE_AUDIT.md` before claiming AP0 or any later stage is
    authorized.
-8. Read the frozen Kernel plan only when defining or implementing a Kernel
-   interface. Agent architecture cannot silently amend it.
+9. Read the frozen Kernel plan, including
+   [`../plan/06_POLICY_OWNERSHIP.md`](../plan/06_POLICY_OWNERSHIP.md), when
+   defining or implementing a Kernel/policy interface. Agent architecture
+   cannot silently amend it.
 
 `FROZEN ARCHITECTURE` records an agreed ownership or mechanism boundary. It does
 not authorize implementation until the module's detailed specification, threat
@@ -42,6 +47,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
+| Lean v1 cross-module amendment | Proposed; owner review/freeze and refreshed audit required; AP0 remains withheld | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
 | Delegation policy and risk authorization | Architecture and exact v1 specification frozen; autonomous Live disabled pending GRACE/model-risk, machine-schema, security, fault-suite, and rollout acceptance | [`DELEGATION.md`](DELEGATION.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
@@ -55,8 +61,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
-| Agent Platform Build Roadmap | Corrected and frozen through AP15; governed autonomous Live is the destination; AP0 authorization withheld pending recorded pre-AP0 gates | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md) |
-| Final cross-module architecture audit | Complete with architecture findings closed; Kernel clock blocker closed, three release blockers remain, and exact AP0 token not issued | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
+| Agent Platform Build Roadmap | Frozen baseline through AP15; Lean v1 proposes a smaller topology and lower ceremony without changing rollout destination; AP0 withheld | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
+| Final cross-module architecture audit | Reopened for Lean v1 and Kernel policy ownership; historical findings remain evidence, protected AP0 release record not approved | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
 
@@ -77,14 +83,16 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Freeze M11 rollback acceptance, complete only the separately confirmed
-   one-share canary and rollback proof, then mark M11 `LANDED` if it passes.
-2. Land the post-M11 Charter amendment and run the digest-pinned audit release
-   check. Record owner acceptance plus independent review in committed
-   `AP0_RELEASE.md`; implement AP0 only when that record explicitly issues
-   `AUTHORIZED_FOR_AP0`.
-3. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
+1. Implement and certify M11 v1.7 recovery/Halt plus v1.8 K0 canary authority;
+   then complete only the separately confirmed one-share canary and its stop/
+   recovery acceptance before marking M11 `LANDED`.
+2. Implement K1 Kernel policy ownership, then owner-review/freeze Lean v1.
+3. Land the remaining post-M11 Charter amendment and run the digest-pinned
+   audit release check. Record owner acceptance plus independent review in a
+   machine-verifiable signed/protected AP0 release record; implement AP0 only
+   when that exact digest-bound record has decision `authorized`.
+4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
    data and a signed Calibration Pack before AP9 implementation.
-4. Continue stage by stage with non-Live foundations first. GRACE and
+5. Continue stage by stage with non-Live foundations first. GRACE and
    Delegation cannot affect autonomous Live until their independent acceptance
    boundaries pass.

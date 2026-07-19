@@ -1,7 +1,7 @@
 # Alpheus Agent Platform Build Roadmap
 
-> Status: **ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS — frozen implementation
-> sequence corrected; AP0 authorization remains withheld**
+> Status: **FROZEN BASELINE UNDER LEAN V1 REVIEW — AP0 authorization remains
+> withheld**
 >
 > Scope: post-M11 Agent Platform work. This roadmap orders implementation and
 > defines its contract artifacts, ownership boundaries, rollout gates, and
@@ -12,6 +12,13 @@
 > eligible strategies as a governed autonomous trading system. Normal qualified
 > orders do not require per-trade human confirmation. Humans retain policy,
 > absolute-limit, material-promotion, rollout, and emergency authority.
+
+> Review notice: [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) proposes a
+> smaller initial topology and narrowly supersedes the synchronous GRACE intake,
+> permanent deployable topology, rolling authority-lease and internal-contract
+> ceremony described below. Until that amendment is owner-reviewed, frozen and
+> re-audited, conflicting implementation is not authorized. AP0-AP15 remain
+> rollout/acceptance gates, not a required service count.
 
 ## 1. Decision
 
@@ -60,39 +67,44 @@ a second scheduler or proposer, otherwise one trigger could create two effects.
 
 All of the following are required:
 
-- M11 is `LANDED`, including its separately confirmed canary and rollback
+- M11 is `LANDED`, including its separately confirmed canary and stop/recovery
   evidence;
+- Kernel policy migration K1 is landed and no migrated business/risk value
+  falls back to YAML;
+- Lean v1 is owner-reviewed and frozen;
 - the Kernel remains healthy with `LIVE_TRADING_ENABLED=false` by default;
 - the pre-AP0 governance closeout has landed a reviewed post-M11 Charter
-  amendment authorizing the new schemas, roles, services, and Kernel interfaces
-  named here;
+  amendment authorizing the lean boundaries, schemas, roles, and Kernel
+  interfaces named here;
 - the final cross-module architecture audit has no unresolved authority,
   identity, ordering, or fail-open finding; and
-- the audit release check has issued the exact `AUTHORIZED_FOR_AP0` token.
+- the audit release check has verified an owner-signed/protected, digest-bound
+  AP0 release record whose decision is `authorized`.
 
 Documentation, threat models, and non-executable fixture design may be prepared
 earlier. No Agent Platform implementation, deployable prototype, Agent schema,
 Agent credential, Agent application behavior, or Agent operation-emission path
 may change. Pre-AP0 Kernel safety repairs and M11 closeout remain allowed only
 under the frozen Kernel plan and Kernel change-control process.
-Within AP0 and every later stage, a
-Schema Freeze Pack must land in a contract-only commit before any handler,
-migration, service, or runtime-behavior implementation for that Pack begins.
+After Lean v1 freeze, a contract-first commit is mandatory for money,
+authority, cross-process and public event boundaries. Purely internal package
+types may evolve in their cohesive module commit with executable tests.
 
 The **pre-AP0 governance closeout** is not an implementation milestone. It:
 
-1. closes M11 and its rollback evidence;
-2. lands the Charter amendment through the frozen Kernel change-control process;
-3. pins the exact final-audit and Charter digests; and
-4. runs a narrow release check proving those prerequisites did not invalidate
+1. closes M11 and its stop/recovery evidence;
+2. lands K1 and freezes Lean v1;
+3. lands the Charter amendment through the frozen Kernel change-control process;
+4. pins the exact Lean, final-audit and Charter digests; and
+5. runs a narrow release check proving those prerequisites did not invalidate
    the audit, then records an owner authorization plus an independent
-   architecture-review attestation in a committed digest-pinned
-   `AP0_RELEASE.md`.
+   architecture-review attestation in a machine-verifiable signed/protected,
+   digest-pinned AP0 release record.
 
-Only that record may contain the issued release token. An implementation Agent,
-Worker, CI job, or ordinary maintainer cannot self-issue it by typing the token
-into a plan or commit message. AP0 verifies those pinned records; it does not
-deliver its own prerequisite.
+Only that protected record may authorize AP0. An implementation Agent, Worker,
+CI job or ordinary maintainer cannot self-issue it by writing a status string
+into a plan or commit message. AP0 verifies its signature/protection, decision
+and pinned records; it does not deliver its own prerequisite.
 
 ### 3.2 Before any new-risk Artifact can reach Kernel
 
@@ -130,10 +142,10 @@ disabled unless a later separately frozen plan adds them.
 ## 4. Dependency graph
 
 ```text
-final architecture audit (may run before M11 closeout)
-                         |
-M11 LANDED -> pre-AP0 Charter closeout + audit release check
-                         |
+historical audit -> M11 LANDED -> K1 -> Lean v1 freeze
+                                      |
+                    Charter closeout + refreshed audit/release
+                                      |
                         AP0  shared contracts and authority scaffold
                          |
                         AP1  durable Control Plane and Worker
@@ -1375,32 +1387,33 @@ contract pack -> migration/roles -> deterministic core -> transports/UI
 Each coherent unit is committed and pushed before the next unit when it can be
 reviewed independently.
 
-## 15. Final audit result
+## 15. Current audit result
 
 The cross-module audit is recorded in
 [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md). It traced write and
 authority paths, later-spec ownership, identity/revision/digest/freshness,
 delivery and failure behavior, Kernel isolation, quantitative blockers,
-dependency order, and rollback. Its architecture corrections are incorporated
-in this revision.
+dependency order, and application rollback. Lean v1 reopens its topology,
+GRACE-intake, freshness and contract-ceremony conclusions.
 
 ```text
-ARCHITECTURE_AUDIT_COMPLETE_WITH_BLOCKERS
-AUTHORIZED_FOR_AP0: WITHHELD
+ARCHITECTURE_REVIEW_REOPENED
+AP0_RELEASE_STATUS: WITHHELD
 ```
 
 The Kernel database/process market-day blocker was closed by `66b0281` and
-recertified at `d2605b9` with the complete isolated M9 gate green. The three
-remaining release blockers are outside the corrected Agent architecture:
+recertified at `d2605b9` with the complete isolated M9 gate green. Current
+release blockers are:
 
-1. freeze and pass M11 rollback acceptance, execute only the separately
-   confirmed one-share canary, and mark M11 `LANDED` with evidence;
-2. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
+1. implement and pass M11 v1.7/v1.8 K0 stop/recovery acceptance, execute only
+   the separately confirmed one-share canary, and mark M11 `LANDED`;
+2. land K1 and owner-review/freeze Lean v1;
+3. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
    closeout; and
-3. run the digest-pinned audit release check and only then issue the exact
-   `AUTHORIZED_FOR_AP0` token.
+4. refresh the cross-module audit, run the digest-pinned release check, and only
+   then approve the protected AP0 release record.
 
-Until that token exists, no Agent Platform code, persistence, migration, service,
-or runtime behavior is authorized. Later milestones still require their own
+Until that protected authorized record exists, no Agent Platform code,
+persistence, migration, service or runtime behavior is authorized. Later milestones still require their own
 entry gates. GRACE, Delegation, and Live cannot inherit authorization merely
 because AP0 later begins.
