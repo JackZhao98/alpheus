@@ -1,0 +1,52 @@
+#!/bin/sh
+# Non-money Agent Platform certification entrypoint. This command never loads
+# production credentials and never invokes Kernel or Provider mutation paths.
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+STAGE=${1:-}
+SEED=ap0-contract-v1
+ARTIFACT_DIR=${AGENT_CERT_ARTIFACT_DIR:-${TMPDIR:-/tmp}/alpheus-agent-certification/$STAGE-$SEED}
+GOCACHE=${GOCACHE:-${TMPDIR:-/tmp}/alpheus-agent-go-cache}
+export GOCACHE
+
+case "$STAGE" in
+	ap0) ;;
+	ap1|ap2|ap3|ap4|ap5|ap6|ap7|ap8|ap9|ap10|ap11|ap12|ap13|ap14|ap15|all)
+		echo "FAIL stage=$STAGE reason=mandatory-probes-not-implemented" >&2
+		exit 1
+		;;
+	*)
+		echo "usage: $0 <ap0|ap1|...|ap15|all>" >&2
+		exit 2
+		;;
+esac
+
+mkdir -p "$ARTIFACT_DIR"
+cd "$ROOT"
+
+find agent-platform -type f -name '*.go' -exec gofmt -l {} + >"$ARTIFACT_DIR/gofmt.txt"
+if [ -s "$ARTIFACT_DIR/gofmt.txt" ]; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"gofmt"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="gofmt"><failure>dirty formatting</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=gofmt" >&2
+	exit 1
+fi
+
+if ! go -C agent-platform vet ./... >"$ARTIFACT_DIR/go-vet.txt" 2>&1; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-vet"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-vet"><failure>go vet failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=go-vet" >&2
+	exit 1
+fi
+
+if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2>&1; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-test-race"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-test-race"><failure>tests failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=go-test-race" >&2
+	exit 1
+fi
+
+printf '{"stage":"%s","status":"PASS","seed":"%s","effect_ceiling":"none"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+printf '<testsuite name="%s" tests="3" failures="0"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="go-test-race"/></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+echo "PASS stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR effect_ceiling=none"
