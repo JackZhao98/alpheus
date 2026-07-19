@@ -322,14 +322,28 @@ removes dead fields from canonical authority, rejects unknown fields, validates
 structural ranges, and verifies a schema-bound digest on read. Exact retries
 are idempotent; concurrent activations produce one winner and a durable
 `kernel_policy_activation_conflict` event for the loser. Isolated PostgreSQL,
-CLI, race and vet acceptance passed. This foundation is not deployed and does
-not yet replace runtime YAML reads.
+CLI, race and vet acceptance passed.
 
-K1B must bind operations and downstream execution records to the database
-revision, persist proposal expiry and claim lease expiry using database time,
-switch all enforcement readers, and remove runtime YAML fallback. K1C retains
-the completed-day attestation and guarded Live-canary widening work. K1 is not
-`LANDED` until both are complete.
+**K1B-1 LANDED** in `be90658`. Migration 0012 binds every new operation to the
+exact policy revision, generation and digest, persists absolute proposal expiry
+from database time, and rejects unbound or stale post-head inserts while
+leaving historical pre-K1 rows explicit and nullable. Proposal admission takes
+a shared policy lock while activation takes the matching exclusive lock, so a
+transaction observes wholly the old or new generation without serializing the
+live and shadow ledgers. Review evaluates both the bound historical policy and
+the current policy and cannot gain TTL, risk or price authority from a later
+widening. Normal runtime YAML loading is removed; startup requires valid
+database authority and `/limits`, `/state`, operation reads and lifecycle
+events expose its binding. Isolated missing-file startup, PostgreSQL transition
+and barrier probes, race/vet, Compose smoke and full M9 certification passed.
+Neither K1A nor K1B-1 was deployed to production.
+
+K1B-2 remains: bind grants, reservations, attempts and orders to the same
+revision; persist their exact execution envelopes; replace instance-relative
+claim cutoffs with database-time lease expiry; and apply current tightening to
+reprice/recovery without allowing a later widening to expand old work. K1C
+retains the completed-day attestation and guarded Live-canary widening work.
+K1 is not `LANDED` until both are complete.
 
 ## Explicit non-goals
 

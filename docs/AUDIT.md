@@ -12,8 +12,11 @@ the current milestone. `PLAN.md` is a compatibility entrypoint.
 
 ## Methodology — behavior first
 
-Primary method: black-box testing against the running stack
-(`docker compose up`). Allowed observation/attack surfaces:
+Primary method: black-box testing against the running stack. On each fresh
+database, start `db`, build `kernel`, explicitly run `kernel-policy` with
+`--expected-generation=0`, then start the stack; normal Kernel startup must
+fail rather than import a file when the head is missing. Allowed
+observation/attack surfaces:
 
 - The kernel HTTP API on :8100 (curl / scripts / a small test harness).
 - The agent-runtime logs (`docker compose logs`).
@@ -64,7 +67,7 @@ violated, and severity.
   auto-approved. **Do not use `xargs -P` or process-per-request curl**: process
   startup jitter can serialize the requests enough to produce a false PASS.
   Use the same-process start-barrier harness in `audit/repro/i4_barrier.go`:
-  after a fresh `docker compose up db kernel`, run `go run
+  after a fresh database plus explicit Kernel-policy bootstrap, run `go run
   ./audit/repro/i4_barrier.go`, then repeat on another fresh database with
   `-shadow`. To probe multiple kernel instances, pass comma-separated endpoints
   with `-urls http://localhost:8100,http://localhost:8101`. Repeat this barrier
@@ -288,7 +291,7 @@ Produce `audit/FINDINGS.md`:
 3. **Untested concerns** — suspected risks you could not reach
    behaviorally, and what instrumentation would make them testable.
 4. **Repro scripts** — `audit/repro/*.sh`, each self-contained against a
-   fresh `docker compose up`.
+   fresh database, explicit policy bootstrap and running Compose stack.
 
 Reset state between destructive test groups with `docker compose down -v`.
 Do not modify any file outside `audit/`.

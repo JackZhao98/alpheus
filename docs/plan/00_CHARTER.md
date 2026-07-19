@@ -19,16 +19,18 @@
 This is a milestone-by-milestone work order against the existing Go repo.
 Execute milestones **in order** (later ones depend on earlier ones), one PR
 per milestone. Every PR must pass: `gofmt -l .` empty, `go vet ./...`,
-`go test ./...`, and `docker compose up --build` still boots cleanly with
-`scripts/smoke.sh` passing.
+`go test ./...`; on a fresh database, explicitly run the `kernel-policy`
+bootstrap before `docker compose up --build`; and keep `scripts/smoke.sh`
+passing. Normal server startup must never import that file automatically.
 
 ## Context
 
 alpheus is an agentic options-trading system for a small (~$300) Robinhood
 account. Two services + postgres:
 
-- `kernel/` — deterministic Go service. Owns broker credentials, hard risk
-  limits (`kernel/limits.yaml`), operation approval, order lifecycle,
+- `kernel/` — deterministic Go service. Owns broker credentials, typed
+  database policy authority (`kernel/limits.yaml` is bootstrap input only),
+  operation approval, order lifecycle,
   persistence. HTTP on :8100. Deps: lib/pq, robfig/cron, yaml.v3.
 - `agent-runtime/` — LLM cognition layer. Stateless sessions per role
   (desk_master / scout / position_manager / coach), output schemas enforced
