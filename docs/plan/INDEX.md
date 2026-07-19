@@ -6,11 +6,11 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **owner-review/freeze the Agent Platform Lean
-> v1 amendment, close the remaining Charter work, and refresh the digest-pinned
-> non-money audit/release record before AP0. K1 and B0 are landed. M11 is
-> `CANARY DEFERRED`, production remains read-only, and the real canary is a hard
-> gate before AP13 rather than before non-money development**
+> Current implementation target: **AP0 common contracts and authority scaffold
+> under the frozen Lean v1 Agent architecture. AP0 is non-money and authorizes
+> no Runtime operation emission. M11 is `CANARY DEFERRED`, production remains
+> read-only, and the real canary is a hard gate before AP13 rather than before
+> non-money development**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -124,3 +124,4 @@ When a milestone lands:
 | 2026-07-18 | v1.8.1 | Make K0 widening evidence explicitly fail closed | Implementation review proved `day_open` records observation/start, not a final broker-reconciled completed day. K0 therefore permits explicit bootstrap and tightening only; `cap increase OR clean_days decrease` is classified as widening and denied. K1 owns a typed durable completed-day attestation before widening can exist. Commit `d24b8b9` lands K0 without a Config Service, generic head table, HTTP mutation path, YAML fallback or production broker call. |
 | 2026-07-18 | v1.9 | Add B0 broker coexistence and pre-effect Provider facts | Live preflight found real queued orders created outside Alpheus, and the owner confirmed humans may add, reduce, sell, or cancel on the shared account. Current open-order reads are display-only, internal close exposure cannot manage a purely external position, and an external change can invalidate a previously safe proposal. B0 preserves origin without adoption, accounts aggregate Provider facts fail closed, routes later external cancel/close through Kernel, and refreshes action-specific facts immediately before effects. The controlled clean-account M11 canary may proceed first; B0 is required before AP0/autonomous Agent Live. |
 | 2026-07-18 | v1.9.1 | Defer the real M11 Canary without blocking non-money work | The owner cannot run the production order now and explicitly directed development to continue. M11's code, recovery/Halt, K0, target v10 migration and read-only deployment are complete with zero money effects. K1, B0 and AP0–AP12 have no need for a production mutation when their deployment ceiling remains read-only/Shadow, so they may proceed under their existing gates. M11 remains `CANARY DEFERRED`, never `LANDED`; the real order must run against the final post-K1/B0 Kernel and remains a hard prerequisite for AP13–AP15. |
+| 2026-07-19 | v1.9.2 | Freeze Lean v1 and authorize the non-money AP0 foundation | Focused implementation-readiness review found no unresolved authority, identity, ordering or fail-open conflict after K1 and B0 landed. The owner accepted Lean v1 and directed a fast closeout rather than another planning phase. The Charter now names the Agent Platform profiles and Research Gateway. A protected/digest-bound release mechanism becomes an AP0 deliverable required before AP1, not a prerequisite subsystem that must exist before AP0 can build it. This authorizes AP0 only and does not authorize Runtime operation emission, GRACE, Delegation, production activation or any Live effect. |

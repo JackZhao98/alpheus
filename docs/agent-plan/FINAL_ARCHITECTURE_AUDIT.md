@@ -1,25 +1,24 @@
 # Agent Platform Final Cross-Module Architecture Audit
 
-> Audit date: **2026-07-18**
+> Audit date: **2026-07-19**
 >
 > Historical audit input baseline: `d8c977ccdd86b28550da526a56ec010cdf63adac`
 > Historical corrected architecture candidate:
 > `aa4df069e979a119782224ec2a488f942f0dcff6`
-> (current Lean/policy amendments require new digests after freeze)
+> Current implementation-readiness baseline: `a61dd9b` plus this governance
+> closeout
 >
-> Result: **HISTORICAL AUDIT — REVIEW REOPENED FOR LEAN V1 AND KERNEL POLICY**
+> Result: **CURRENT AUDIT — PASS FOR NON-MONEY AP0 FOUNDATION**
 >
-> Authorization: **AP0 RELEASE WITHHELD**
+> Authorization: **AP0 NON-MONEY IMPLEMENTATION AUTHORIZED**
 
 ## 1. Decision
 
-This document records the previous full-topology audit. The product destination
-and closed safety findings remain useful evidence, but its final topology,
-synchronous GRACE acknowledgement, rolling lease and release verdict are under
-re-review by [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) and Kernel policy
-amendment [`../plan/06_POLICY_OWNERSHIP.md`](../plan/06_POLICY_OWNERSHIP.md).
-It cannot issue AP0 authorization until that amendment is frozen and this audit
-is refreshed against new digests.
+This document incorporates the previous full-topology audit and the focused
+Lean v1 implementation-readiness review. [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md)
+is frozen and is the current interpretation of topology, asynchronous GRACE
+intake, Grant freshness and contract ceremony. Kernel policy K1 and broker
+coexistence B0 are landed.
 
 The corrected Agent Platform architecture is coherent around one intended
 product destination:
@@ -41,13 +40,12 @@ GRACE score, or Delegation proposal can directly mutate a broker or manufacture
 Kernel permission. The architecture findings discovered during this audit were
 closed in the same document revision.
 
-AP0 is nevertheless not authorized. The Kernel clock blocker is closed, its
-complete certification is green, and M11 v1.7.1 recovery/Halt landed in
-`0913010`, while v1.8.1 K0 database canary authority landed in `d24b8b9`;
-however, K1, B0 broker coexistence, Lean v1 freeze and the Charter/audit closeout
-remain incomplete. Amendment v1.9.1 makes the separately confirmed Canary an
-AP13+ gate while preserving M11 as non-landed. These are hard gates at their
-declared stages, not optional follow-up work.
+AP0 non-money implementation is authorized. The Kernel clock blocker is closed,
+its complete certification is green, K1 and B0 are landed, Lean v1 is frozen,
+and the Charter closeout is recorded by plan amendment v1.9.2. AP0 authorizes
+no Runtime operation emission, GRACE model, Delegation grant, production
+activation or Live effect. Amendment v1.9.1 keeps the separately confirmed
+Canary as an AP13+ gate while preserving M11 as non-landed.
 
 ## 2. Scope and method
 
@@ -67,9 +65,10 @@ The audit covered:
 - current repository status and the Kernel closure/recertification evidence
   described in section 6.
 
-Three independent review passes challenged authority/security, schema/failure
-semantics, and roadmap/release gates. No Live mode, production credential, MCP
-mutation, broker call, or real-money operation was used by this audit.
+The historical independent review passes plus the 2026-07-19 focused Lean v1
+readiness pass challenged authority/security, schema/failure semantics and
+roadmap gates. No Live mode, production credential, MCP mutation, broker call
+or real-money operation was used by this audit.
 
 ## 3. Human and machine responsibility
 
@@ -99,13 +98,13 @@ per-order dependency for an already valid autonomous scope.
 | Task and Artifact | Control Plane owns state; Worker returns validated candidate output | Artifact is untrusted; AP8 atomically adds Agent Control-owned BehaviorEvent | Duplicate/retry retains causal identity; no provisional scoreable record |
 | Skill/Tool | Candidate, Validator, activation decision, and ActiveCapabilityHead have disjoint writers | Gateway intersects active capability, Skill, Run, principal, mode, and health | AP3 external calls are read-only; no production Robinhood MCP credential |
 | Evidence | Connector preserves raw BlobRef; Evidence Store owns transformations and point-in-time facts | Research facts never satisfy Kernel execution gates | Stale/conflicting/missing data stays explicit and blocks dependent decisions |
-| Agent release | Candidate author, release Validator, and ActiveAgentDeploymentHead Activator are separate | Delegation lease and Kernel bind the active head | Runtime cannot deploy its own prompt/model/Role revision |
+| Agent release | Candidate author, release Validator, and ActiveAgentDeploymentHead Activator are separate | Scoped Grant and Kernel bind the active head | Runtime cannot deploy its own prompt/model/Role revision |
 | Strategy | Lab writes Candidate; Validator attests; authority owner decides; Activator CASes ActiveStrategyHead | Activation selects a decision revision but grants no money authority | Self-promotion, material inheritance, and head races fail closed |
-| Behavior/Outcome | Agent Control owns BehaviorEvent; GRACE Intake owns Ticket and fenced Outcome revisions | New risk waits for exact accepted Ticket acknowledgement | Late/selective registration and concurrent correction cannot win silently |
+| Behavior/Outcome | Agent Control atomically owns BehaviorEvent publication; GRACE Intake owns asynchronous intake/cursor and fenced Outcome revisions | Complete-stream health gates later ScoreSnapshot/Grant eligibility, not same-trade latency | Cursor gaps, selective omission and concurrent correction cannot win silently |
 | GRACE | Engine, Validator, model-risk, and Activator write disjoint records | ScoreSnapshot is evidence only; immutable model body is separate from head/events | Missing/stale/invalid model or data cannot produce favorable authority evidence |
 | Delegation | Engine proposes; Validator attests; applicable authority approves; Activator installs | Grant is scoped evidence-backed permission, not execution | Missing/mixed ActivationAuthority, stale heads, or widening by auto path denies |
-| Exact confirmation | User Authority Gateway owns receipt candidates; Kernel owns ticket/head/use | Kernel consumes one exact current receipt after re-gating | Duplicate, stale, changed, forged, or ambiguous receipt is inert/denied |
-| Autonomous admission | Decision Artifact plus Ticket acknowledgement plus one current grant | Kernel locks source/scope/pool and its own risk/reservation state | Any mismatch/unknown denies new risk before attempt/send |
+| Exact confirmation | Kernel Admin human-audience path owns receipt candidates and ticket/head/use | Kernel consumes one exact current receipt after re-gating | Duplicate, stale, changed, forged, or ambiguous receipt is inert/denied |
+| Autonomous admission | Decision Artifact plus one current scoped Grant/ScopeHead | Kernel locks canonical source/scope heads and its own risk/reservation state | Any mismatch, stale source or unknown denies new risk before attempt/send |
 | Broker effect | Kernel owns operation, binding, charge, grant, reservation, attempt, order/fill, and Provider | Stable attempt and send fence commit before Provider call | Unknown latches; canonical pull/reconciliation; no blind resend |
 | Web/Diagnostics | Web writes no truth; typed commands target owning APIs | Browser has no DB, broker, activation, or production MCP secret | Stale/unknown UI cannot confirm, activate, or infer success |
 | BlobStore | Artifact Store owns staged/committed bytes and BlobRef metadata | Every read enforces current principal, owning reference, ACL, and retention | Digest knowledge is not access; authoritative reachable blobs are not GC'd |
@@ -146,8 +145,10 @@ capabilities, never broad cross-schema update permission.
 AP1 supplies only the durable Artifact publication/outbox extension and cannot
 invent a provisional BehaviorEvent. At AP8, Agent Control atomically commits the
 canonical BehaviorEvent with its qualifying Artifact; separately credentialed
-GRACE Intake validates it and creates the GRACE-owned Ticket/ack. There is one
-Behavior identity and no cross-owner transaction claim.
+GRACE Intake validates it asynchronously and advances complete-stream cursor
+state. There is one Behavior identity and no cross-owner transaction claim.
+Missing intake acknowledgement never grants permission; cursor gaps or backlog
+make later ScoreSnapshot/Grant evidence ineligible.
 
 ### A-06 — Delegation activation authority
 
@@ -202,7 +203,7 @@ human approval cannot waive a mandatory review. Event consumer identity remains
 stable across deployment, and inbox dedupe/tombstones outlive the producer's
 maximum replay horizon.
 
-## 6. Release blockers and closure status
+## 6. Release and closure status
 
 ### R-01 — CLOSED: Kernel market-day clock and certification
 
@@ -257,31 +258,27 @@ Mark M11 `LANDED` only if every frozen acceptance item passes. This audit did
 not authorize the target-database mutation; the later owner instruction did.
 It still authorizes no real-money order.
 
-### R-03 — Post-M11 Charter amendment is not landed
+### R-03 — CLOSED: Agent Platform Charter amendment
 
-The current Charter still excludes the new Agent schemas/process profiles,
-Research Gateway, Strategy Lab and additional Web scope. After the M11
-non-money/deferred evidence plus K1/B0 land and Lean v1 freezes, a dedicated
-pre-AP0 governance commit must amend the Charter and pin the exact deployment,
-credential, database, Provider and authority boundaries from the lean plan.
+Plan amendment v1.9.2 updates the Charter with the frozen Lean v1 distribution,
+credential-isolated profiles, Research Gateway, durable Control/Worker boundary
+and AP0 effect ceiling. K1 and B0 are landed prerequisites. The owner accepted
+the amendment on 2026-07-19.
 
-### R-04 — AP0 protected release record is not approved
+### R-04 — MOVED TO AP0 ACCEPTANCE: digest-bound release verification
 
-After the non-money AP0 portion of R-02 and R-03 close, a narrow release check
-must verify the M11 deferred evidence/effect ceiling, Charter, roadmap,
-corrected architecture commit, and audit digests and
-confirm no new authority/fail-open finding. An owner-signed/protected release
-record plus independent architecture-review attestation must bind every verified
-digest, reviewer identity, owner decision and trusted release time. CI/startup
-verifies that protection and exact content; a string in Markdown has no
-authority.
+Requiring a protected release subsystem before the first non-money foundation
+could build it was premature ceremony. The frozen Git governance change plus
+the explicit owner decision authorizes AP0 only. AP0 must implement a
+machine-verifiable, digest-bound release manifest and verification command; it
+must pass before AP1. Later stages, production activation and runtime effects
+cannot infer authority from an implementation Agent, Worker, CI job or
+Markdown status.
 
-The implementation Agent, Worker, CI job and ordinary maintainer cannot create
-the owner decision. The record opens AP0 only. After Lean v1 freeze, AP0 uses a
-contract-first commit for money, authority, cross-process and public-event
-boundaries; internal types may evolve in their cohesive module with tests. The
-record does not authorize AP1 or later work, production activation, runtime
-effects, GRACE implementation, Delegation activation or Live trading.
+AP0 still uses a contract-first commit for money, authority, cross-process and
+public-event boundaries; internal types may evolve in their cohesive module
+with tests. This authorization does not cover AP1 or later work, GRACE,
+Delegation, production activation or Live trading.
 
 ## 7. Intentional later gates
 
@@ -300,13 +297,11 @@ closes:
 
 ## 8. Dependency and rollback verdict
 
-The previous sequence remains a candidate rollout order, but Lean v1 must be
-frozen and re-audited before this verdict becomes current:
+The frozen Lean v1 sequence is the current rollout order:
 
 ```text
 M11 non-money/deferred gate -> K1 + B0 -> Lean v1 freeze
--> pre-AP0 Charter closeout and refreshed audit/release check
--> AP0 -> AP1
+-> Charter/audit closeout -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
 -> AP9 || AP10 -> AP11 -> AP12 -> M11 Canary/LANDED
 -> AP13 -> AP14 -> AP15
@@ -327,14 +322,13 @@ effect; those facts are reconciled forward.
 ## 9. Final authorization statement
 
 ```text
-ARCHITECTURE_REVIEW_REOPENED
-AP0_RELEASE_STATUS: WITHHELD
+ARCHITECTURE_REVIEW_CURRENT
+AP0_NON_MONEY_STATUS: AUTHORIZED
 ```
 
-No Agent Platform implementation should begin from this audit alone. M11
-v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority are committed and
-pushed, and the target K0/read-only deployment is separately certified. The
-one-share Canary is explicitly deferred and neither this audit nor the Lean
-amendment authorizes that order. K1, B0, Lean v1 freeze, Charter closeout and a
-refreshed non-money audit/release record precede AP0; M11 landing additionally
-precedes AP13.
+AP0 non-money implementation may begin from this frozen governance state and
+the explicit owner decision. M11 recovery/Halt, K0, K1 and B0 are committed and
+certified, while the target deployment remains read-only. The one-share Canary
+is explicitly deferred and neither this audit nor the Lean amendment authorizes
+that order. AP0 cannot emit operations or activate GRACE, Delegation or Live;
+M11 landing additionally precedes AP13.

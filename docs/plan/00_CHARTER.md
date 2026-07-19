@@ -25,19 +25,26 @@ passing. Normal server startup must never import that file automatically.
 
 ## Context
 
-alpheus is an agentic options-trading system for a small (~$300) Robinhood
-account. Two services + postgres:
+alpheus is an agentic trading system for a small Robinhood account. The landed
+Kernel and the frozen Lean v1 Agent architecture use one Kernel, one Agent
+Platform distribution with credential-isolated profiles, one Research Gateway,
+and PostgreSQL plus bounded blob storage:
 
 - `kernel/` — deterministic Go service. Owns broker credentials, typed
   database policy authority (`kernel/limits.yaml` is bootstrap input only),
   operation approval, order lifecycle,
   persistence. HTTP on :8100. Deps: lib/pq, robfig/cron, yaml.v3.
-- `agent-runtime/` — LLM cognition layer. Stateless sessions per role
-  (desk_master / scout / position_manager / coach), output schemas enforced
-  in `internal/contracts`. Currently runs a rule-based stub cognition.
-- `db/init.sql` — schema: events, operations, orders, fills, journal,
-  lessons, blackboard. (Becomes migration 0001 in M2.7; see that milestone
-  before adding any column.)
+- `agent-runtime/` — the landed prototype cognition loop. It remains available
+  while AP0/AP1 build the durable replacement, but its direct proposer is
+  retired before the new Control Plane claims triggers.
+- `agent-platform/` — the Lean v1 target distribution. `control-api`, `worker`,
+  GRACE, Delegation, Validator and Activator profiles run with separate
+  credentials and record-family permissions even when they share code.
+- `research-gateway/` — approved read-only external Tool/market-data sessions,
+  normalization, quarantine and egress policy. It never holds production broker
+  mutation credentials.
+- `db/migrations/` plus content-addressed blob storage — relational authority,
+  durable workflow/evidence state and bounded referenced bytes.
 
 Operation approval classes (`kernel/internal/risk`):
 - **A** risk-reducing (verified close / cancel / tighten_stop) → execute
@@ -55,8 +62,10 @@ Operation approval classes (`kernel/internal/risk`):
 
 1. Numeric risk rules live ONLY in `kernel/limits.yaml` + `internal/risk`.
    Never in prompts, never in agent-runtime.
-2. agent-runtime NEVER talks to the broker or any market/MCP endpoint
-   directly. It only calls the kernel HTTP API.
+2. Only the Kernel may mutate or reconcile the broker. Agent Workers never
+   receive broker credentials or call market/MCP endpoints directly. Approved
+   external reads go through the Research Gateway; broker/account truth used by
+   a risk or execution gate comes from Kernel/Provider projections.
 3. Contracts (struct + Validate) are enforced in code regardless of prompts.
 4. Shadow operations (`shadow: true`) must NEVER reach the broker.
 5. Do not add dependencies beyond the existing three plus, where a milestone
@@ -129,6 +138,24 @@ its own authorized policy revision. Full ownership, binding and transition
 rules are in
 [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md).
 
+### Amendment v1.9.2 — Lean v1 Agent Platform entry
+
+The owner accepted the Lean v1 architecture after K1 policy ownership and B0
+broker coexistence landed. The Agent Platform is one distribution with
+credential-isolated profiles, not one service per logical Agent or governance
+role. The deterministic Control Plane owns durable Run/Task/Attempt/Artifact
+state; Workers return untrusted typed Artifacts; Research Gateway owns approved
+external reads; Kernel remains the sole broker mutation and hard-risk boundary.
+
+AP0 is authorized only to build common contracts, identity/authority scaffolds,
+database roles, outbox/inbox, bounded blob handling and disabled-by-default
+effect controls. It cannot emit an operation or activate GRACE, Delegation or
+Live. AP0 must implement the digest-bound release manifest and verification
+mechanism required before AP1. Repository history plus the explicit owner
+decision authorize AP0 entry; no prose status can authorize later stages or
+runtime effects. Exact ownership and supersession rules are frozen in
+[`../agent-plan/LEAN_V1_AMENDMENT.md`](../agent-plan/LEAN_V1_AMENDMENT.md).
+
 ---
 
 ## Canonical sequence
@@ -145,7 +172,8 @@ status, dependency gates, and the current implementation target.
   storage migration. Importing identical values under v1.8 is allowed; any
   value/semantic change requires its own authorized policy revision.
 - Robinhood ORDER placement before M11's preconditions are met.
-- Any UI beyond the M8B/M7 single Trading Cockpit.
+- UI polish, responsive refinement or additional clients before their owning
+  Agent Web milestone; early desktop diagnostics may remain deliberately plain.
 - Backtest replay tooling (Phase 3, separate plan).
 - Covered / multi-leg strategies. The single-leg model cannot express them and
   approximating one is how `open`+`sell` became a hole; they need their own

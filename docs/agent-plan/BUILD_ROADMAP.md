@@ -1,7 +1,6 @@
 # Alpheus Agent Platform Build Roadmap
 
-> Status: **FROZEN BASELINE UNDER LEAN V1 REVIEW — AP0 authorization remains
-> withheld**
+> Status: **FROZEN LEAN V1 ROADMAP — non-money AP0 implementation authorized**
 >
 > Scope: post-M11 Agent Platform work. This roadmap orders implementation and
 > defines its contract artifacts, ownership boundaries, rollout gates, and
@@ -13,12 +12,11 @@
 > orders do not require per-trade human confirmation. Humans retain policy,
 > absolute-limit, material-promotion, rollout, and emergency authority.
 
-> Review notice: [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) proposes a
+> Review notice: [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) freezes a
 > smaller initial topology and narrowly supersedes the synchronous GRACE intake,
 > permanent deployable topology, rolling authority-lease and internal-contract
-> ceremony described below. Until that amendment is owner-reviewed, frozen and
-> re-audited, conflicting implementation is not authorized. AP0-AP15 remain
-> rollout/acceptance gates, not a required service count.
+> ceremony described below. AP0-AP15 remain rollout/acceptance gates, not a
+> required service count.
 
 ## 1. Decision
 
@@ -83,8 +81,8 @@ All of the following are required:
   interfaces named here;
 - the final cross-module architecture audit has no unresolved authority,
   identity, ordering, or fail-open finding; and
-- the audit release check has verified an owner-signed/protected, digest-bound
-  AP0 release record whose decision is `authorized`.
+- the frozen governance commit and explicit owner decision authorize only the
+  non-money AP0 foundation.
 
 Documentation, threat models, and non-executable fixture design may be prepared
 earlier. No Agent Platform implementation, deployable prototype, Agent schema,
@@ -100,25 +98,22 @@ The **pre-AP0 governance closeout** is not an implementation milestone. It:
 1. binds the completed M11 non-money evidence and explicit Canary deferral;
 2. lands K1 and B0, then freezes Lean v1;
 3. lands the Charter amendment through the frozen Kernel change-control process;
-4. pins the exact Lean, final-audit and Charter digests; and
-5. runs a narrow release check proving those prerequisites did not invalidate
-   the audit, then records an owner authorization plus an independent
-   architecture-review attestation in a machine-verifiable signed/protected,
-   digest-pinned AP0 release record.
+4. records the reviewed Lean, final-audit and Charter state in one Git
+   governance change; and
+5. records the explicit owner decision authorizing non-money AP0 work.
 
-Only that protected record may authorize AP0. An implementation Agent, Worker,
-CI job or ordinary maintainer cannot self-issue it by writing a status string
-into a plan or commit message. AP0 verifies its signature/protection, decision
-and pinned records; it does not deliver its own prerequisite.
+AP0 itself delivers the digest-bound release record and verification command.
+That mechanism must pass acceptance before AP1; later stages cannot infer
+authority from an implementation Agent, Worker, CI job or Markdown status.
 
 ### 3.2 Before any new-risk Artifact can reach Kernel
 
-The exact Artifact and its BehaviorEvent must commit atomically, the
-EvaluationTicket registration must be acknowledged under the same immutable
-identity, and the operation path must carry that identity into Kernel. If
-registration is missing, stale, late, or ambiguous, new-risk progression stops.
-Kernel-native cancel, reconcile, ambiguity containment, and verified reduction
-remain available.
+The exact Artifact and its BehaviorEvent must commit atomically, and the
+operation path must carry that identity into Kernel. GRACE intake is
+asynchronous and is not a same-trade permission check. Complete-stream cursor
+gaps, overdue backlog or invalid outcome coverage make later ScoreSnapshot and
+Grant evidence ineligible. Kernel-native cancel, reconcile, ambiguity
+containment and verified reduction remain available.
 
 ### 3.3 Before quantitative GRACE Engine or official publication
 
@@ -523,7 +518,7 @@ The originating architecture file remains the semantic source.
 | AP8 | Runtime/GRACE Intake | Agent Control-owned BehaviorEvent; GRACE-owned EvaluationTicket/ack and OutcomeRevision/Head/Event; maturity/censoring, complete-stream cursor, decision/strategy attribution refs, B0 ControlEpisode/intervention bindings, integrity event, replay manifest |
 | AP9 | GRACE | EvaluationProfileRevision, AtomicEvaluation, ScoreSnapshot, immutable GRACEModelRevision, GRACEValidatorAttestation, ModelRiskDecision, CalibrationPackRevision, ModelStateEvent, ActiveGRACEChampionHead, invalidation and rollback |
 | AP10 | User Input/Kernel | OperationConfirmationTicket, TicketDisplayReceipt, ConfirmationReceipt, TicketStateHead/Event, OperationAuthorityBinding, GateDecision, ReductionProof |
-| AP11 | Delegation/Kernel | DelegationPolicyRevision, AuthorizationTemplateRevision, ScoreSnapshotBinding, CompatibilityDecision, BudgetPoolRevision/Head, AuthorizationProposal/validation/attestation, ActivationAuthority oneof, DelegationGrant/ScopeHead, AuthorityHealthLease, DelegationCharge |
+| AP11 | Delegation/Kernel | DelegationPolicyRevision, AuthorizationTemplateRevision, ScoreSnapshotBinding, CompatibilityDecision, BudgetPoolRevision/Head, AuthorizationProposal/validation/attestation, ActivationAuthority oneof, DelegationGrant/ScopeHead, source freshness/expiry, DelegationCharge |
 | AP12-AP15 | Integration | scoped rollout revision, qualification report, Shadow comparison, canary/production revision, activation/rollback receipt, clean-day and incident evidence |
 
 ## 10. Milestone plan
@@ -535,8 +530,8 @@ effect rules locally.
 
 **Deliverables:**
 
-- pinned verification of the accepted pre-AP0 Charter amendment and audit
-  release record;
+- a digest-bound release manifest and verification command for subsequent
+  stage authorization;
 - common Schema Freeze Pack and contract validation tool;
 - repository layout for contracts, migrations, audit fixtures, and generated
   types;
@@ -564,7 +559,7 @@ effect rules locally.
 
 **Forbidden effect:** no Runtime behavior change and no operation emission.
 
-**Suggested implementation reasoning:** Max.
+**Suggested implementation reasoning:** High.
 
 ### AP1 — Durable Control Plane and Worker
 
@@ -981,8 +976,8 @@ without granting autonomous Live authority.
 **Deliverables:**
 
 - deterministic policy, template, score binding, compatibility, pool,
-  proposal, validation, attestation, grant, ScopeHead, and health-lease
-  contracts;
+  proposal, validation, attestation, Grant, ScopeHead, maximum duration and
+  source-freshness contracts;
 - exact `ActivationAuthority` oneof: a HumanDelegationDecision for first grant
   or widening, or a policy-preauthorized AutomaticNarrowingAuthorization for an
   equal-or-narrower replacement; exactly one is required;
@@ -991,7 +986,7 @@ without granting autonomous Live authority.
 - canonical source-head, ScopeHead, PoolHead, operation, reservation, and
   dispatch lock order;
 - narrowly scoped per-owner authoritative-head read/lock functions for every
-  source bound into an AuthorityHealthLease;
+  source bound into an active Grant;
 - Kernel-owned autonomous OperationAuthorityBinding, DelegationCharge, and
   GateDecision contracts;
 - admission and dispatch revalidation plus revocation and unknown-effect
@@ -1410,28 +1405,27 @@ The cross-module audit is recorded in
 [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md). It traced write and
 authority paths, later-spec ownership, identity/revision/digest/freshness,
 delivery and failure behavior, Kernel isolation, quantitative blockers,
-dependency order, and application rollback. Lean v1 reopens its topology,
-GRACE-intake, freshness and contract-ceremony conclusions.
+dependency order, and application rollback. The frozen Lean v1 amendment is
+the current interpretation of topology, GRACE intake, freshness and contract
+ceremony.
 
 ```text
-ARCHITECTURE_REVIEW_REOPENED
-AP0_RELEASE_STATUS: WITHHELD
+ARCHITECTURE_REVIEW_CURRENT
+AP0_NON_MONEY_STATUS: AUTHORIZED
 ```
 
 The Kernel database/process market-day blocker was closed by `66b0281` and
-recertified at `d2605b9` with the complete isolated M9 gate green. Current
-release blockers are:
+recertified at `d2605b9` with the complete isolated M9 gate green. AP0 entry
+conditions are closed:
 
 1. retain landed M11 v1.7.1 recovery/Halt commit `0913010`, v1.8.1 K0
    database-authority commit `d24b8b9`, the target K0/read-only deployment
    certification, and explicit `CANARY DEFERRED` status; keep AP13+ closed;
-2. land K1 and B0, then owner-review/freeze Lean v1 for non-money AP0 scope;
-3. land the reviewed Agent Platform Charter amendment in the pre-AP0 governance
-   closeout; and
-4. refresh the cross-module audit, run the digest-pinned release check, and only
-   then approve the protected AP0 release record.
+2. K1 and B0 are landed;
+3. Lean v1 and the reviewed Agent Platform Charter amendment are frozen; and
+4. the refreshed audit has no unresolved AP0 authority, identity, ordering or
+   fail-open finding, and the owner authorized the non-money AP0 foundation.
 
-Until that protected authorized record exists, no Agent Platform code,
-persistence, migration, service or runtime behavior is authorized. Later milestones still require their own
-entry gates. GRACE, Delegation, and Live cannot inherit authorization merely
-because AP0 later begins.
+AP0 is now the only authorized Agent Platform implementation stage. Later
+milestones still require their own entry gates. GRACE, Delegation and Live
+cannot inherit authorization merely because AP0 begins.

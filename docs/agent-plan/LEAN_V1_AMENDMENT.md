@@ -2,11 +2,12 @@
 
 [Back to Agent Plan Index](INDEX.md)
 
-> Status: **PROPOSED ARCHITECTURE AMENDMENT — owner review/freeze required**
+> Status: **FROZEN ARCHITECTURE AMENDMENT — owner accepted 2026-07-19**
 >
 > Scope: runtime topology, internal coordination, capability activation,
 > evidence/memory substrate, GRACE intake, Delegation freshness and contract
-> ceremony. It does not authorize AP0 or any Live effect.
+> ceremony. It authorizes non-money AP0 implementation only; it authorizes no
+> Live effect, GRACE model, Delegation grant or production activation.
 
 ## 1. Decision
 
@@ -371,21 +372,21 @@ them in these implementation bands:
 | L4 | AP11-AP15 | Delegation observe-only -> Shadow -> transitional confirmed Live -> autonomous canary -> scoped autonomous Live |
 
 Each cohesive module is committed and pushed independently. A band does not
-authorize its next gate. Under plan amendment v1.9.1, AP0 remains withheld until
-the M11 non-money/deferred evidence, K1, B0, the lean amendment, Charter closeout
-and a refreshed non-money audit/release record are complete. AP13+ additionally
-requires M11 `LANDED` through the real Canary.
+authorize its next gate. Plan amendment v1.9.2 freezes this amendment and the
+reviewed Charter/audit closeout, so non-money AP0 implementation may begin.
+AP13+ additionally requires M11 `LANDED` through the real Canary.
 
-AP0 release authority is a machine-verifiable, owner-signed/protected release
-record binding exact digests, test evidence, reviewer attestation, decision and
-trusted time. CI/startup verifies that record and signature/protected head. A
-literal phrase in Markdown is status display only and can never authorize code.
+AP0 must deliver a machine-verifiable, digest-bound release record and its
+verification command before AP1 starts. Protection/signing belongs to that
+implementation and its acceptance suite; it is not a prerequisite subsystem
+that must exist before AP0 can build it. Repository history plus the explicit
+owner decision authorizes this first non-money foundation only. A Markdown
+status string alone never authorizes later stages or runtime effects.
 
 ## 12. Supersession map and non-goals
 
-If frozen documents conflict after this amendment is owner-reviewed and frozen,
-this file supersedes only the following, including every cross-reference to the
-named mechanism:
+Where older frozen documents conflict, this amendment supersedes only the
+following, including every cross-reference to the named mechanism:
 
 - **Synchronous GRACE permission:** `BUILD_ROADMAP.md` sections 3.2 and AP8;
   `SYSTEM_BOUNDARIES.md` Logical module graph, Read-model/event direction,
@@ -417,9 +418,10 @@ named mechanism:
 - **Workflow/storage shape:** mandatory full-roster Agent execution and physical
   table/service proliferation for Evidence/Memory are replaced by sections 4
   and 7, without changing logical review or transition ownership.
-- **AP0 magic string:** roadmap/audit language treating the literal
-  `AUTHORIZED_FOR_AP0` text as the gate is replaced by the signed/protected
-  release record above. The release decision remains mandatory.
+- **AP0 authorization ceremony:** a frozen Git governance commit plus explicit
+  owner decision authorizes the first non-money AP0 build. AP0 then implements
+  the digest-bound release record/verification mechanism required before AP1;
+  a magic Markdown string never authorizes later stages or runtime effects.
 
 It does not supersede Kernel-only mutation, frozen approval classes, immutable
 identity/revision/audit requirements, independent high-authority activation,
@@ -460,5 +462,6 @@ Before freezing this amendment, a final review must prove:
 - the policy-ownership matrix has no duplicate or fallback authority; and
 - the refreshed architecture audit lists M11/K1/B0/GRACE/Delegation gates without
   treating application rollback as reversal of a real broker fill; and
-- AP0 authorization verifies a signed/protected release record, not a magic
-  Markdown string.
+- AP0 acceptance delivers and verifies the digest-bound release mechanism that
+  later stages consume; AP0 entry itself is bound to this frozen Git governance
+  change and the explicit owner decision, not a magic Markdown string.

@@ -1,8 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **LEAN V1 REVIEW OPEN — K1 AND B0 LANDED; M11 CANARY DEFERRED; AP0
-> withheld pending amendment freeze, Charter closeout and refreshed non-money
-> audit; AP13+ additionally withheld pending M11 landing**
+> Status: **LEAN V1 FROZEN — AP0 NON-MONEY IMPLEMENTATION AUTHORIZED; M11
+> CANARY DEFERRED; AP13+ withheld pending M11 landing**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -53,7 +52,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Lean v1 cross-module amendment | Proposed; K1 and B0 prerequisites landed; owner review/freeze and refreshed audit required; AP0 remains withheld | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
+| Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
 | GRACE mixed-control attribution | Architecture frozen; B0/AP8 evidence bindings and AP9 quantitative/model-risk acceptance required | [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md) |
@@ -68,8 +67,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
-| Agent Platform Build Roadmap | Frozen baseline through AP15; Lean v1 proposes a smaller topology and lower ceremony without changing rollout destination; AP0 withheld | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
-| Final cross-module architecture audit | Reopened for Lean v1 and Kernel policy ownership; historical findings remain evidence, protected AP0 release record not approved | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
+| Agent Platform Build Roadmap | Frozen Lean v1 baseline through AP15; AP0 is the only authorized implementation stage | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
+| Final cross-module architecture audit | Current for AP0; no unresolved authority, identity, ordering or fail-open finding; later gates remain closed | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
 
@@ -93,13 +92,11 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 1. Keep M11 `CANARY DEFERRED`, production read-only, and AP13+ closed under
    plan amendment v1.9.1. The real Canary will run later against the final
    applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
-2. K1 Kernel policy ownership and B0 broker coexistence are landed. Now
-   owner-review/freeze Lean v1; this precedes AP0 and does not require the
-   deferred real order.
-3. Land the remaining post-M11 Charter amendment and run the digest-pinned
-   audit release check. Record owner acceptance plus independent review in a
-   machine-verifiable signed/protected AP0 release record; implement AP0 only
-   when that exact digest-bound record has decision `authorized`.
+2. K1, B0, Lean v1, the Charter closeout and refreshed AP0 audit are complete.
+   Implement AP0 only; its digest-bound release verification mechanism must be
+   accepted before AP1.
+3. Keep every later milestone behind its own entry gate. AP0 authorizes no
+   Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
    data and a signed Calibration Pack before AP9 implementation.
 5. Continue stage by stage with non-Live foundations first. GRACE and
