@@ -9,9 +9,9 @@
 - Only non-money AP0 implementation is authorized.
 - AP1 and later stages remain closed.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
-  Live mode, and UI were not changed by AP0-1, AP0-2, or AP0-3.
+  Live mode, and UI were not changed by AP0-1 through AP0-4.
 - `./scripts/certify-agent.sh ap0` intentionally exits non-zero until every AP0
-  mandatory probe exists. Green AP0-1/AP0-2/AP0-3 package tests are not AP0
+  mandatory probe exists. Green AP0-1 through AP0-4 package tests are not AP0
   acceptance.
 
 ## AP0 work packets
@@ -21,8 +21,8 @@
 | AP0-1 common identity and release-verification foundation | Code complete at `a7fafa2`; certification correction at `775f176` | Versioned canonical JSON/digests, common identity and authority-bearing Go contracts, fail-closed RunOrigin/recovery lineage, EffectiveRunAuthority freshness, idempotency replay comparison, digest-bound release manifest verifier and CLI, golden/race tests, certification entrypoint scaffold |
 | AP0-2 common Schema Freeze Pack | Complete at `3175afd` | Machine-readable manifest, JSON Schema, canonicalization profile, valid/invalid goldens and digest vectors, compatibility declaration, contract validation command, and automated Go/Schema field and enum drift detection |
 | AP0-3 service security and durable delivery scaffold | Complete at `83bce82` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
-| AP0-4 BlobRef and bounded local BlobStore | Next | Staging/commit/read verification, size/media/digest bounds, ACL/retention audit, orphan cleanup, unauthorized/mismatched blob probes |
-| AP0-5 platform/effect governance registry | Pending | Immutable mode/effect/kill-switch revisions and heads, activation receipts, compare-and-swap and fail-closed resolution |
+| AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
+| AP0-5 platform/effect governance registry | Next | Immutable mode/effect/kill-switch revisions and heads, activation receipts, compare-and-swap and fail-closed resolution |
 | AP0-6 integration and AP0 acceptance | Pending | Migration compatibility proof, complete threat probes, machine-readable certification artifacts, reviewed AP0 release manifest and exact digest verification |
 
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
@@ -57,7 +57,7 @@ activation record, never from the same untrusted manifest being checked.
 
 ## Verification
 
-The implemented AP0-1/AP0-2/AP0-3 checks currently pass:
+The implemented AP0-1 through AP0-4 checks currently pass:
 
 ```text
 gofmt
@@ -66,6 +66,7 @@ go test -race ./...
 JSON Schema 2020-12 meta-validation and valid/invalid golden validation
 secret-leak probe
 disposable PostgreSQL role/delivery probe
+disposable PostgreSQL Blob role/ACL/retention/GC probe
 ```
 
 The PostgreSQL probe exercises exact retry and conflicting identity behavior,
@@ -75,7 +76,7 @@ events claimed concurrently by eight dispatchers with no duplicate lease.
 
 The partial stage command runs the implemented checks and retains JSON/JUnit
 artifacts, then returns `FAIL mandatory-ap0-probes-not-implemented` by design.
-It may return AP0 `PASS` only after AP0-4 through AP0-6 land and all mandatory
+It may return AP0 `PASS` only after AP0-5 and AP0-6 land and all mandatory
 probes execute.
 
 ## AP0-2 Schema Freeze Pack
@@ -127,3 +128,43 @@ functions. Workers, research, GRACE, Delegation, validation, activation, Web,
 and diagnostics do not receive a catch-all writer credential. This packet
 creates persistence and contracts only: it does not start a dispatcher or
 alter Agent Runtime, Kernel, Provider, Live, operation, or UI behavior.
+
+## AP0-4 BlobRef and bounded local BlobStore
+
+The v1 byte plane is deliberately local: one Go package and one private
+content-addressed volume backed by PostgreSQL metadata. It is not an object
+storage daemon, distributed filesystem, cluster, or new message service.
+
+The upload protocol prevents partially known bytes from becoming a BlobRef:
+
+1. current database policy issues an exact principal/media/size/expiry staging
+   grant;
+2. the local adapter streams into an owner-only staging file while enforcing
+   the bound and computing SHA-256;
+3. computed digest and size are persisted before physical materialization, so
+   a crash cannot create an untracked content orphan;
+4. bytes are atomically linked into the content-addressed path and verified
+   again; and
+5. committed metadata becomes referenceable only after exact stage, origin,
+   digest, size, and media validation.
+
+`BlobRef` identifies immutable verified bytes but grants no access. Every read
+requires a fresh metadata authorization binding the authenticated principal,
+exact owning `RecordRef`, binding ID, active ACL, unexpired retention, committed
+Blob state, digest, and size. The same opened descriptor is hashed before its
+cursor is rewound and exposed, preventing path replacement between verification
+and consumption.
+
+Reference, ACL, policy, quarantine, and deletion changes are append-audited.
+Operational byte, stage, retention, and GC limits live in the audited database
+policy row; the code contains only the fixed absolute one-file safety ceiling.
+GC removes only exact database-leased stage/content candidates. Active retained
+references block content GC, and stale deletion tokens cannot complete.
+
+The disposable probe verifies direct-table denial, owner-specific reference
+functions, digest knowledge without authority, private/explicit ACL behavior,
+retention protection, release and orphan deletion, stage cleanup, policy CAS,
+and 20 simultaneous metadata commits of one shared content digest. Local race
+tests additionally cover concurrent physical deduplication, oversize and digest
+mismatch, unsafe roots, authorization callbacks, corruption, missing bytes, and
+verified deletion.
