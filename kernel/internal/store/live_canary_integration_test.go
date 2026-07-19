@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -216,6 +217,164 @@ func TestLiveCanaryWideningFailsClosedAndTighteningUsesCASPostgres(t *testing.T)
 		t.Fatalf("stale expected revision passed: %v", err)
 	}
 	assertCanaryRevisionCounts(t, s, 2, 2)
+}
+
+func TestLiveCanaryCompletedDayAttestationsGuardWideningPostgres(t *testing.T) {
+	s := openM11IntegrationStore(t)
+	defer s.DB.Close()
+	resetK1CIntegrationData(t, s)
+	defer cleanupK1CIntegrationData(t, s)
+	policyAuthority, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+		Policy: testKernelPolicy(t), ExpectedGeneration: 0,
+		RecordedBy: "deploy:test", Reason: "K1C policy authority",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	days := priorWeekdays(t, s, 3)
+	initial := seedPastLiveCanaryAuthority(t, s, days[0], 3)
+	for _, day := range days {
+		seedCompletedCanaryExecutionDay(t, s, day, initial, policyAuthority)
+	}
+	now, err := s.DatabaseNow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := recordReconciliationObservation(t, s, "account-k1c", "EMPTY", 0, now.Add(-time.Second))
+	reconciled, err := s.ReconcileBrokerObservation(observation.ID)
+	if err != nil || !reconciled.Applied || reconciled.Deferred {
+		t.Fatalf("reconciliation=%+v err=%v", reconciled, err)
+	}
+
+	attestationIDs := []int64{}
+	for _, day := range days {
+		input := RecordLiveCanaryDayAttestationInput{
+			AccountID: "account-k1c", MarketDay: day, ExpectedRevisionID: initial.ID,
+			AttestedBy: "deploy:test", Reason: "post-close provider and broker reconciliation",
+		}
+		first, err := s.RecordLiveCanaryDayAttestation(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retry, err := s.RecordLiveCanaryDayAttestation(input)
+		if err != nil || retry.ID != first.ID {
+			t.Fatalf("attestation retry=%+v err=%v, want id=%d", retry, err, first.ID)
+		}
+		if first.LiveGrantCount != 1 || first.AuthorizedRisk != units.MustMicros("1") ||
+			first.KernelPolicyRevisionID != policyAuthority.ID || first.BrokerObservationID != observation.ID {
+			t.Fatalf("attestation=%+v", first)
+		}
+		attestationIDs = append(attestationIDs, first.ID)
+	}
+
+	widenInput := RecordLiveCanaryRevisionInput{
+		DailyAuthorizedRiskCapUSD: units.MustMicros("60"), CleanDaysBeforeRaise: 3,
+		ExpectedRevisionID: initial.ID, AccountID: "account-k1c",
+		RecordedBy: "deploy:test", Reason: "three completed clean canary days",
+	}
+	const wideningWorkers = 20
+	start := make(chan struct{})
+	results := make(chan *LiveCanaryRevision, wideningWorkers)
+	errorsCh := make(chan error, wideningWorkers)
+	var wait sync.WaitGroup
+	for worker := 0; worker < wideningWorkers; worker++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			revision, err := s.RecordLiveCanaryRevision(widenInput)
+			results <- revision
+			errorsCh <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var widened *LiveCanaryRevision
+	for revision := range results {
+		if revision == nil {
+			t.Fatal("nil concurrent widening result")
+		}
+		if widened == nil {
+			widened = revision
+		} else if revision.ID != widened.ID {
+			t.Fatalf("widening generations=%d/%d", widened.ID, revision.ID)
+		}
+	}
+	if widened.ChangeClass != "widen" || widened.AuthorityVersion != liveCanaryAuthorityVersion ||
+		widened.RequiredAttestations != 3 || widened.WideningAccountID != "account-k1c" ||
+		len(widened.AttestationIDs) != 3 {
+		t.Fatalf("widened=%+v", widened)
+	}
+	active, err := s.LoadLiveCanaryAuthority()
+	if err != nil || active.ID != widened.ID || active.ChangeClass != "widen" ||
+		active.RequiredAttestations != widened.RequiredAttestations ||
+		!reflect.DeepEqual(active.AttestationIDs, widened.AttestationIDs) {
+		t.Fatalf("active=%+v err=%v want=%+v", active, err, widened)
+	}
+	loaded, err := s.LoadLiveCanaryDayAttestations("account-k1c", 10)
+	if err != nil || len(loaded) != 3 {
+		t.Fatalf("loaded attestations=%+v err=%v", loaded, err)
+	}
+	if _, err := s.DB.Exec(`UPDATE live_canary_day_attestation SET reason='tampered' WHERE id=$1`, attestationIDs[0]); err == nil {
+		t.Fatal("completed-day attestation was mutable")
+	}
+	if _, err := s.DB.Exec(`DELETE FROM live_canary_widening_evidence WHERE revision_id=$1`, widened.ID); err == nil {
+		t.Fatal("widening evidence was deletable")
+	}
+	assertCanaryRevisionCounts(t, s, 2, 2)
+}
+
+func TestLiveCanaryAttestationAndWideningFailClosedOnIncompleteEvidencePostgres(t *testing.T) {
+	s := openM11IntegrationStore(t)
+	defer s.DB.Close()
+	resetK1CIntegrationData(t, s)
+	defer cleanupK1CIntegrationData(t, s)
+	policyAuthority, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+		Policy: testKernelPolicy(t), ExpectedGeneration: 0,
+		RecordedBy: "deploy:test", Reason: "K1C policy authority",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	days := priorWeekdays(t, s, 2)
+	initial := seedPastLiveCanaryAuthority(t, s, days[0], 2)
+	seedCompletedCanaryExecutionDay(t, s, days[0], initial, policyAuthority)
+	seedFinalDayPnL(t, s, days[1]) // day_open plus PnL is deliberately insufficient.
+	now, err := s.DatabaseNow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := recordReconciliationObservation(t, s, "account-k1c-fail", "EMPTY", 0, now.Add(-time.Second))
+	if _, err := s.ReconcileBrokerObservation(observation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordLiveCanaryDayAttestation(RecordLiveCanaryDayAttestationInput{
+		AccountID: "account-k1c-fail", MarketDay: days[1], ExpectedRevisionID: initial.ID,
+		AttestedBy: "deploy:test", Reason: "day_open is not proof",
+	}); !errors.Is(err, ErrLiveCanaryDayEvidenceInvalid) {
+		t.Fatalf("day_open-only attestation passed: %v", err)
+	}
+	if _, err := s.RecordLiveCanaryDayAttestation(RecordLiveCanaryDayAttestationInput{
+		AccountID: "account-k1c-fail", MarketDay: days[0], ExpectedRevisionID: initial.ID,
+		AttestedBy: "deploy:test", Reason: "one clean day",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordLiveCanaryRevision(RecordLiveCanaryRevisionInput{
+		DailyAuthorizedRiskCapUSD: units.MustMicros("60"), CleanDaysBeforeRaise: 2,
+		ExpectedRevisionID: initial.ID, AccountID: "account-k1c-fail",
+		RecordedBy: "deploy:test", Reason: "insufficient evidence",
+	}); !errors.Is(err, ErrLiveCanaryWideningUnsafe) {
+		t.Fatalf("incomplete widening passed: %v", err)
+	}
+	assertCanaryRevisionCounts(t, s, 1, 1)
 }
 
 func TestConcurrentIdenticalLiveCanaryBootstrapHasOneGenerationPostgres(t *testing.T) {
@@ -482,6 +641,155 @@ func assertCanaryRevisionCounts(t *testing.T, s *Store, revisions, events int) {
 	}
 	if revisionCount != revisions || eventCount != events {
 		t.Fatalf("revisions=%d events=%d, want %d/%d", revisionCount, eventCount, revisions, events)
+	}
+}
+
+func resetK1CIntegrationData(t *testing.T, s *Store) {
+	t.Helper()
+	resetM3AIntegrationData(t, s)
+	if _, err := s.DB.Exec(`TRUNCATE TABLE daily_pnl,kernel_policy_head,kernel_policy_revision,
+		broker_observation,broker_local_state_revision CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO broker_local_state_revision(singleton,generation)
+		VALUES (true,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO live_execution_gate(singleton) VALUES (true)
+		ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func cleanupK1CIntegrationData(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.DB.Exec(`TRUNCATE TABLE daily_pnl,kernel_policy_head,kernel_policy_revision,
+		broker_observation,broker_local_state_revision CASCADE`); err != nil {
+		t.Errorf("cleanup K1C integration data: %v", err)
+		return
+	}
+	if _, err := s.DB.Exec(`INSERT INTO broker_local_state_revision(singleton,generation)
+		VALUES (true,0) ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		t.Errorf("restore broker local state: %v", err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO live_execution_gate(singleton) VALUES (true)
+		ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		t.Errorf("restore live execution gate: %v", err)
+	}
+}
+
+func priorWeekdays(t *testing.T, s *Store, count int) []time.Time {
+	t.Helper()
+	now, err := s.DatabaseNow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := time.LoadLocation(s.marketTZ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	year, month, date := now.In(location).Date()
+	day := time.Date(year, month, date, 0, 0, 0, 0, time.UTC)
+	result := make([]time.Time, 0, count)
+	for len(result) < count {
+		day = day.AddDate(0, 0, -1)
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+			continue
+		}
+		result = append(result, day)
+	}
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result
+}
+
+func seedPastLiveCanaryAuthority(t *testing.T, s *Store, effectiveDay time.Time, cleanDays int) *LiveCanaryRevision {
+	t.Helper()
+	var id int64
+	if err := s.DB.QueryRow(`INSERT INTO live_canary_revision
+		(daily_authorized_risk_micros,clean_days_before_raise,effective_market_day,
+		 authority_version,recorded_by,reason,change_class,required_attestations)
+		VALUES ($1,$2,$3,2,'deploy:test','past K1C fixture','initial',0) RETURNING id`,
+		int64(units.MustMicros("50")), cleanDays, effectiveDay).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"revision_id": id, "generation": id, "change": "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO events(kind,payload)
+		VALUES ('live_canary_revision_recorded',$1)`, payload); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := s.LoadLiveCanaryAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authority
+}
+
+func seedCompletedCanaryExecutionDay(t *testing.T, s *Store, day time.Time,
+	canary *LiveCanaryRevision, expectedPolicy *KernelPolicyRevision) {
+	t.Helper()
+	operationID, attemptID, orderID, clientID := NewID(), NewID(), NewID(), NewID()
+	if err := s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
+		authority, err := gate.KernelPolicyAuthority()
+		if err != nil {
+			return err
+		}
+		if authority.ID != expectedPolicy.ID {
+			return fmt.Errorf("policy=%d want=%d", authority.ID, expectedPolicy.ID)
+		}
+		if _, err := gate.InsertOperationBound(operationID, "k1c-test", "B", "executed",
+			map[string]any{"action": "open", "shadow": false, "symbol": "K1C", "kind": "equity"},
+			map[string]any{"class": "B"}, nil, authority); err != nil {
+			return err
+		}
+		if err := gate.InsertTradeGrant(TradeGrant{
+			OperationID: operationID, Ledger: "live", MarketDay: day,
+			AuthorizedRisk: units.MustMicros("1"), RiskSource: "computed",
+			LiveCanaryRevisionID: canary.ID,
+		}); err != nil {
+			return err
+		}
+		if err := gate.InsertExecutionAttempt(ExecutionAttempt{
+			ID: attemptID, OperationID: operationID, Seq: 1, Intent: "place",
+			ClientOrderID: clientID, State: "settled", Qty: units.MustQty("1"),
+			Limit: units.MustMicros("1"),
+		}); err != nil {
+			return err
+		}
+		return gate.InsertOrder(Order{
+			ID: orderID, OperationID: operationID, ExecutionAttemptID: attemptID,
+			ClientOrderID: clientID, Ledger: "live", Symbol: "K1C", Side: "buy",
+			Kind: "equity", Multiplier: 1, Qty: units.MustQty("1"),
+			Limit: units.MustMicros("1"), State: "cancelled",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedFinalDayPnL(t, s, day)
+}
+
+func seedFinalDayPnL(t *testing.T, s *Store, day time.Time) {
+	t.Helper()
+	closeAt, err := liveCanarySessionClose(day, s.marketTZ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO day_open(market_day,ledger,equity_micros)
+		VALUES ($1,'live',$2) ON CONFLICT (market_day,ledger) DO NOTHING`,
+		day, int64(units.MustMicros("300"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO daily_pnl
+		(market_day,ledger,local_realized_pnl_micros,provider_realized_pnl_micros,
+		 effective_realized_pnl_micros,updated_at)
+		VALUES ($1,'live',0,0,0,$2)`, day, closeAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
 	}
 }
 

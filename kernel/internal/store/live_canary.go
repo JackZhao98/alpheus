@@ -11,7 +11,10 @@ import (
 	"alpheus/kernel/internal/units"
 )
 
-const liveCanaryAuthorityVersion = 1
+const (
+	liveCanaryLegacyAuthorityVersion = 1
+	liveCanaryAuthorityVersion       = 2
+)
 
 var (
 	ErrLiveCanaryAuthorityMissing = errors.New("live canary authority is missing")
@@ -34,6 +37,9 @@ type LiveCanaryRevision struct {
 	RecordedBy                string       `json:"recorded_by"`
 	Reason                    string       `json:"reason"`
 	ChangeClass               string       `json:"change_class"`
+	RequiredAttestations      int          `json:"required_attestations"`
+	WideningAccountID         string       `json:"widening_account_id,omitempty"`
+	AttestationIDs            []int64      `json:"attestation_ids"`
 	ObservedAt                time.Time    `json:"observed_at"`
 	auditEventPresent         bool
 }
@@ -42,6 +48,7 @@ type RecordLiveCanaryRevisionInput struct {
 	DailyAuthorizedRiskCapUSD units.Micros
 	CleanDaysBeforeRaise      int
 	ExpectedRevisionID        int64
+	AccountID                 string
 	RecordedBy                string
 	Reason                    string
 }
@@ -50,16 +57,17 @@ type RecordLiveCanaryRevisionInput struct {
 // authoritative immutable row is the active revision and its ID is the
 // generation; there is deliberately no generic settings table or head service.
 //
-// K0 permits initial bootstrap and tightening only. A widening is classified
-// fail-closed until a later milestone owns durable completed-day attestations;
-// day_open alone proves that a day started, not that its final reconciliation
-// completed. Every change serializes with Live grant admission on the stable
-// Live ledger lock.
+// Initial bootstrap and tightening remain immediate. K1C permits widening only
+// when the same transaction validates the required immutable completed-day
+// attestations; day_open alone is never evidence. Every change serializes with
+// Live grant admission on the stable Live ledger lock.
 func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*LiveCanaryRevision, error) {
+	input.AccountID = strings.TrimSpace(input.AccountID)
 	input.RecordedBy = strings.TrimSpace(input.RecordedBy)
 	input.Reason = strings.TrimSpace(input.Reason)
 	if input.DailyAuthorizedRiskCapUSD <= 0 || input.CleanDaysBeforeRaise <= 0 ||
-		input.ExpectedRevisionID < 0 || input.RecordedBy == "" || len(input.RecordedBy) > 200 ||
+		input.ExpectedRevisionID < 0 || len(input.AccountID) > 200 ||
+		input.RecordedBy == "" || len(input.RecordedBy) > 200 ||
 		input.Reason == "" || len(input.Reason) > 1000 {
 		return nil, fmt.Errorf("invalid live canary revision")
 	}
@@ -111,12 +119,24 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 	}
 
 	changeClass := "initial"
+	var wideningEvidence []LiveCanaryDayAttestation
+	requiredAttestations := 0
 	if previous != nil {
 		changeClass = classifyLiveCanaryChange(previous.DailyAuthorizedRiskCapUSD,
 			previous.CleanDaysBeforeRaise, input.DailyAuthorizedRiskCapUSD,
 			input.CleanDaysBeforeRaise)
 		if changeClass == "widen" {
-			return nil, ErrLiveCanaryWideningUnsafe
+			wideningEvidence, err = eligibleLiveCanaryWideningEvidence(ctx, tx, s.marketTZ,
+				input.AccountID, previous, input.CleanDaysBeforeRaise, marketDay)
+			if err != nil {
+				if errors.Is(err, ErrLiveCanaryWideningUnsafe) ||
+					errors.Is(err, ErrLiveCanaryDayEvidenceInvalid) {
+					return nil, fmt.Errorf("%w: %v", ErrLiveCanaryWideningUnsafe, err)
+				}
+				return nil, err
+			}
+			requiredAttestations = liveCanaryRequiredAttestations(previous.CleanDaysBeforeRaise,
+				input.CleanDaysBeforeRaise)
 		}
 	}
 
@@ -128,27 +148,45 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 		RecordedBy:                input.RecordedBy,
 		Reason:                    input.Reason,
 		ChangeClass:               changeClass,
+		RequiredAttestations:      requiredAttestations,
+		AttestationIDs:            []int64{},
 		ObservedAt:                observedAt,
+	}
+	if changeClass == "widen" {
+		revision.WideningAccountID = input.AccountID
 	}
 	err = tx.QueryRowContext(ctx, `INSERT INTO live_canary_revision
 		(daily_authorized_risk_micros,clean_days_before_raise,effective_market_day,
-		 authority_version,recorded_by,reason,change_class,recorded_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,clock_timestamp())
+		 authority_version,recorded_by,reason,change_class,required_attestations,recorded_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp())
 		RETURNING id,recorded_at`, int64(input.DailyAuthorizedRiskCapUSD),
 		input.CleanDaysBeforeRaise, marketDay, liveCanaryAuthorityVersion,
-		input.RecordedBy, input.Reason, changeClass).Scan(&revision.ID, &revision.RecordedAt)
+		input.RecordedBy, input.Reason, changeClass, requiredAttestations).Scan(
+		&revision.ID, &revision.RecordedAt)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
 	revision.Generation = revision.ID
 	revision.ObservedAt = revision.RecordedAt
+	if changeClass == "widen" {
+		if err := insertLiveCanaryWideningEvidence(ctx, tx, revision.ID, wideningEvidence); err != nil {
+			return nil, err
+		}
+		for index := range wideningEvidence {
+			revision.AttestationIDs = append(revision.AttestationIDs, wideningEvidence[index].ID)
+		}
+	}
 	payload := map[string]any{
 		"revision_id": revision.ID, "generation": revision.Generation,
 		"authority_version": liveCanaryAuthorityVersion, "change": changeClass,
 		"daily_authorized_risk_cap": input.DailyAuthorizedRiskCapUSD,
 		"clean_days_before_raise":   input.CleanDaysBeforeRaise,
 		"effective_market_day":      marketDay, "recorded_by": input.RecordedBy,
-		"reason": input.Reason,
+		"reason": input.Reason, "required_attestations": requiredAttestations,
+		"attestation_ids": revision.AttestationIDs,
+	}
+	if changeClass == "widen" {
+		payload["account_id"] = input.AccountID
 	}
 	if previous != nil {
 		payload["previous_revision_id"] = previous.ID
@@ -250,16 +288,19 @@ func latestLiveCanaryRevision(ctx context.Context, tx *sql.Tx) (*LiveCanaryRevis
 	var recordedBy, reason, changeClass sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT r.id,r.daily_authorized_risk_micros,
 		r.clean_days_before_raise,r.effective_market_day,r.recorded_at,
-		r.authority_version,r.recorded_by,r.reason,r.change_class,
+		r.authority_version,r.recorded_by,r.reason,r.change_class,r.required_attestations,
 		EXISTS (SELECT 1 FROM events e
 			WHERE e.kind='live_canary_revision_recorded'
-			  AND e.payload->>'revision_id'=r.id::text)
+			  AND e.payload->>'revision_id'=r.id::text
+			  AND e.payload->>'generation'=r.id::text
+			  AND e.payload->>'change'=r.change_class)
 		FROM live_canary_revision r
 		WHERE r.authority_version IS NOT NULL
 		ORDER BY r.id DESC LIMIT 1`).Scan(
 		&revision.ID, &risk, &revision.CleanDaysBeforeRaise,
 		&revision.EffectiveMarketDay, &revision.RecordedAt, &authorityVersion,
-		&recordedBy, &reason, &changeClass, &revision.auditEventPresent,
+		&recordedBy, &reason, &changeClass, &revision.RequiredAttestations,
+		&revision.auditEventPresent,
 	)
 	if err != nil {
 		return nil, err
@@ -270,17 +311,39 @@ func latestLiveCanaryRevision(ctx context.Context, tx *sql.Tx) (*LiveCanaryRevis
 	revision.RecordedBy = recordedBy.String
 	revision.Reason = reason.String
 	revision.ChangeClass = changeClass.String
+	if err := loadLiveCanaryRevisionEvidence(ctx, tx, &revision); err != nil {
+		return nil, err
+	}
 	return &revision, nil
 }
 
 func validateLiveCanaryAuthority(revision *LiveCanaryRevision, marketDay time.Time) error {
 	if revision == nil || revision.ID <= 0 || revision.Generation != revision.ID ||
-		revision.AuthorityVersion != liveCanaryAuthorityVersion ||
+		(revision.AuthorityVersion != liveCanaryLegacyAuthorityVersion &&
+			revision.AuthorityVersion != liveCanaryAuthorityVersion) ||
 		revision.DailyAuthorizedRiskCapUSD <= 0 || revision.CleanDaysBeforeRaise <= 0 ||
 		revision.EffectiveMarketDay.IsZero() || revision.RecordedAt.IsZero() ||
 		strings.TrimSpace(revision.RecordedBy) == "" || strings.TrimSpace(revision.Reason) == "" ||
-		(revision.ChangeClass != "initial" && revision.ChangeClass != "tighten") ||
 		!revision.auditEventPresent {
+		return ErrLiveCanaryAuthorityInvalid
+	}
+	switch {
+	case revision.AuthorityVersion == liveCanaryLegacyAuthorityVersion:
+		if revision.ChangeClass != "initial" && revision.ChangeClass != "tighten" ||
+			revision.RequiredAttestations != 0 || len(revision.AttestationIDs) != 0 {
+			return ErrLiveCanaryAuthorityInvalid
+		}
+	case revision.ChangeClass == "initial" || revision.ChangeClass == "tighten":
+		if revision.RequiredAttestations != 0 || len(revision.AttestationIDs) != 0 {
+			return ErrLiveCanaryAuthorityInvalid
+		}
+	case revision.ChangeClass == "widen":
+		if revision.RequiredAttestations <= 0 ||
+			len(revision.AttestationIDs) != revision.RequiredAttestations ||
+			strings.TrimSpace(revision.WideningAccountID) == "" {
+			return ErrLiveCanaryAuthorityInvalid
+		}
+	default:
 		return ErrLiveCanaryAuthorityInvalid
 	}
 	if revision.ObservedAt.IsZero() || revision.RecordedAt.After(revision.ObservedAt) ||

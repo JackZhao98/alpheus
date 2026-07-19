@@ -533,6 +533,10 @@ func (m *memoryStore) LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, erro
 	return &copy, nil
 }
 
+func (m *memoryStore) LoadLiveCanaryDayAttestations(string, int) ([]store.LiveCanaryDayAttestation, error) {
+	return []store.LiveCanaryDayAttestation{}, nil
+}
+
 func (m *memoryStore) LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2331,6 +2335,9 @@ func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
 		if strings.Contains(strings.ToLower(w.Body.String()), forbidden) {
 			t.Fatalf("state exposed provider secret field %q", forbidden)
 		}
+	}
+	if attestations, ok := body["live_canary_attestations"].([]any); !ok || len(attestations) != 0 {
+		t.Fatalf("live_canary_attestations=%v", body["live_canary_attestations"])
 	}
 }
 

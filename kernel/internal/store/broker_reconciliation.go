@@ -90,7 +90,7 @@ func (s *Store) ReconcileBrokerObservation(observationID string) (*BrokerReconci
 	var accountID string
 	var requestedGeneration int64
 	if err := tx.QueryRowContext(ctx, `SELECT account_id,generation FROM broker_observation WHERE id=$1`, observationID).Scan(&accountID, &requestedGeneration); err != nil {
-		return nil, normalizeDBError(err)
+		return nil, fmt.Errorf("load broker observation for reconciliation: %w", normalizeDBError(err))
 	}
 	result := &BrokerReconciliationResult{ObservationID: observationID, ObservationGeneration: requestedGeneration}
 	var locked bool
@@ -112,7 +112,7 @@ func (s *Store) ReconcileBrokerObservation(observationID string) (*BrokerReconci
 	if err := tx.QueryRowContext(ctx, `SELECT h.observation_id,o.generation,o.completed_at,o.status,o.local_state_generation
 		FROM broker_observation_head h JOIN broker_observation o ON o.id=h.observation_id
 		WHERE h.account_id=$1`, accountID).Scan(&observationID, &generation, &completedAt, &status, &boundLocalStateGeneration); err != nil {
-		return nil, normalizeDBError(err)
+		return nil, fmt.Errorf("load broker observation head for reconciliation: %w", normalizeDBError(err))
 	}
 	result.ObservationID, result.ObservationGeneration = observationID, generation
 	if status != "complete" {
@@ -130,7 +130,7 @@ func (s *Store) ReconcileBrokerObservation(observationID string) (*BrokerReconci
 	var activeAttempt, unknownAttempt sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT active_attempt_id,unknown_attempt_id
 		FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeAttempt, &unknownAttempt); err != nil {
-		return nil, normalizeDBError(err)
+		return nil, fmt.Errorf("lock live execution gate for reconciliation: %w", normalizeDBError(err))
 	}
 	if activeAttempt.Valid || unknownAttempt.Valid {
 		result.Deferred = true
@@ -180,7 +180,7 @@ func (s *Store) ReconcileBrokerObservation(observationID string) (*BrokerReconci
 	var currentLocalStateGeneration int64
 	if err := tx.QueryRowContext(ctx, `SELECT generation FROM broker_local_state_revision
 		WHERE singleton=true FOR UPDATE`).Scan(&currentLocalStateGeneration); err != nil {
-		return nil, normalizeDBError(err)
+		return nil, fmt.Errorf("lock broker local state for reconciliation: %w", normalizeDBError(err))
 	}
 	if currentLocalStateGeneration != boundLocalStateGeneration {
 		result.Deferred = true

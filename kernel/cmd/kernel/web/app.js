@@ -112,7 +112,7 @@ async function renderPositions(positions, origins = {}, coexistencePositions = [
   byId("positions-empty").classList.toggle("hidden", rows.length > 0);
 }
 
-function renderBrokerCoexistence(view = {}) {
+function renderBrokerCoexistence(view = {}, attestations = []) {
   const reconciliation = view.reconciliation || {};
   const state = reconciliation.state || "uninitialized";
   const stateBadge = byId("reconciliation-state");
@@ -130,6 +130,10 @@ function renderBrokerCoexistence(view = {}) {
     title:`${invalidation.operation_status} · operation ${invalidation.operation_id}`,
     origin:"ambiguous",
     detail:`${invalidation.reason} · observation ${invalidation.observation_generation} · ${when(invalidation.created_at)}`
+  }));
+  renderList("canary-attestation-list", "canary-attestation-empty", "canary-attestation-count", attestations, (attestation) => ({
+    title:`${String(attestation.market_day || "").slice(0, 10)} · revision ${attestation.live_canary_revision_id}`,
+    detail:`${attestation.live_grant_count} completed grant(s) · authorized ${money(attestation.authorized_risk)} · local/provider PnL ${money(attestation.local_realized_pnl)} / ${money(attestation.provider_realized_pnl)} · broker generation ${attestation.broker_observation_generation} · ${when(attestation.attested_at)}`
   }));
   setPanelError("coexistence-error", "");
 }
@@ -376,7 +380,7 @@ async function renderState(state) {
   renderLedger("live", state.day.live, state.as_of); renderLedger("shadow", state.day.shadow, state.as_of);
   const origins = {};
   (state.broker_objects || []).forEach((object) => { origins[brokerOriginKey(object.family, object.object_key)] = {origin:object.origin || "ambiguous", evidence:object.origin_evidence || "unavailable"}; });
-  renderBrokerCoexistence(state.broker_coexistence);
+  renderBrokerCoexistence(state.broker_coexistence, state.live_canary_attestations || []);
   await renderPositions(state.positions, origins, state.broker_coexistence?.positions || []);
   renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => { const origin = origins[brokerOriginKey("orders", o.broker_order_id)] || {origin:"ambiguous", evidence:"unavailable"}; return {title:`${o.side} ${o.symbol} · ${o.state}`, origin:origin.origin, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${origin.evidence} · ${when(o.as_of)}`}; });
   renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => { const origin = origins[brokerOriginKey("fills", f.fill_id)] || {origin:"ambiguous", evidence:"separate fill observation"}; return {title:`${f.side} ${f.symbol} · ${f.qty}`, origin:origin.origin, detail:`${money(f.price)} · ${f.source} · ${origin.evidence} · ${when(f.as_of)}`}; });

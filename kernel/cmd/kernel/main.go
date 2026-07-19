@@ -105,6 +105,7 @@ type storeAPI interface {
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
 	FeatureActive(name string) (bool, error)
 	LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error)
+	LoadLiveCanaryDayAttestations(accountID string, limit int) ([]store.LiveCanaryDayAttestation, error)
 	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
 	LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error)
 	DatabaseNow() (time.Time, error)
@@ -736,22 +737,28 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "get broker coexistence view", err)
 		return
 	}
+	canaryAttestations, err := s.store.LoadLiveCanaryDayAttestations(snapshot.Observation.AccountID, 10)
+	if err != nil {
+		writeStoreError(w, "get live canary day attestations", err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"account":                 acct,
-		"positions":               pos,
-		"open_orders":             orders,
-		"recent_fills":            fills,
-		"day":                     map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
-		"live_execution_gate":     liveExecutionGate,
-		"db_live_canary":          canary,
-		"db_kernel_policy":        kernelPolicy,
-		"broker_observation":      snapshot.Observation,
-		"broker_fill_observation": fillObservation,
-		"broker_objects":          brokerObjects,
-		"broker_coexistence":      coexistence,
-		"mode":                    s.tradingMode(),
-		"source":                  "kernel",
-		"as_of":                   window.asOf,
+		"account":                  acct,
+		"positions":                pos,
+		"open_orders":              orders,
+		"recent_fills":             fills,
+		"day":                      map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+		"live_execution_gate":      liveExecutionGate,
+		"db_live_canary":           canary,
+		"db_kernel_policy":         kernelPolicy,
+		"broker_observation":       snapshot.Observation,
+		"broker_fill_observation":  fillObservation,
+		"broker_objects":           brokerObjects,
+		"broker_coexistence":       coexistence,
+		"live_canary_attestations": canaryAttestations,
+		"mode":                     s.tradingMode(),
+		"source":                   "kernel",
+		"as_of":                    window.asOf,
 	})
 }
 

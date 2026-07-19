@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/store"
@@ -30,6 +31,7 @@ func TestParseCanaryPolicyArgsUsesExactTypedValues(t *testing.T) {
 		"--expected-revision=12",
 		"--daily-risk-cap-usd=50.123456",
 		"--clean-days-before-raise=5",
+		"--account-id=518428891",
 		"--recorded-by=deploy:jack",
 		"--reason=reduce initial blast radius",
 	})
@@ -37,9 +39,35 @@ func TestParseCanaryPolicyArgsUsesExactTypedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	if input.ExpectedRevisionID != 12 || input.DailyAuthorizedRiskCapUSD != units.MustMicros("50.123456") ||
-		input.CleanDaysBeforeRaise != 5 || input.RecordedBy != "deploy:jack" ||
+		input.CleanDaysBeforeRaise != 5 || input.AccountID != "518428891" ||
+		input.RecordedBy != "deploy:jack" ||
 		input.Reason != "reduce initial blast radius" {
 		t.Fatalf("input=%+v", input)
+	}
+}
+
+func TestParseCanaryDayAttestationRequiresExactIdentityAndDate(t *testing.T) {
+	input, err := parseCanaryDayAttestationArgs([]string{
+		"--account-id=518428891", "--market-day=2026-07-20", "--expected-revision=7",
+		"--attested-by=deploy:jack", "--reason=post-close reconciled canary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.AccountID != "518428891" || input.MarketDay.Format(time.DateOnly) != "2026-07-20" ||
+		input.ExpectedRevisionID != 7 || input.AttestedBy != "deploy:jack" ||
+		input.Reason != "post-close reconciled canary" {
+		t.Fatalf("input=%+v", input)
+	}
+	for index, args := range [][]string{
+		{"--market-day=2026-07-20", "--expected-revision=1", "--attested-by=x", "--reason=x"},
+		{"--account-id=a", "--market-day=07/20/2026", "--expected-revision=1", "--attested-by=x", "--reason=x"},
+		{"--account-id=a", "--market-day=2026-07-20", "--expected-revision=0", "--attested-by=x", "--reason=x"},
+		{"--account-id=a", "--market-day=2026-07-20", "--expected-revision=1", "--attested-by=x"},
+	} {
+		if _, err := parseCanaryDayAttestationArgs(args); err == nil {
+			t.Fatalf("case %d accepted: %v", index, args)
+		}
 	}
 }
 
