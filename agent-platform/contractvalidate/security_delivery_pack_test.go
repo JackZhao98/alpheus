@@ -43,6 +43,7 @@ func TestSecurityRoleSQLCoversEveryProfile(t *testing.T) {
 	for _, role := range []string{
 		"alpheus_agent_migrator", "alpheus_agent_delivery_dispatcher",
 		"alpheus_agent_delivery_repair", "alpheus_agent_diagnostics",
+		"alpheus_blob_gc", "alpheus_blob_diagnostics",
 	} {
 		if !strings.Contains(text, "'"+role+"'") {
 			t.Fatalf("required operational role %s missing", role)

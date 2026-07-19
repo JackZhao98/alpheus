@@ -1,0 +1,6 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Alpheus Blob Package Boundary", "version": "1"},
+  "paths": {},
+  "x-alpheus-note": "Lean v1 uses a local package and volume, not a BlobStore daemon or public HTTP API."
+}

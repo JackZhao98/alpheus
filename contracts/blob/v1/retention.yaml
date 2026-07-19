@@ -1,0 +1,11 @@
+{
+  "schema_revision": 1,
+  "policy_owner": "blob",
+  "limits_source": "audited_postgresql_policy_row",
+  "stage": "database expiry then exact GC claim",
+  "committed_orphan": "database grace period then exact content GC claim",
+  "retained_reference": "never delete while an active unexpired authoritative reference exists",
+  "released_or_expired_reference": "eligible after policy grace",
+  "lifecycle_events": "append_only",
+  "digest_is_authority": false
+}

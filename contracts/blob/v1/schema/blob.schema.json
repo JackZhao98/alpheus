@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/blob/v1/blob.schema.json",
+  "title": "Alpheus AP0 Blob Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/StageGrant"},
+    {"$ref": "#/$defs/StagedBlob"},
+    {"$ref": "#/$defs/BlobRef"},
+    {"$ref": "#/$defs/ReferenceBinding"},
+    {"$ref": "#/$defs/LifecycleEvent"}
+  ],
+  "$defs": {
+    "UUID": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "Digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "Identifier": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u0020\\u007f]+$"},
+    "Name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "Timestamp": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "RecordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest"],
+      "properties": {
+        "owner": {"enum": ["agent_control", "blob", "delegation", "grace", "kernel", "platform_governance", "research_gateway", "worker"]},
+        "record_type": {"$ref": "#/$defs/Name"},
+        "record_id": {"$ref": "#/$defs/Identifier"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"}
+      }
+    },
+    "AuditActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "kind", "audience"],
+      "properties": {
+        "principal_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"enum": ["kernel", "user", "workload"]},
+        "audience": {"enum": ["activator", "control_api", "delegation_engine", "grace_engine", "grace_intake", "kernel", "kernel_admin", "research_gateway", "validator", "worker"]}
+      }
+    },
+    "StageGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "stage_id", "principal_id", "media_type", "max_bytes", "issued_at", "expires_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "stage_id": {"$ref": "#/$defs/UUID"},
+        "principal_id": {"$ref": "#/$defs/Identifier"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 200},
+        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "expected_digest": {"$ref": "#/$defs/Digest"},
+        "expected_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "issued_at": {"$ref": "#/$defs/Timestamp"},
+        "expires_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "StagedBlob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "grant", "content_digest", "size_bytes", "staged_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "grant": {"$ref": "#/$defs/StageGrant"},
+        "content_digest": {"$ref": "#/$defs/Digest"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "staged_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "BlobRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "blob_id", "content_digest", "media_type", "size_bytes", "origin", "committed_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "blob_id": {"$ref": "#/$defs/UUID"},
+        "content_digest": {"$ref": "#/$defs/Digest"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 200},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "origin": {"$ref": "#/$defs/RecordRef"},
+        "committed_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "ReferenceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "binding_id", "blob", "owning_reference", "owner_principal", "access_class", "retention_until", "state", "bound_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "binding_id": {"$ref": "#/$defs/Identifier"},
+        "blob": {"$ref": "#/$defs/BlobRef"},
+        "owning_reference": {"$ref": "#/$defs/RecordRef"},
+        "owner_principal": {"$ref": "#/$defs/Identifier"},
+        "access_class": {"enum": ["explicit", "private"]},
+        "retention_until": {"$ref": "#/$defs/Timestamp"},
+        "state": {"enum": ["active", "released"]},
+        "bound_at": {"$ref": "#/$defs/Timestamp"},
+        "released_at": {"$ref": "#/$defs/Timestamp"}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "active"}}}, "then": {"not": {"required": ["released_at"]}}},
+        {"if": {"properties": {"state": {"const": "released"}}}, "then": {"required": ["released_at"]}}
+      ]
+    },
+    "LifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "event_id", "subject_kind", "subject_id", "transition", "generation", "actor", "occurred_at", "reason_code"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "event_id": {"$ref": "#/$defs/UUID"},
+        "subject_kind": {"enum": ["acl", "binding", "blob", "stage"]},
+        "subject_id": {"$ref": "#/$defs/Identifier"},
+        "transition": {"enum": ["acl_granted", "acl_revoked", "committed", "deleted", "gc_claimed", "quarantined", "reference_bound", "reference_released", "staged"]},
+        "generation": {"type": "integer", "minimum": 1},
+        "actor": {"$ref": "#/$defs/AuditActor"},
+        "occurred_at": {"$ref": "#/$defs/Timestamp"},
+        "reason_code": {"$ref": "#/$defs/Name"}
+      }
+    }
+  }
+}

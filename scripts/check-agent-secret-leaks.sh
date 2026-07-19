@@ -6,7 +6,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-targets="agent-platform contracts audit/repro docs/agent-plan scripts/certify-agent.sh scripts/test-agent-db-roles.sh"
+targets="agent-platform contracts audit/repro docs/agent-plan scripts/certify-agent.sh scripts/test-agent-db-roles.sh scripts/test-agent-blob.sh"
 pattern='(sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----|postgres(ql)?://[^:/[:space:]]+:[^@[:space:]]+@)'
 
 if rg --files-with-matches --ignore-case "$pattern" $targets >/dev/null 2>&1; then

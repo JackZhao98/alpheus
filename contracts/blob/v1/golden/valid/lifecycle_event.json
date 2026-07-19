@@ -1,0 +1,1 @@
+{"schema_revision":1,"event_id":"33333333-3333-4333-8333-333333333333","subject_kind":"blob","subject_id":"22222222-2222-4222-8222-222222222222","transition":"committed","generation":1,"actor":{"principal_id":"blob-store","kind":"workload","audience":"control_api"},"occurred_at":"2026-07-19T12:00:20Z","reason_code":"stage_committed"}

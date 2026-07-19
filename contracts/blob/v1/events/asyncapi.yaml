@@ -1,0 +1,7 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {"title": "Alpheus Blob Events", "version": "1"},
+  "channels": {},
+  "operations": {},
+  "x-alpheus-note": "Blob lifecycle evidence is append-audited in PostgreSQL; no AP0 transport channel is exposed."
+}

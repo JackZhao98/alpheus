@@ -1,0 +1,24 @@
+{
+  "schema_revision": 1,
+  "stage": {
+    "states": ["open", "materialized", "committed", "aborted", "cleaned"],
+    "terminal": ["cleaned"],
+    "referenceable": []
+  },
+  "blob": {
+    "states": ["committed", "quarantined", "deleting", "deleted"],
+    "referenceable": ["committed"],
+    "readable": ["committed"]
+  },
+  "reference": {
+    "states": ["active", "released"],
+    "readable": ["active"],
+    "retention_rule": "active_and_retention_until_after_database_now"
+  },
+  "acl": {
+    "states": ["active", "revoked"],
+    "private": "owner_principal_only",
+    "explicit": "owner_principal_or_active_exact_grant"
+  },
+  "gc": "database_claim_only; staged files and unreferenced content are removed by exact claim, never directory age alone"
+}

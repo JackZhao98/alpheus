@@ -11,6 +11,7 @@ import (
 	"io"
 	"sort"
 
+	"alpheus/agentplatform/blob"
 	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/delivery"
@@ -45,12 +46,23 @@ var securityDeliveryTypes = map[string]func() validatable{
 	"quarantine_record": func() validatable { return &delivery.QuarantineRecord{} },
 }
 
+var blobTypes = map[string]func() validatable{
+	"blob_lifecycle_event": func() validatable { return &blob.LifecycleEvent{} },
+	"blob_ref":             func() validatable { return &blob.BlobRef{} },
+	"blob_stage_grant":     func() validatable { return &blob.StageGrant{} },
+	"blob_staged":          func() validatable { return &blob.StagedBlob{} },
+	"blob_reference":       func() validatable { return &blob.ReferenceBinding{} },
+}
+
 func SupportedTypes() []string {
-	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+1)
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
 	for name := range securityDeliveryTypes {
+		values = append(values, name)
+	}
+	for name := range blobTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
@@ -71,6 +83,15 @@ func CommonTypes() []string {
 func SecurityDeliveryTypes() []string {
 	values := make([]string, 0, len(securityDeliveryTypes))
 	for name := range securityDeliveryTypes {
+		values = append(values, name)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func BlobTypes() []string {
+	values := make([]string, 0, len(blobTypes))
+	for name := range blobTypes {
 		values = append(values, name)
 	}
 	sort.Strings(values)
@@ -102,6 +123,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	factory, ok := commonTypes[contractType]
 	if !ok {
 		factory, ok = securityDeliveryTypes[contractType]
+	}
+	if !ok {
+		factory, ok = blobTypes[contractType]
 	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)

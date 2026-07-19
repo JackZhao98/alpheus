@@ -17,7 +17,9 @@ BEGIN
         'alpheus_grace_engine',
         'alpheus_delegation_engine',
         'alpheus_agent_web',
-        'alpheus_agent_diagnostics'
+        'alpheus_agent_diagnostics',
+        'alpheus_blob_gc',
+        'alpheus_blob_diagnostics'
     ] LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
             EXECUTE format('CREATE ROLE %I NOLOGIN', role_name);
@@ -33,6 +35,8 @@ $$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS agent_control AUTHORIZATION alpheus_agent_migrator;
 REVOKE ALL ON SCHEMA agent_control FROM PUBLIC;
+CREATE SCHEMA IF NOT EXISTS blob AUTHORIZATION alpheus_agent_migrator;
+REVOKE ALL ON SCHEMA blob FROM PUBLIC;
 GRANT USAGE ON SCHEMA agent_control TO
     alpheus_agent_control_api,
     alpheus_agent_delivery_dispatcher,
@@ -44,4 +48,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA agent_control
 ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA agent_control
     REVOKE ALL ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA agent_control
+    REVOKE ALL ON SEQUENCES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
+    REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
+    REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE alpheus_agent_migrator IN SCHEMA blob
     REVOKE ALL ON SEQUENCES FROM PUBLIC;

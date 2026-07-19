@@ -1,0 +1,49 @@
+{
+  "pack": "alpheus.blob",
+  "owner": "blob",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": ["blob_lifecycle_event", "blob_ref", "blob_reference", "blob_stage_grant", "blob_staged"],
+  "commands": [],
+  "events": [],
+  "state_machines": ["stage", "blob", "reference", "acl"],
+  "assets": {
+    "schemas": ["schema/blob.schema.json"],
+    "api": "api/openapi.yaml",
+    "events": "events/asyncapi.yaml",
+    "state_machines": "state-machines/blob.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": [
+      "golden/valid/blob_ref.json",
+      "golden/valid/lifecycle_event.json",
+      "golden/valid/reference.json",
+      "golden/valid/stage_grant.json",
+      "golden/valid/staged_blob.json"
+    ],
+    "invalid": [
+      "golden/invalid/active_reference_released.json",
+      "golden/invalid/stage_oversized.json"
+    ],
+    "digests": [
+      "golden/digest/blob_ref.sha256",
+      "golden/digest/lifecycle_event.sha256",
+      "golden/digest/reference.sha256",
+      "golden/digest/stage_grant.sha256",
+      "golden/digest/staged_blob.sha256"
+    ]
+  },
+  "storage": {
+    "v1_adapter": "bounded_local_content_addressed_volume",
+    "metadata": "postgresql",
+    "daemon": false,
+    "read_rule": "current_principal_plus_exact_owning_reference_plus_acl_plus_retention",
+    "digest_is_authority": false
+  }
+}
