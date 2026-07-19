@@ -5,7 +5,9 @@
 > Amendment: **v1.8.1**
 >
 > Status: normative ownership model; implementation is split into the narrow
-> M11 blocker and the post-M11/pre-AP0 migration below.
+> M11 blocker and the post-M11-non-money/pre-AP0 migration below. Amendment
+> v1.9.1 permits K1 while the real Canary remains deferred; see
+> [`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md).
 
 ## Why this amendment exists
 
@@ -240,7 +242,7 @@ build-pinned ceiling for that separately human-confirmed one-share ticket; the
 database canary cap and the ticket are stricter. Production returns to
 `read_only` after the canary sequence.
 
-### K1 — after M11, before AP0 implementation
+### K1 — after the M11 non-money gate, before AP0 implementation
 
 Add `KernelPolicyRevision/Head`, one-time bootstrap/import, revision bindings,
 absolute proposal expiry and database lease expiry. Migrate only live fields

@@ -4,8 +4,9 @@
 
 > Amendment: **v1.9**
 >
-> Status: **FROZEN ARCHITECTURE; B0 implementation is required after the
-> controlled M11 canary and before AP0**
+> Status: **FROZEN ARCHITECTURE; amendment v1.9.1 permits B0 after the M11
+> non-money gate and requires it before AP0; the real Canary remains required
+> before AP13**
 >
 > Scope: coexistence with orders, fills, and positions changed outside Alpheus;
 > final Provider-fact refresh before a broker mutation; ownership and audit of
@@ -240,27 +241,31 @@ position direction, fill, or ownership as authoritative. There is no generic
 
 ## 7. Implementation boundary and order
 
-### Controlled M11 canary
+### Deferred controlled M11 canary
 
-B0 does not delay the already planned one-share M11 canary if its fresh
-preflight proves the bound account has no position, no working order, no
-unresolved Provider effect, and the owner agrees not to trade that account
-during the canary/reconciliation window. The canary remains an exact
+Amendment v1.9.1 supersedes the original ordering: B0 may land while the real
+one-share M11 Canary is deferred. Because K1/B0 change the final safety path,
+the later Canary runs against the then-current Kernel commit after their
+non-money acceptance. It still requires a fresh bound account with no position,
+working order, or unresolved Provider effect and remains an exact
 human-confirmed Alpheus ticket through Kernel, not a direct MCP order.
 
-Any unexpected external change during that window stops the canary and enters
+Any unexpected external change during that window stops the Canary and enters
 reconciliation. The clean-account restriction is a one-time certification
 condition, not the production coexistence design.
 
-### B0 — after M11, before AP0
+### B0 — after the M11 non-money gate, before AP0
 
-Implement B0 as a Kernel safety amendment after M11 lands. K1 policy ownership
-and B0 are separate modules: K1 owns revisable policy; B0 owns observed broker
-facts and reconciliation. They may be developed independently after M11 but
-both must land before AP0 so Agent contracts consume the real canonical shape.
+Implement B0 as a Kernel safety amendment after the landed M11 code and target
+read-only evidence defined by amendment v1.9.1. K1 policy ownership and B0 are
+separate modules: K1 owns revisable policy; B0 owns observed broker facts and
+reconciliation. They may be fixture-developed independently, but B0 binds any
+policy-bearing behavior to K1 and both must land before AP0 so Agent contracts
+consume the real canonical shape.
 
-Autonomous Agent Live, including AP13-AP15, is forbidden until B0 acceptance
-passes. Shadow may consume recorded external facts but may not mutate them.
+Agent Live, including AP13-AP15, is forbidden until B0 acceptance and the
+deferred M11 Canary both pass. Shadow may consume recorded external facts but
+may not mutate them.
 
 ## 8. Acceptance
 

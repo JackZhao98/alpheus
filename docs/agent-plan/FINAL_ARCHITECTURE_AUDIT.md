@@ -44,9 +44,10 @@ closed in the same document revision.
 AP0 is nevertheless not authorized. The Kernel clock blocker is closed, its
 complete certification is green, and M11 v1.7.1 recovery/Halt landed in
 `0913010`, while v1.8.1 K0 database canary authority landed in `d24b8b9`;
-however, the separately confirmed canary stop/recovery evidence, K1, B0 broker
-coexistence, Lean v1 freeze and the post-M11 Charter/audit closeout remain
-incomplete. These are hard release gates, not optional follow-up work.
+however, K1, B0 broker coexistence, Lean v1 freeze and the Charter/audit closeout
+remain incomplete. Amendment v1.9.1 makes the separately confirmed Canary an
+AP13+ gate while preserving M11 as non-landed. These are hard gates at their
+declared stages, not optional follow-up work.
 
 ## 2. Scope and method
 
@@ -232,7 +233,7 @@ nor restarted. R-01 is no longer an open release blocker.
 
 ### R-02 — M11 canary stop/recovery evidence is incomplete
 
-The Kernel plan index still marks M11 `IN PROGRESS`. The production deployment
+The Kernel plan index marks M11 `CANARY DEFERRED`. The production deployment
 remains read-only, and the first Alpheus-routed one-share Live canary still needs
 its separately confirmed exact ticket. Plan amendments v1.7 (`5df440c`) and
 v1.8 (`4328327`) now define the missing pre-canary code gates: bounded same-ref
@@ -244,9 +245,11 @@ in `d24b8b9` without a production Provider call.
 The target database bootstrap and read-only deployment were subsequently
 completed under separate explicit owner authorization: version 10, authority
 revision/generation `1/1`, `$50`/five days, no broker mutation, and zero
-attempt/order/fill/current-day grant/open-risk/unknown effect. Next, under a
-fresh confirmation, execute only the already specified one-share equity
-canary. Halt new risk, preserve the Live recovery adapter,
+attempt/order/fill/current-day grant/open-risk/unknown effect. Amendment v1.9.1
+permits K1, B0 and later non-money AP0–AP12 work to proceed without treating
+that evidence as a Canary pass. Before AP13, under a fresh confirmation, execute
+only the already specified one-share equity canary against the final applicable
+post-K1/B0 Kernel. Halt new risk, preserve the Live recovery adapter,
 reconcile/adopt/cancel or ingest every real order/fill/position/PnL fact, prove
 the gate/accounting clean, and only then return deployment to `read_only`. A
 real fill is never rolled back; any reduction is a new Kernel-verified effect.
@@ -257,15 +260,16 @@ It still authorizes no real-money order.
 ### R-03 — Post-M11 Charter amendment is not landed
 
 The current Charter still excludes the new Agent schemas/process profiles,
-Research Gateway, Strategy Lab and additional Web scope. After M11/K1/B0 land
-and Lean v1 freezes, a dedicated pre-AP0 governance commit must amend the Charter
-and pin the exact deployment, credential, database, Provider and authority
-boundaries from the lean plan.
+Research Gateway, Strategy Lab and additional Web scope. After the M11
+non-money/deferred evidence plus K1/B0 land and Lean v1 freezes, a dedicated
+pre-AP0 governance commit must amend the Charter and pin the exact deployment,
+credential, database, Provider and authority boundaries from the lean plan.
 
 ### R-04 — AP0 protected release record is not approved
 
-After R-02 and R-03 close, a narrow release check must verify the M11
-evidence, Charter, roadmap, corrected architecture commit, and audit digests and
+After the non-money AP0 portion of R-02 and R-03 close, a narrow release check
+must verify the M11 deferred evidence/effect ceiling, Charter, roadmap,
+corrected architecture commit, and audit digests and
 confirm no new authority/fail-open finding. An owner-signed/protected release
 record plus independent architecture-review attestation must bind every verified
 digest, reviewer identity, owner decision and trusted release time. CI/startup
@@ -300,11 +304,12 @@ The previous sequence remains a candidate rollout order, but Lean v1 must be
 frozen and re-audited before this verdict becomes current:
 
 ```text
-M11 closeout -> K1 + B0 -> Lean v1 freeze
+M11 non-money/deferred gate -> K1 + B0 -> Lean v1 freeze
 -> pre-AP0 Charter closeout and refreshed audit/release check
 -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
--> AP9 || AP10 -> AP11 -> AP12 -> AP13 -> AP14 -> AP15
+-> AP9 || AP10 -> AP11 -> AP12 -> M11 Canary/LANDED
+-> AP13 -> AP14 -> AP15
 ```
 
 AP2/AP3 and AP9/AP10 are the only declared parallel branches. No later authority
@@ -329,6 +334,7 @@ AP0_RELEASE_STATUS: WITHHELD
 No Agent Platform implementation should begin from this audit alone. M11
 v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority are committed and
 pushed, and the target K0/read-only deployment is separately certified. The
-one-share canary and M11 landing are next; neither this audit nor the Lean
+one-share Canary is explicitly deferred and neither this audit nor the Lean
 amendment authorizes that order. K1, B0, Lean v1 freeze, Charter closeout and a
-refreshed audit/release record precede AP0.
+refreshed non-money audit/release record precede AP0; M11 landing additionally
+precedes AP13.

@@ -67,8 +67,10 @@ a second scheduler or proposer, otherwise one trigger could create two effects.
 
 All of the following are required:
 
-- M11 is `LANDED`, including its separately confirmed canary and stop/recovery
-  evidence;
+- the M11 non-money gate in
+  [`../plan/08_DEFERRED_CANARY.md`](../plan/08_DEFERRED_CANARY.md) is complete,
+  M11 is explicitly `CANARY DEFERRED`, and the production deployment remains
+  read-only; the real Canary is an AP13 gate, not an AP0 implementation gate;
 - Kernel policy migration K1 is landed and no migrated business/risk value
   falls back to YAML;
 - Kernel broker-coexistence amendment B0 is landed, so external/manual broker
@@ -76,7 +78,7 @@ All of the following are required:
   episode references exist before Agent contracts bind to them;
 - Lean v1 is owner-reviewed and frozen;
 - the Kernel remains healthy with `LIVE_TRADING_ENABLED=false` by default;
-- the pre-AP0 governance closeout has landed a reviewed post-M11 Charter
+- the pre-AP0 governance closeout has landed a reviewed Agent Platform Charter
   amendment authorizing the lean boundaries, schemas, roles, and Kernel
   interfaces named here;
 - the final cross-module architecture audit has no unresolved authority,
@@ -87,15 +89,15 @@ All of the following are required:
 Documentation, threat models, and non-executable fixture design may be prepared
 earlier. No Agent Platform implementation, deployable prototype, Agent schema,
 Agent credential, Agent application behavior, or Agent operation-emission path
-may change. Pre-AP0 Kernel safety repairs and M11 closeout remain allowed only
-under the frozen Kernel plan and Kernel change-control process.
+may change. Pre-AP0 Kernel safety repairs and deferred-M11 maintenance remain
+allowed only under the frozen Kernel plan and Kernel change-control process.
 After Lean v1 freeze, a contract-first commit is mandatory for money,
 authority, cross-process and public event boundaries. Purely internal package
 types may evolve in their cohesive module commit with executable tests.
 
 The **pre-AP0 governance closeout** is not an implementation milestone. It:
 
-1. closes M11 and its stop/recovery evidence;
+1. binds the completed M11 non-money evidence and explicit Canary deferral;
 2. lands K1 and B0, then freezes Lean v1;
 3. lands the Charter amendment through the frozen Kernel change-control process;
 4. pins the exact Lean, final-audit and Charter digests; and
@@ -136,19 +138,20 @@ ScoreSnapshot.
 
 ### 3.4 Before autonomous Live
 
-Autonomous Live remains disabled until every GRACE and Delegation acceptance
-boundary passes, Shadow evidence is sufficient for the exact scope, the
-human-owned policy is signed and active, Kernel independently recognizes the
-mode, and the owner explicitly activates one canary revision. Options remain
-disabled unless a later separately frozen plan adds them.
+Autonomous Live remains disabled until M11 is `LANDED` with its real Canary and
+stop/recovery evidence, every GRACE and Delegation acceptance boundary passes,
+Shadow evidence is sufficient for the exact scope, the human-owned policy is
+signed and active, Kernel independently recognizes the mode, and the owner
+explicitly activates one canary revision. Options remain disabled unless a
+later separately frozen plan adds them.
 
 ## 4. Dependency graph
 
 ```text
-historical audit -> M11 LANDED -> K1 + B0 -> Lean v1 freeze
-                                           |
+historical audit -> M11 non-money gate -> K1 + B0 -> Lean v1 freeze
+                                                   |
                     Charter closeout + refreshed audit/release
-                                           |
+                                                   |
                         AP0  shared contracts and authority scaffold
                          |
                         AP1  durable Control Plane and Worker
@@ -181,6 +184,8 @@ historical audit -> M11 LANDED -> K1 + B0 -> Lean v1 freeze
                         AP11  Delegation observe-only
                           |
                         AP12  end-to-end Shadow
+                          |
+          deferred M11 Canary LANDED
                           |
                         AP13  transitional human-confirmed Live
                           |
@@ -1056,6 +1061,11 @@ platform while Delegation stays observe-only. This proves the complete Live
 path and remains an exceptional/fallback route later; it is not the intended
 steady-state approval model.
 
+**Entry gate:** M11 is `LANDED` after the exact one-share Canary ran against the
+final applicable post-K1/B0 Kernel and passed Halt, reconciliation/accounting,
+and return-to-read-only acceptance. A deferred or simulated Canary fails this
+gate. All AP12 and ordinary AP13 prerequisites also remain required.
+
 **Deliverables:**
 
 - authenticated exact-ticket Web flow;
@@ -1412,12 +1422,11 @@ The Kernel database/process market-day blocker was closed by `66b0281` and
 recertified at `d2605b9` with the complete isolated M9 gate green. Current
 release blockers are:
 
-1. retain landed M11 v1.7.1 recovery/Halt commit `0913010` and v1.8.1 K0
-   database-authority commit `d24b8b9` plus the completed target K0/read-only
-   deployment certification, execute only the separately confirmed one-share
-   canary, and mark M11 `LANDED`;
-2. land K1 and B0, then owner-review/freeze Lean v1;
-3. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
+1. retain landed M11 v1.7.1 recovery/Halt commit `0913010`, v1.8.1 K0
+   database-authority commit `d24b8b9`, the target K0/read-only deployment
+   certification, and explicit `CANARY DEFERRED` status; keep AP13+ closed;
+2. land K1 and B0, then owner-review/freeze Lean v1 for non-money AP0 scope;
+3. land the reviewed Agent Platform Charter amendment in the pre-AP0 governance
    closeout; and
 4. refresh the cross-module audit, run the digest-pinned release check, and only
    then approve the protected AP0 release record.

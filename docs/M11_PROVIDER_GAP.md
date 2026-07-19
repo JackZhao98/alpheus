@@ -366,6 +366,11 @@ to land before a canary. Commit `0913010` satisfies that non-money gate and
 commit `d24b8b9` satisfies K0 database authority. Only the separately confirmed
 canary remains before M11 can be marked landed:
 
+Plan amendment v1.9.1 records that Canary as explicitly deferred. K1, B0 and
+non-money AP0–AP12 work may proceed while production remains read-only, but no
+such work changes M11 to landed or permits AP13+. The eventual Canary runs
+against the final applicable post-K1/B0 Kernel.
+
 1. The first Alpheus-routed live canary remains a separate human-confirmed
    action. Its trade ticket must be exactly one share and remain within the
    active immutable $50/five-day authority. Direct MCP evidence is not silently

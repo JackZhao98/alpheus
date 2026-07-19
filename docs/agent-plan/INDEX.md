@@ -1,7 +1,8 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **LEAN V1 REVIEW OPEN — AP0 withheld pending M11,
-> K1, B0, amendment freeze, Charter closeout and refreshed audit**
+> Status: **LEAN V1 REVIEW OPEN — M11 CANARY DEFERRED; AP0 withheld pending
+> K1, B0, amendment freeze, Charter closeout and refreshed non-money audit;
+> AP13+ additionally withheld pending M11 landing**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -40,6 +41,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
    [`../plan/06_POLICY_OWNERSHIP.md`](../plan/06_POLICY_OWNERSHIP.md), when
    defining or implementing a Kernel/policy interface. Agent architecture
    cannot silently amend it.
+10. Read
+    [`../plan/08_DEFERRED_CANARY.md`](../plan/08_DEFERRED_CANARY.md) before
+    changing AP0 entry, M11 status, deployment effect ceilings, or AP13+ gates.
 
 `FROZEN ARCHITECTURE` records an agreed ownership or mechanism boundary. It does
 not authorize implementation until the module's detailed specification, threat
@@ -86,14 +90,12 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Treat M11 v1.7.1 recovery/Halt commit `0913010` and v1.8.1 K0 database
-   canary authority commit `d24b8b9` as landed non-money evidence. The target
-   K0 bootstrap/read-only deployment is certified; complete only the separately
-   confirmed one-share canary and its stop/recovery acceptance before marking
-   M11 `LANDED`.
-2. Implement K1 Kernel policy ownership and B0 broker coexistence, then
-   owner-review/freeze Lean v1. They are separate modules and may proceed
-   independently after M11, but both precede AP0.
+1. Keep M11 `CANARY DEFERRED`, production read-only, and AP13+ closed under
+   plan amendment v1.9.1. The real Canary will run later against the final
+   applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
+2. Implement K1 Kernel policy ownership, then B0 broker coexistence, and
+   owner-review/freeze Lean v1. Both precede AP0; neither requires the deferred
+   real order.
 3. Land the remaining post-M11 Charter amendment and run the digest-pinned
    audit release check. Record owner acceptance plus independent review in a
    machine-verifiable signed/protected AP0 release record; implement AP0 only

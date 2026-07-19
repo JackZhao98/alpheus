@@ -310,3 +310,13 @@ Halts use the same Halt/send cut after rolling back the failed fill transaction.
 Across ordinary terminal updates, pending cleanup and claimed cleanup, any
 durable fill keeps the parent operation `executed`; only the unsent remainder
 and its typed order become failed/rejected.
+
+## Amendment v1.9.1 — real Canary deferred, Live gates preserved
+
+The owner explicitly deferred the one-share production Canary. M11 remains
+non-landed as `CANARY DEFERRED`; production stays read-only and this phase
+authorizes no order. K1, B0 and non-money AP0–AP12 work may continue under
+[`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md), because those stages require
+zero production broker mutations. The exact M11 Canary and this phase's full
+stop/recovery acceptance remain mandatory before AP13 or any later Agent Live
+stage and must run against the final applicable post-K1/B0 Kernel.

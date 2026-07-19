@@ -140,7 +140,8 @@ No proposal or real broker effect was created by this certification.
 ## Remaining M11 gate
 
 K0 authorizes no trade. The target database and read-only deployment step is
-complete. M11 now remains in progress only for the separately confirmed exact
-one-share equity canary ticket and its Live startup, Halt, observation,
+complete. Under amendment v1.9.1, M11 is `CANARY DEFERRED` and remains
+non-landed until the separately confirmed exact one-share equity canary ticket
+and its Live startup, Halt, observation,
 reconciliation/cancel-or-fill, clean-accounting, and return-to-read-only
 sequence. Option mutations remain structurally disabled.

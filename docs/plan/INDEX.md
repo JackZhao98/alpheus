@@ -1,14 +1,14 @@
 # Alpheus Plan Index
 
-> Plan version: **v1.9 — frozen baseline plus broker-coexistence amendment**
+> Plan version: **v1.9.1 — deferred Canary plus non-money continuation**
 >
 > Semantic baseline: commit `fa5a29e` (`docs: harden roadmap execution invariants`)
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **the separately confirmed one-share M11
-> canary; target database K0 bootstrap/read-only deployment is certified. B0
-> follows M11 and is required before AP0**
+> Current implementation target: **K1 database policy ownership. M11 is
+> `CANARY DEFERRED`, production remains read-only, and the real canary is a hard
+> gate before AP13 rather than before non-money development**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -37,8 +37,10 @@ For implementation work, read only:
 4. [`07_BROKER_COEXISTENCE.md`](07_BROKER_COEXISTENCE.md) for Provider facts,
    external/manual orders or positions, final pre-effect refresh, and broker
    coexistence work.
-5. The **single phase file containing the current milestone**.
-6. [`../AUDIT.md`](../AUDIT.md) only when adding acceptance probes or performing
+5. [`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md) for the M11 deferral,
+   non-money continuation boundary, or AP13 Live gate.
+6. The **single phase file containing the current milestone**.
+7. [`../AUDIT.md`](../AUDIT.md) only when adding acceptance probes or performing
    an audit.
 
 Do not load every later phase by default. Follow cross-milestone references only
@@ -53,13 +55,15 @@ PR/commit and update this index only after its acceptance criteria pass.
 | 1 — Safety + production parity | M2.5, M2.6, M8A, M8B, M2.7–M2.9 | Landed | [`02_SAFETY_FOUNDATION.md`](02_SAFETY_FOUNDATION.md) |
 | 2 — Ledger and controls | M3A, M3C, M3D, M4, M5B | Landed | [`03_LEDGER_AND_CONTROLS.md`](03_LEDGER_AND_CONTROLS.md) |
 | 3 — Runtime and review | M6, M7 | Landed | [`04_RUNTIME_AND_REVIEW.md`](04_RUNTIME_AND_REVIEW.md) |
-| 4 — Pre-live and live | M9, M10, M11 | **Active: M11 (last)** | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
-| X — Policy ownership | M11 K0; post-M11 K1; Agent K2 | **K0 LANDED; K1 after M11** | [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md) |
-| Y — Broker coexistence | post-M11 B0 | **FROZEN; B0 after M11 and before AP0** | [`07_BROKER_COEXISTENCE.md`](07_BROKER_COEXISTENCE.md) |
+| 4 — Pre-live and live | M9, M10, M11 | **M11 CANARY DEFERRED; AP13+ blocked** | [`05_PRELIVE_AND_LIVE.md`](05_PRELIVE_AND_LIVE.md) |
+| X — Policy ownership | M11 K0; K1; Agent K2 | **K0 LANDED; K1 NEXT** | [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md) |
+| Y — Broker coexistence | B0 | **FROZEN; after M11 non-money gate, before AP0** | [`07_BROKER_COEXISTENCE.md`](07_BROKER_COEXISTENCE.md) |
+| Z — Deferred production evidence | M11 Canary | **DEFERRED; required before AP13** | [`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md) |
 
 ## Milestone tracker
 
-Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`.
+Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `DEFERRED`,
+`BLOCKED`, `LAST`.
 
 | Milestone | Status | Depends on / gate | Evidence | Phase |
 |---|---|---|---|---|
@@ -82,8 +86,9 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M7** | **LANDED** | M6 | exact-origin Admin controls; pending-review risk/cap/quote/check display; two-step Halt and constrained breaker Resume; non-actionable uncertainty warnings; event/operation audit ids; phone-width and inert-XSS browser probes; approval/rejection concurrency state machine; Halt open-block/full-close proof; PostgreSQL race suite and isolated Compose smoke green | Phase 3 |
 | **M9** | **LANDED** | M7; full pre-live certification | 96.6% risk coverage; deterministic claimed/accepted/crash/reprice fault seams; live/shadow daily, open-risk, buying-power and close-reservation barriers plus PostgreSQL advisory-lock proof; six-operation full-day idempotent replay; paused DB 503 in 3.005701s with zero effects; PostgreSQL process replacement recovery; final unknown=0 and unsafe-orphan=0; isolated race/vet/smoke green | Phase 4 |
 | **M10** | **LANDED** | M9 | official Anthropic Go SDK v1.42.0; role-card-order prompt rendering; forced single-tool handwritten contract schemas; strict local decode/Validate and one retry; exact token-count budget plus per-slot caps; untrusted-context boundary; authenticated bounded telemetry event; mocked transport/startup/injection suites; race/vet, isolated Compose certification and missing-key process probe green | Phase 4 |
-| **M11** | **IN PROGRESS** | M10; v1.6 Provider wiring, v1.7.1 recovery/Halt, v1.8.1 K0 database canary authority and target read-only deployment complete; separately confirmed one-share canary remains; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority; target database migrated v7→v10 with 92 operations preserved and authority revision/generation `1/1` at $50/five days; current image healthy in `read_only`, Live disabled, account $401.16 with no positions/open orders and zero attempt/order/fill/current-day grant/open-risk/unknown effect; all widening remains denied until K1 attestation | Phase 4 |
-| **B0** | **PENDING** | M11 LANDED; before AP0 and autonomous Agent Live; may proceed independently of K1 after M11 | external/manual broker facts, origin separation, aggregate-risk reconciliation, external cancel/close through Kernel, action-specific pre-effect refresh, stale-proposal invalidation, PostgreSQL/race/fault/Provider-fixture acceptance | Phase Y |
+| **M11** | **DEFERRED** | Non-money code and target read-only deployment complete; exact one-share Alpheus-routed Canary plus stop/recovery acceptance remains; hard gate before AP13; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority; target database migrated v7→v10 with 92 operations preserved and authority revision/generation `1/1` at $50/five days; current image healthy in `read_only`, Live disabled, account $401.16 with no positions/open orders and zero attempt/order/fill/current-day grant/open-risk/unknown effect | Phase 4 / Z |
+| **K1** | **NEXT** | M11 non-money gate; before AP0; real Canary not required; zero production broker mutation | typed immutable Kernel policy revisions/head, exact import, revision binding, database expiry/lease, completed-day attestation and guarded widening, YAML reader removal, PostgreSQL/race acceptance | Phase X |
+| **B0** | **PENDING** | M11 non-money gate; K1 policy binding where applicable; before AP0; real Canary not required | external/manual broker facts, origin separation, aggregate-risk reconciliation, external cancel/close through Kernel, action-specific pre-effect refresh, stale-proposal invalidation, PostgreSQL/race/fault/Provider-fixture acceptance | Phase Y |
 
 Ordering constraints: M8A/M8B land after M2.6 so production reads inherit
 fixed-point types, authentication and account binding, while all production
@@ -116,3 +121,4 @@ When a milestone lands:
 | 2026-07-18 | v1.8 | Separate structural ceilings, deployment config, database policy and Provider facts | Runtime inspection proved the existing `live_canary_revision` is not used by the production gate, which still reads `limits.yaml`; lowering `clean_days_before_raise` is also not classified as widening. More generally, proposals and working orders do not bind the policy revision that authorized them, so restart/config widening can expand old work. Human risk/business values move to typed immutable DB revisions/heads, while code retains structural and resource ceilings, deploy config retains secrets/endpoints/timeouts/capability ceilings, and Provider data remains observed fact. K0 fixes only canary authority before the one-share M11 canary; K1 performs the general in-Kernel migration after M11 and before AP0. No Config Service or generic settings table is introduced. |
 | 2026-07-18 | v1.8.1 | Make K0 widening evidence explicitly fail closed | Implementation review proved `day_open` records observation/start, not a final broker-reconciled completed day. K0 therefore permits explicit bootstrap and tightening only; `cap increase OR clean_days decrease` is classified as widening and denied. K1 owns a typed durable completed-day attestation before widening can exist. Commit `d24b8b9` lands K0 without a Config Service, generic head table, HTTP mutation path, YAML fallback or production broker call. |
 | 2026-07-18 | v1.9 | Add B0 broker coexistence and pre-effect Provider facts | Live preflight found real queued orders created outside Alpheus, and the owner confirmed humans may add, reduce, sell, or cancel on the shared account. Current open-order reads are display-only, internal close exposure cannot manage a purely external position, and an external change can invalidate a previously safe proposal. B0 preserves origin without adoption, accounts aggregate Provider facts fail closed, routes later external cancel/close through Kernel, and refreshes action-specific facts immediately before effects. The controlled clean-account M11 canary may proceed first; B0 is required before AP0/autonomous Agent Live. |
+| 2026-07-18 | v1.9.1 | Defer the real M11 Canary without blocking non-money work | The owner cannot run the production order now and explicitly directed development to continue. M11's code, recovery/Halt, K0, target v10 migration and read-only deployment are complete with zero money effects. K1, B0 and AP0–AP12 have no need for a production mutation when their deployment ceiling remains read-only/Shadow, so they may proceed under their existing gates. M11 remains `CANARY DEFERRED`, never `LANDED`; the real order must run against the final post-K1/B0 Kernel and remains a hard prerequisite for AP13–AP15. |
