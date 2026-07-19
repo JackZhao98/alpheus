@@ -112,6 +112,8 @@ type ReadOrder struct {
 	InstrumentID    string       `json:"instrument_id"`
 	Symbol          string       `json:"symbol"`
 	Side            string       `json:"side"`
+	Kind            string       `json:"kind"`
+	PositionEffect  string       `json:"position_effect"` // open | close | unknown
 	State           string       `json:"state"`
 	Qty             units.Qty    `json:"qty"`
 	FilledQty       units.Qty    `json:"filled_qty"`

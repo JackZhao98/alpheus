@@ -69,13 +69,14 @@ function renderList(containerId, emptyId, countId, items, formatter) {
   byId(emptyId).classList.toggle("hidden", nodes.length > 0);
 }
 
-async function renderPositions(positions) {
+async function renderPositions(positions, origins = {}) {
   const body = byId("positions-body");
   const rows = await Promise.all((positions || []).map(async (position) => {
     let quote = null;
     try { quote = await api(`/market/quote/${encodeURIComponent(position.symbol)}`); } catch (_) {}
     const row = document.createElement("tr");
-    const values = [position.symbol, position.kind, position.qty, position.multiplier, money(position.avg_price), quote ? `${money(quote.bid)} / ${money(quote.ask)}` : "Unavailable", quote ? `FRESH · ${quote.source} · ${when(quote.as_of)}` : "STALE/ERROR · fail closed"];
+    const origin = origins[position.position_id] || {origin:"ambiguous", evidence:"unavailable"};
+    const values = [position.symbol, `${position.kind} · ${origin.origin}`, position.qty, position.multiplier, money(position.avg_price), quote ? `${money(quote.bid)} / ${money(quote.ask)}` : "Unavailable", quote ? `FRESH · ${quote.source} · ${when(quote.as_of)} · ${origin.evidence}` : `STALE/ERROR · fail closed · ${origin.evidence}`];
     values.forEach((value) => { const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell); });
     return row;
   }));
@@ -319,13 +320,16 @@ async function renderState(state) {
   setText("mode-badge", state.mode);
   setText("account-type", state.account.account_type); setText("account-source", state.account.source);
   setText("equity", money(state.account.equity)); setText("buying-power", money(state.account.buying_power));
-  setText("provider-cash", state.account.cash_known ? money(state.account.cash) : "Unknown"); setText("account-asof", `As of ${when(state.account.as_of)} · current`);
+  const brokerObservation = state.broker_observation || {};
+  setText("provider-cash", state.account.cash_known ? money(state.account.cash) : "Unknown"); setText("account-asof", `As of ${when(state.account.as_of)} · observation ${brokerObservation.generation || "—"}`);
   const gate = state.live_execution_gate || {};
   setText("mutation-gate", gate.unknown_attempt_id ? `LATCHED · ${gate.unknown_attempt_id}` : gate.active_attempt_id ? `ACTIVE · ${gate.active_attempt_id}` : "READY");
   renderLedger("live", state.day.live, state.as_of); renderLedger("shadow", state.day.shadow, state.as_of);
-  await renderPositions(state.positions);
-  renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => ({title:`${o.side} ${o.symbol} · ${o.state}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${when(o.as_of)}`}));
-  renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => ({title:`${f.side} ${f.symbol} · ${f.qty}`, detail:`${money(f.price)} · ${f.source} · ${when(f.as_of)}`}));
+  const origins = {};
+  (state.broker_objects || []).forEach((object) => { origins[object.object_key] = {origin:object.origin || "ambiguous", evidence:object.origin_evidence || "unavailable"}; });
+  await renderPositions(state.positions, origins);
+  renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => { const origin = origins[o.broker_order_id] || {origin:"ambiguous", evidence:"unavailable"}; return {title:`${o.side} ${o.symbol} · ${o.state} · ${origin.origin}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${origin.evidence} · ${when(o.as_of)}`}; });
+  renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => { const origin = origins[f.fill_id] || {origin:"ambiguous", evidence:"separate fill observation"}; return {title:`${f.side} ${f.symbol} · ${f.qty} · ${origin.origin}`, detail:`${money(f.price)} · ${f.source} · ${origin.evidence} · ${when(f.as_of)}`}; });
   renderBreakerActions();
   ["account-error", "positions-error", "orders-error", "fills-error"].forEach((id) => setPanelError(id, ""));
 }

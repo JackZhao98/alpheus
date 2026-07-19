@@ -25,15 +25,16 @@ type Fake struct {
 }
 
 type fakeOrder struct {
-	result     OrderResult
-	symbol     string
-	side       string
-	kind       string
-	qty        units.Qty
-	limit      units.Micros
-	multiplier int64
-	updatedAt  time.Time
-	filledAt   time.Time
+	result         OrderResult
+	symbol         string
+	side           string
+	kind           string
+	positionEffect string
+	qty            units.Qty
+	limit          units.Micros
+	multiplier     int64
+	updatedAt      time.Time
+	filledAt       time.Time
 }
 
 func NewFake(startingCash units.Micros) *Fake {
@@ -224,6 +225,13 @@ func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult
 		}
 	}
 	symbol, side, qty, limit, kind := req.Symbol, req.Side, req.Qty, req.Limit, req.Kind
+	positionEffect := req.PositionEffect
+	if positionEffect == "" {
+		positionEffect = "unknown"
+	}
+	if positionEffect != "open" && positionEffect != "close" && positionEffect != "unknown" {
+		return OrderResult{}, fmt.Errorf("unsupported position effect %q", positionEffect)
+	}
 	if qty <= 0 || limit <= 0 {
 		return OrderResult{}, fmt.Errorf("quantity and limit must be positive")
 	}
@@ -248,7 +256,7 @@ func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult
 	id := fmt.Sprintf("fake-%d", f.seq)
 	order := &fakeOrder{
 		result: OrderResult{BrokerOrderID: id, ClientOrderID: req.ClientOrderID, State: "submitted"},
-		symbol: symbol, side: side, kind: kind, qty: qty, limit: limit,
+		symbol: symbol, side: side, kind: kind, positionEffect: positionEffect, qty: qty, limit: limit,
 		multiplier: multiplier, updatedAt: time.Now().UTC(),
 	}
 	if marketable(side, limit, quote) {
@@ -382,7 +390,8 @@ func (f *Fake) OpenOrders(_ context.Context) ([]ReadOrder, error) {
 			BrokerOrderID: order.result.BrokerOrderID,
 			ClientOrderID: order.result.ClientOrderID,
 			InstrumentID:  "fake-instrument-" + order.symbol,
-			Symbol:        order.symbol, Side: order.side, State: order.result.State,
+			Symbol:        order.symbol, Side: order.side, Kind: order.kind,
+			PositionEffect: order.positionEffect, State: order.result.State,
 			Qty: order.qty, FilledQty: order.result.FilledQty, LimitPrice: order.limit, LimitPriceKnown: true,
 			Source: "fake", AsOf: order.updatedAt,
 		})

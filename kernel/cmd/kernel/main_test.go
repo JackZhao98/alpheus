@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,52 +38,55 @@ type memoryFill struct {
 }
 
 type memoryStore struct {
-	mu                   sync.Mutex
-	idempotencyMu        sync.Mutex
-	symbolMu             sync.Mutex
-	ledgerLocks          [2]sync.Mutex
-	idempotencyLocks     map[string]*sync.Mutex
-	symbolLocks          map[string]*sync.Mutex
-	statuses             map[string]string
-	classes              map[string]string
-	shadows              map[string]bool
-	operations           map[string]risk.Operation
-	operationRows        map[string]store.OperationRow
-	grants               map[string]store.TradeGrant
-	reservations         map[string]store.CloseReservation
-	openReservations     map[string]store.OpenReservation
-	shadowAccount        store.ShadowAccount
-	shadowPositions      map[string]store.ShadowPosition
-	exposureQty          map[string]units.Qty
-	firstExposureOp      map[string]string
-	attempts             map[string]store.ExecutionAttempt
-	orders               map[string]store.Order
-	fills                map[string]memoryFill
-	verdicts             map[string]json.RawMessage
-	journals             []journalEntry
-	events               []string
-	eventPayloads        map[string][]any
-	blackboards          map[string]json.RawMessage
-	journalErr           error
-	halted               bool
-	haltReason           string
-	haltedAt             time.Time
-	proposalLockErr      error
-	m3aActive            bool
-	databaseNow          func() time.Time
-	databaseNowErr       error
-	dayOpenEquity        map[string]units.Micros
-	realizedPnL          map[string]units.Micros
-	breakerStates        map[string]store.BreakerState
-	breakerOverrides     map[string]bool
-	consecutiveLossDays  map[string]int
-	liveActiveAttemptID  string
-	liveUnknownAttemptID string
-	liveCanary           *store.LiveCanaryRevision
-	liveCanaryErr        error
-	kernelPolicy         *store.KernelPolicyRevision
-	kernelPolicyErr      error
-	kernelPolicyHistory  map[int64]*store.KernelPolicyRevision
+	mu                     sync.Mutex
+	idempotencyMu          sync.Mutex
+	symbolMu               sync.Mutex
+	ledgerLocks            [2]sync.Mutex
+	idempotencyLocks       map[string]*sync.Mutex
+	symbolLocks            map[string]*sync.Mutex
+	statuses               map[string]string
+	classes                map[string]string
+	shadows                map[string]bool
+	operations             map[string]risk.Operation
+	operationRows          map[string]store.OperationRow
+	grants                 map[string]store.TradeGrant
+	reservations           map[string]store.CloseReservation
+	openReservations       map[string]store.OpenReservation
+	shadowAccount          store.ShadowAccount
+	shadowPositions        map[string]store.ShadowPosition
+	exposureQty            map[string]units.Qty
+	firstExposureOp        map[string]string
+	attempts               map[string]store.ExecutionAttempt
+	orders                 map[string]store.Order
+	fills                  map[string]memoryFill
+	verdicts               map[string]json.RawMessage
+	journals               []journalEntry
+	events                 []string
+	eventPayloads          map[string][]any
+	blackboards            map[string]json.RawMessage
+	journalErr             error
+	halted                 bool
+	haltReason             string
+	haltedAt               time.Time
+	proposalLockErr        error
+	m3aActive              bool
+	databaseNow            func() time.Time
+	databaseNowErr         error
+	dayOpenEquity          map[string]units.Micros
+	realizedPnL            map[string]units.Micros
+	breakerStates          map[string]store.BreakerState
+	breakerOverrides       map[string]bool
+	consecutiveLossDays    map[string]int
+	liveActiveAttemptID    string
+	liveUnknownAttemptID   string
+	liveCanary             *store.LiveCanaryRevision
+	liveCanaryErr          error
+	kernelPolicy           *store.KernelPolicyRevision
+	kernelPolicyErr        error
+	kernelPolicyHistory    map[int64]*store.KernelPolicyRevision
+	brokerObservationGen   int64
+	brokerAccountView      *store.BrokerAccountView
+	brokerObservationViews map[string]*store.BrokerAccountView
 }
 
 func newMemoryStore() *memoryStore {
@@ -514,6 +518,75 @@ func (m *memoryStore) LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, 
 
 func (m *memoryStore) LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error) {
 	return m.BoundKernelPolicy(operation)
+}
+
+func (m *memoryStore) RecordBrokerObservation(input store.BrokerObservationInput) (*store.BrokerObservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.brokerObservationGen++
+	observation := store.BrokerObservation{
+		ID: input.ID, Generation: m.brokerObservationGen, AccountID: input.AccountID,
+		Source: input.Source, Purpose: input.Purpose, StartedAt: input.StartedAt,
+		CompletedAt: input.CompletedAt, Status: "complete", ManifestDigest: strings.Repeat("0", 64),
+	}
+	if observation.ID == "" {
+		observation.ID = store.NewID()
+	}
+	objects := []store.BrokerObservedObject{}
+	for _, family := range input.Families {
+		if family.Status != "success" {
+			observation.Status = "partial"
+			continue
+		}
+		for _, item := range family.Items {
+			canonical, err := json.Marshal(item.Canonical)
+			if err != nil {
+				return nil, err
+			}
+			objects = append(objects, store.BrokerObservedObject{
+				Family: family.Family, ObjectKey: item.ObjectKey, ObservedAt: item.ObservedAt,
+				Canonical: canonical, Origin: "external", Evidence: "unmatched",
+			})
+		}
+	}
+	hasAccount, hasPositions, hasOrders := false, false, false
+	for _, family := range input.Families {
+		hasAccount = hasAccount || family.Family == store.BrokerFamilyAccount
+		hasPositions = hasPositions || family.Family == store.BrokerFamilyPositions
+		hasOrders = hasOrders || family.Family == store.BrokerFamilyOrders
+	}
+	view := &store.BrokerAccountView{Observation: observation, Objects: objects}
+	if m.brokerObservationViews == nil {
+		m.brokerObservationViews = map[string]*store.BrokerAccountView{}
+	}
+	m.brokerObservationViews[observation.ID] = view
+	if observation.Status == "complete" && hasAccount && hasPositions && hasOrders {
+		m.brokerAccountView = view
+	}
+	return &observation, nil
+}
+
+func (m *memoryStore) LoadBrokerObservation(id string) (*store.BrokerAccountView, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	view := m.brokerObservationViews[id]
+	if view == nil {
+		return nil, sql.ErrNoRows
+	}
+	copy := *view
+	copy.Objects = append([]store.BrokerObservedObject(nil), view.Objects...)
+	return &copy, nil
+}
+
+func (m *memoryStore) LoadBrokerAccountView(accountID string) (*store.BrokerAccountView, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.brokerAccountView == nil || m.brokerAccountView.Observation.AccountID != accountID {
+		return nil, sql.ErrNoRows
+	}
+	copy := *m.brokerAccountView
+	copy.Objects = append([]store.BrokerObservedObject(nil), m.brokerAccountView.Objects...)
+	return &copy, nil
 }
 
 func (m *memoryStore) KernelPolicyAuthority() (*store.KernelPolicyRevision, error) {

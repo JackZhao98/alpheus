@@ -601,7 +601,8 @@ func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 		}
 		out = append(out, ReadOrder{
 			BrokerOrderID: order.ID,
-			InstrumentID:  order.InstrumentID, Symbol: order.Symbol, Side: order.Side, State: order.State,
+			InstrumentID:  order.InstrumentID, Symbol: order.Symbol, Side: order.Side,
+			Kind: "equity", PositionEffect: "unknown", State: order.State,
 			Qty: *order.Quantity, FilledQty: *order.CumulativeQuantity, LimitPrice: price, LimitPriceKnown: priceKnown,
 			Source: robinhoodSource, AsOf: asOf,
 		})
@@ -629,7 +630,8 @@ func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 		leg := order.Legs[0]
 		out = append(out, ReadOrder{
 			BrokerOrderID: order.ID, InstrumentID: leg.OptionID, Symbol: order.ChainSymbol,
-			Side: leg.Side, State: order.State, Qty: *order.Quantity, FilledQty: *order.ProcessedQuantity,
+			Side: leg.Side, Kind: "option", PositionEffect: leg.PositionEffect,
+			State: order.State, Qty: *order.Quantity, FilledQty: *order.ProcessedQuantity,
 			LimitPrice: order.Price.Value, LimitPriceKnown: order.Price.Known, Source: robinhoodSource, AsOf: asOf,
 		})
 	}

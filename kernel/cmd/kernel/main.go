@@ -107,6 +107,9 @@ type storeAPI interface {
 	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
 	LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error)
 	DatabaseNow() (time.Time, error)
+	RecordBrokerObservation(input store.BrokerObservationInput) (*store.BrokerObservation, error)
+	LoadBrokerAccountView(accountID string) (*store.BrokerAccountView, error)
+	LoadBrokerObservation(id string) (*store.BrokerAccountView, error)
 }
 
 type dayStateReader interface {
@@ -651,43 +654,35 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "account provider unavailable"})
 		return
 	}
-	brokerCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-	pos, err := account.Positions(brokerCtx)
-	cancel()
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "position data unavailable"})
-		return
-	}
-	brokerCtx, cancel = context.WithTimeout(r.Context(), s.brokerCallTimeout())
-	orders, err := account.OpenOrders(brokerCtx)
-	cancel()
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "order data unavailable"})
-		return
-	}
 	halted, haltReason := s.haltSnapshot()
-	var acct broker.AccountState
 	var window marketWindow
+	if err := s.store.WithLedgerLock(false, func(gate store.OperationGate) error {
+		var err error
+		window, err = s.databaseMarketWindow(gate)
+		return err
+	}); err != nil {
+		writeStoreError(w, "get state market window", err)
+		return
+	}
+	snapshot, err := s.captureProviderSnapshot(r.Context(), "read_model")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "provider snapshot unavailable"})
+		return
+	}
+	acct, pos, orders := snapshot.Account, snapshot.Positions, snapshot.Orders
 	var liveDay, shadowDay risk.DayState
 	if err := s.store.WithLedgerLock(false, func(gate store.OperationGate) error {
-		accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-		var err error
-		acct, err = account.Account(accountCtx)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("%w: account", errBrokerDataUnavailable)
-		}
-		window, err = s.databaseMarketWindow(gate)
+		liveWindow, err := s.databaseMarketWindow(gate)
 		if err != nil {
 			return err
 		}
+		if !liveWindow.day.Equal(window.day) {
+			return errMarketDayAdvanced
+		}
+		window = liveWindow
 		liveDay, err = s.dayStateAtAccountWithLimits(r.Context(), gate, false, acct, window, halted, haltReason, kernelPolicy.Policy)
 		return err
 	}); err != nil {
-		if errors.Is(err, errBrokerDataUnavailable) {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "account data unavailable"})
-			return
-		}
 		writeStoreError(w, "get live day state", err)
 		return
 	}
@@ -709,13 +704,15 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "get shadow day state", err)
 		return
 	}
-	brokerCtx, cancel = context.WithTimeout(r.Context(), s.brokerCallTimeout())
-	fills, err := account.RecentFills(brokerCtx, window.start)
-	cancel()
+	fills, fillObservation, fillObjects, err := s.captureProviderFills(
+		r.Context(), "read_model", snapshot.Observation.AccountID, snapshot.Observation.Source, window.start,
+	)
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": "fill data unavailable"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "fill data unavailable"})
 		return
 	}
+	brokerObjects := append([]store.BrokerObservedObject(nil), snapshot.View.Objects...)
+	brokerObjects = append(brokerObjects, fillObjects...)
 	// RecentFills is fetched after both ledger snapshots. Re-check the database
 	// clock before publishing so a request that crosses market midnight never
 	// combines a prior-day risk snapshot with next-day fills.
@@ -731,17 +728,20 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"account":             acct,
-		"positions":           pos,
-		"open_orders":         orders,
-		"recent_fills":        fills,
-		"day":                 map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
-		"live_execution_gate": liveExecutionGate,
-		"db_live_canary":      canary,
-		"db_kernel_policy":    kernelPolicy,
-		"mode":                s.tradingMode(),
-		"source":              "kernel",
-		"as_of":               window.asOf,
+		"account":                 acct,
+		"positions":               pos,
+		"open_orders":             orders,
+		"recent_fills":            fills,
+		"day":                     map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
+		"live_execution_gate":     liveExecutionGate,
+		"db_live_canary":          canary,
+		"db_kernel_policy":        kernelPolicy,
+		"broker_observation":      snapshot.Observation,
+		"broker_fill_observation": fillObservation,
+		"broker_objects":          brokerObjects,
+		"mode":                    s.tradingMode(),
+		"source":                  "kernel",
+		"as_of":                   window.asOf,
 	})
 }
 
