@@ -71,6 +71,9 @@ All of the following are required:
   evidence;
 - Kernel policy migration K1 is landed and no migrated business/risk value
   falls back to YAML;
+- Kernel broker-coexistence amendment B0 is landed, so external/manual broker
+  facts, pre-effect refresh, stale-proposal invalidation, and mixed-control
+  episode references exist before Agent contracts bind to them;
 - Lean v1 is owner-reviewed and frozen;
 - the Kernel remains healthy with `LIVE_TRADING_ENABLED=false` by default;
 - the pre-AP0 governance closeout has landed a reviewed post-M11 Charter
@@ -93,7 +96,7 @@ types may evolve in their cohesive module commit with executable tests.
 The **pre-AP0 governance closeout** is not an implementation milestone. It:
 
 1. closes M11 and its stop/recovery evidence;
-2. lands K1 and freezes Lean v1;
+2. lands K1 and B0, then freezes Lean v1;
 3. lands the Charter amendment through the frozen Kernel change-control process;
 4. pins the exact Lean, final-audit and Charter digests; and
 5. runs a narrow release check proving those prerequisites did not invalidate
@@ -142,10 +145,10 @@ disabled unless a later separately frozen plan adds them.
 ## 4. Dependency graph
 
 ```text
-historical audit -> M11 LANDED -> K1 -> Lean v1 freeze
-                                      |
+historical audit -> M11 LANDED -> K1 + B0 -> Lean v1 freeze
+                                           |
                     Charter closeout + refreshed audit/release
-                                      |
+                                           |
                         AP0  shared contracts and authority scaffold
                          |
                         AP1  durable Control Plane and Worker
@@ -512,7 +515,7 @@ The originating architecture file remains the semantic source.
 | AP5 | Collaboration/Team | RoleContractRevision, PromptRevision, ModelBindingRevision, AgentRevision, AgentDeploymentRevision, DeploymentValidationAttestation, ActiveAgentDeploymentHead/Event, ScheduleRevision, TaskGraphDraft/Graph, Message, Claim, delivery/wait/cancel/supersession, child work, disagreement, decision graph, CandidateSet, PrimaryThesis, Challenge, DecisionMemo, PositionMonitorReport, PostMortem, independence/substitution |
 | AP6 | Memory/Context | MemoryCandidate, MemoryItem, MemoryValidation, relation, retrieval query/manifest, IndexRevision, ContextManifest, MustPreserveManifest, compact, retention, correction/deletion |
 | AP7 | Strategy | PlaybookRevision, SetupRevision, StrategyContractRevision, Hypothesis, CandidateLesson, Experiment/Opportunity manifest, run/result, ValidatorAttestation, StrategyActivationAuthority, StrategyDecision, ActiveStrategyHead/Event, PositionStrategyBinding |
-| AP8 | Runtime/GRACE Intake | Agent Control-owned BehaviorEvent; GRACE-owned EvaluationTicket/ack and OutcomeRevision/Head/Event; maturity/censoring, complete-stream cursor, decision/strategy attribution refs, integrity event, replay manifest |
+| AP8 | Runtime/GRACE Intake | Agent Control-owned BehaviorEvent; GRACE-owned EvaluationTicket/ack and OutcomeRevision/Head/Event; maturity/censoring, complete-stream cursor, decision/strategy attribution refs, B0 ControlEpisode/intervention bindings, integrity event, replay manifest |
 | AP9 | GRACE | EvaluationProfileRevision, AtomicEvaluation, ScoreSnapshot, immutable GRACEModelRevision, GRACEValidatorAttestation, ModelRiskDecision, CalibrationPackRevision, ModelStateEvent, ActiveGRACEChampionHead, invalidation and rollback |
 | AP10 | User Input/Kernel | OperationConfirmationTicket, TicketDisplayReceipt, ConfirmationReceipt, TicketStateHead/Event, OperationAuthorityBinding, GateDecision, ReductionProof |
 | AP11 | Delegation/Kernel | DelegationPolicyRevision, AuthorizationTemplateRevision, ScoreSnapshotBinding, CompatibilityDecision, BudgetPoolRevision/Head, AuthorizationProposal/validation/attestation, ActivationAuthority oneof, DelegationGrant/ScopeHead, AuthorityHealthLease, DelegationCharge |
@@ -827,6 +830,10 @@ without implementing a scoring model.
 **Deliverables:**
 
 - the separately credentialed deterministic `grace-intake` service/role;
+- immutable B0 BrokerObservation/ExternalControlEpisode references plus the
+  neutral mixed-control bindings required by
+  [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md), without a Control Plane or
+  LLM-authored causal classification;
 - canonical Agent Control-owned BehaviorEvent registration atomically committed
   with its qualifying Artifact, followed by GRACE-owned EvaluationTicket
   acknowledgement under the same immutable behavior identity;
@@ -1408,7 +1415,7 @@ release blockers are:
 1. retain landed M11 v1.7.1 recovery/Halt commit `0913010` and v1.8.1 K0
    database-authority commit `d24b8b9`, execute only the separately confirmed
    target-database bootstrap plus one-share canary, and mark M11 `LANDED`;
-2. land K1 and owner-review/freeze Lean v1;
+2. land K1 and B0, then owner-review/freeze Lean v1;
 3. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
    closeout; and
 4. refresh the cross-module audit, run the digest-pinned release check, and only

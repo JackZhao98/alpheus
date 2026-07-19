@@ -218,6 +218,14 @@ then atomically creates the applicable authority binding, charges,
 `settled_cash` authority field. It does not trust Agent sizing, GRACE scores,
 copied grant limits, or Web state.
 
+Kernel amendment B0 in
+[`../plan/07_BROKER_COEXISTENCE.md`](../plan/07_BROKER_COEXISTENCE.md) makes
+external/manual broker facts part of that canonical state and binds every
+mutation to an action-specific pre-effect observation. External origin is
+preserved rather than adopted. GRACE evaluates any later shared-control
+outcome under [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md); neither Agent
+nor GRACE may rewrite Kernel origin or broker facts.
+
 ## Risk-reducing path
 
 Position Manager may produce close/cancel/tighten intent only for an existing

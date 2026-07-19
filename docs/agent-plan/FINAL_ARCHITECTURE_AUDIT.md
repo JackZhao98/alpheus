@@ -44,9 +44,9 @@ closed in the same document revision.
 AP0 is nevertheless not authorized. The Kernel clock blocker is closed, its
 complete certification is green, and M11 v1.7.1 recovery/Halt landed in
 `0913010`, while v1.8.1 K0 database canary authority landed in `d24b8b9`;
-however, the separately confirmed canary stop/recovery evidence, K1, Lean v1
-freeze and the post-M11 Charter/audit closeout remain incomplete. These are
-hard release gates, not optional follow-up work.
+however, the separately confirmed canary stop/recovery evidence, K1, B0 broker
+coexistence, Lean v1 freeze and the post-M11 Charter/audit closeout remain
+incomplete. These are hard release gates, not optional follow-up work.
 
 ## 2. Scope and method
 
@@ -253,8 +253,8 @@ authorizes neither the target-database mutation nor a real-money order.
 ### R-03 — Post-M11 Charter amendment is not landed
 
 The current Charter still excludes the new Agent schemas/process profiles,
-Research Gateway, Strategy Lab and additional Web scope. After M11/K1 land and
-Lean v1 freezes, a dedicated pre-AP0 governance commit must amend the Charter
+Research Gateway, Strategy Lab and additional Web scope. After M11/K1/B0 land
+and Lean v1 freezes, a dedicated pre-AP0 governance commit must amend the Charter
 and pin the exact deployment, credential, database, Provider and authority
 boundaries from the lean plan.
 
@@ -296,7 +296,7 @@ The previous sequence remains a candidate rollout order, but Lean v1 must be
 frozen and re-audited before this verdict becomes current:
 
 ```text
-M11 closeout -> K1 -> Lean v1 freeze
+M11 closeout -> K1 + B0 -> Lean v1 freeze
 -> pre-AP0 Charter closeout and refreshed audit/release check
 -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
@@ -326,5 +326,5 @@ No Agent Platform implementation should begin from this audit alone. M11
 v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority are committed and
 pushed. The separately confirmed target-database bootstrap, one-share canary
 and M11 landing are next; neither this audit nor the Lean amendment authorizes
-the database mutation or that order. K1, Lean v1 freeze, Charter closeout and a
-refreshed audit/release record precede AP0.
+the database mutation or that order. K1, B0, Lean v1 freeze, Charter closeout
+and a refreshed audit/release record precede AP0.

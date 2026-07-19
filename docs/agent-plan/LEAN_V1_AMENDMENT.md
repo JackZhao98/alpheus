@@ -364,15 +364,15 @@ them in these implementation bands:
 
 | Band | Existing gates | Lean implementation focus |
 |---|---|---|
-| L0 | pre-AP0, AP0-AP2 | finish M11/K1; common identities; one durable Agent Platform; Input/Intent; early read-only Web |
+| L0 | pre-AP0, AP0-AP2 | finish M11/K1/B0; common identities; one durable Agent Platform; Input/Intent; early read-only Web |
 | L1 | AP3-AP4 | Registry, selected Skill/Tool injection, Research Gateway and Evidence |
 | L2 | AP5-AP7 | typed collaboration profiles, bounded Memory/context, Strategy candidates |
 | L3 | AP8-AP10 | atomic Behavior registration, delayed outcomes, independently reviewed GRACE, exact-confirmation fallback |
 | L4 | AP11-AP15 | Delegation observe-only -> Shadow -> transitional confirmed Live -> autonomous canary -> scoped autonomous Live |
 
 Each cohesive module is committed and pushed independently. A band does not
-authorize its next gate. AP0 remains withheld until M11, K1, the lean amendment,
-Charter closeout and a refreshed audit/release record are complete.
+authorize its next gate. AP0 remains withheld until M11, K1, B0, the lean
+amendment, Charter closeout and a refreshed audit/release record are complete.
 
 AP0 release authority is a machine-verifiable, owner-signed/protected release
 record binding exact digests, test evidence, reviewer attestation, decision and
@@ -456,7 +456,7 @@ Before freezing this amendment, a final review must prove:
   cannot be self-promoted by a Worker;
 - bounded context/compaction preserves evidence and unresolved obligations;
 - the policy-ownership matrix has no duplicate or fallback authority; and
-- the refreshed architecture audit lists M11/K1/GRACE/Delegation gates without
+- the refreshed architecture audit lists M11/K1/B0/GRACE/Delegation gates without
   treating application rollback as reversal of a real broker fill; and
 - AP0 authorization verifies a signed/protected release record, not a magic
   Markdown string.

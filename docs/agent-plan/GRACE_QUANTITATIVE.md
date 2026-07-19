@@ -8,6 +8,12 @@
 > thresholds. Those values require the Calibration Pack defined below,
 > independent validation, and explicit human approval.
 
+> Mixed-control outcomes additionally follow
+> [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md). Human/external intervention
+> is informative censoring/control transfer, not a default numeric discount;
+> actual account economics remain complete while individual scoreability is
+> segmented, censored, or marked unidentified.
+
 This implementation-directed Draft refines the architecture in
 [`GRACE.md`](GRACE.md) for **Grounded Retrospective Agent Credibility
 Evaluation**. GRACE evaluates behavior after its predeclared outcome becomes

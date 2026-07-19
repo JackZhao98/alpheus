@@ -1,7 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
 > Status: **LEAN V1 REVIEW OPEN — AP0 withheld pending M11,
-> K1, amendment freeze, Charter closeout and refreshed audit**
+> K1, B0, amendment freeze, Charter closeout and refreshed audit**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -24,7 +24,9 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
 4. Read `GRACE.md` when work concerns delayed behavior evaluation, credibility,
    real outcomes, attribution, or Post Mortem boundaries. Then read
    `GRACE_QUANTITATIVE.md` for schemas, scoring rules, statistical models,
-   ratings, maturity, and model validation.
+   ratings, maturity, and model validation. Read
+   [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md) when a human/external
+   action shares an order, position, or economic outcome with an Agent.
 5. Read `DELEGATION.md` and then `DELEGATION_POLICY.md` when work concerns
    autonomous authority, GRACE eligibility mapping, capability templates,
    grants, human confirmation interaction, budgets, or Kernel authorization.
@@ -50,6 +52,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Lean v1 cross-module amendment | Proposed; owner review/freeze and refreshed audit required; AP0 remains withheld | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
+| GRACE mixed-control attribution | Architecture frozen; B0/AP8 evidence bindings and AP9 quantitative/model-risk acceptance required | [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md) |
 | Delegation policy and risk authorization | Architecture and exact v1 specification frozen; autonomous Live disabled pending GRACE/model-risk, machine-schema, security, fault-suite, and rollout acceptance | [`DELEGATION.md`](DELEGATION.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
 | Complete module graph and trust boundaries | Architecture frozen; exact transport, persistence roles, cross-module schemas, and probes required | [`SYSTEM_BOUNDARIES.md`](SYSTEM_BOUNDARIES.md) |
 | Durable Agent Runtime | Architecture frozen; detailed state machines and implementation specification required | [`RUNTIME.md`](RUNTIME.md) |
@@ -87,7 +90,9 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    canary authority commit `d24b8b9` as landed non-money evidence; complete only
    the separately confirmed target-database bootstrap plus one-share canary and
    its stop/recovery acceptance before marking M11 `LANDED`.
-2. Implement K1 Kernel policy ownership, then owner-review/freeze Lean v1.
+2. Implement K1 Kernel policy ownership and B0 broker coexistence, then
+   owner-review/freeze Lean v1. They are separate modules and may proceed
+   independently after M11, but both precede AP0.
 3. Land the remaining post-M11 Charter amendment and run the digest-pinned
    audit release check. Record owner acceptance plus independent review in a
    machine-verifiable signed/protected AP0 release record; implement AP0 only

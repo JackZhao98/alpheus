@@ -121,7 +121,8 @@ whose earlier lots include Alpheus activity. Reconciliation must:
 Risk accounting may use a deterministic conservative allocation rule where a
 lot split is required, but that accounting convention is never presented as
 causal GRACE credit. Mixed-control evaluation belongs to the separate GRACE
-mixed-control attribution specification.
+mixed-control attribution specification in
+[`../agent-plan/GRACE_MIXED_CONTROL.md`](../agent-plan/GRACE_MIXED_CONTROL.md).
 
 ## 3. Provider observation boundary
 

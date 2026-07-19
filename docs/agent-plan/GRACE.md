@@ -7,6 +7,12 @@
 > a signed Calibration Pack, and implementation authorization. Any downstream
 > Live authorization mapping remains separate and unauthorized.**
 
+> Mixed-control note: when a human/external action shares an order, position,
+> or economic outcome with an Agent, the additional frozen attribution boundary
+> in [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md) applies. Actual PnL is
+> preserved once; control and behavior evidence are segmented rather than
+> multiplied by an arbitrary intervention weight.
+
 GRACE stands for **Grounded Retrospective Agent Credibility Evaluation**. Its
 descriptive name is the **real-outcome delayed credibility rating system**.
 
