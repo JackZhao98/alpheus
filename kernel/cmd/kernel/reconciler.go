@@ -13,6 +13,7 @@ import (
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/policy"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
@@ -28,7 +29,42 @@ type excludingDayStateReader interface {
 	EvaluateDayRisk(input store.DayRiskInput) (store.DayRiskStats, error)
 }
 
-func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingDayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason, operationID string) (risk.DayState, error) {
+func (s *server) operationPolicyPair(operation *store.OperationRow) (config.Limits, config.Limits, error) {
+	current, err := s.store.LoadKernelPolicyAuthority()
+	if err != nil {
+		return config.Limits{}, config.Limits{}, err
+	}
+	if operation == nil {
+		return config.Limits{}, config.Limits{}, store.ErrKernelPolicyAuthorityInvalid
+	}
+	if operation.KernelPolicyRevisionID == 0 {
+		// Historical pre-K1 rows remain explicit. They may finish only under the
+		// old startup snapshot plus any stricter current policy.
+		return s.limits, current.Policy, nil
+	}
+	bound, err := s.store.LoadBoundKernelPolicy(operation)
+	if err != nil {
+		return config.Limits{}, config.Limits{}, err
+	}
+	return bound.Policy, current.Policy, nil
+}
+
+func validateAttemptPolicyBinding(operation *store.OperationRow, attempt *store.ExecutionAttempt) error {
+	if operation == nil || attempt == nil {
+		return fmt.Errorf("operation or execution attempt is missing")
+	}
+	if operation.KernelPolicyRevisionID == 0 && attempt.KernelPolicyRevisionID == 0 {
+		return nil
+	}
+	if attempt.KernelPolicyRevisionID != operation.KernelPolicyRevisionID ||
+		attempt.KernelPolicyGeneration != operation.KernelPolicyGeneration ||
+		attempt.KernelPolicyDigest != operation.KernelPolicyDigest {
+		return fmt.Errorf("execution attempt policy binding differs from operation")
+	}
+	return nil
+}
+
+func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingDayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason, operationID string, limits config.Limits) (risk.DayState, error) {
 	n, err := gate.CountTradesForDayExcluding(shadow, window.start, window.end, operationID)
 	if err != nil {
 		return risk.DayState{}, err
@@ -56,9 +92,9 @@ func (s *server) dayStateAtAccountExcluding(ctx context.Context, gate excludingD
 		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
 		ObservedAt:              window.asOf,
 		ProviderRealizedPnL:     providerPnL,
-		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
-		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
-		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
+		MaxDailyLossPct:         limits.HardLimits.MaxDailyLossPct,
+		ConsecutiveLossDaysHalt: limits.HardLimits.ConsecutiveLossDaysHalt,
+		PnLReconciliationLimit:  limits.PnLReconciliationTolerance,
 	})
 	if err != nil {
 		return risk.DayState{}, err
@@ -120,9 +156,7 @@ func startAttemptReconciler(s *server) error {
 
 func (s *server) reconcileAttempts(ctx context.Context) error {
 	now := time.Now().UTC()
-	attempts, err := s.store.ListRecoverableAttempts(
-		now.Add(-s.attemptStaleAfter()), now.Add(-s.attemptClaimTimeout()), reconcileBatchSize,
-	)
+	attempts, err := s.store.ListRecoverableAttempts(s.attemptStaleAfter(), reconcileBatchSize)
 	if err != nil {
 		return err
 	}
@@ -234,6 +268,14 @@ func (s *server) reconcileWorkingOrders(ctx context.Context) error {
 }
 
 func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.ExecutionAttempt) error {
+	if attempt == nil || attempt.ID == "" {
+		return fmt.Errorf("recoverable attempt is missing")
+	}
+	durableAttempt, err := s.store.GetExecutionAttempt(attempt.ID)
+	if err != nil {
+		return err
+	}
+	attempt = durableAttempt
 	row, err := s.store.GetOperation(attempt.OperationID)
 	if err != nil {
 		return err
@@ -242,6 +284,14 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 	if err := json.Unmarshal(row.Payload, &op); err != nil {
 		_, failErr := s.store.FailPendingAttempt(attempt.ID, "persisted operation is invalid")
 		return errors.Join(err, failErr)
+	}
+	if err := validateAttemptPolicyBinding(row, attempt); err != nil {
+		_, failErr := s.store.FailPendingAttempt(attempt.ID, "execution policy binding mismatch")
+		return errors.Join(err, failErr)
+	}
+	boundLimits, currentLimits, err := s.operationPolicyPair(row)
+	if err != nil {
+		return err
 	}
 	if attempt.Intent == "cancel" && (op.Action == "open" || op.Action == "close") {
 		return s.reconcilePendingRepriceCancel(ctx, attempt, op)
@@ -288,14 +338,29 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "market data unavailable during recovery")
 			return failErr
 		}
-		candidate := op
+		boundCandidate := op
 		cap := op.ApprovedPriceCap
-		candidate.Limit = &cap
-		candidate.RejectReason = ""
-		candidate = s.deriveOpenOperation(ctx, candidate, &quote)
-		if candidate.Multiplier != op.Multiplier || candidate.Qty != op.Qty || candidate.ApprovedPriceCap > op.ApprovedPriceCap {
+		boundCandidate.Limit = &cap
+		boundCandidate.RejectReason = ""
+		boundCandidate = s.deriveOpenOperationWithLimits(ctx, boundCandidate, &quote, boundLimits)
+		currentCandidate := op
+		currentCandidate.Limit = &cap
+		currentCandidate.RejectReason = ""
+		currentCandidate = s.deriveOpenOperationWithLimits(ctx, currentCandidate, &quote, currentLimits)
+		if boundCandidate.Multiplier != op.Multiplier || boundCandidate.Qty != op.Qty ||
+			boundCandidate.ApprovedPriceCap != op.ApprovedPriceCap ||
+			boundCandidate.DerivedMaxRisk != op.DerivedMaxRisk ||
+			boundCandidate.RequiredCash != op.RequiredCash ||
+			currentCandidate.Multiplier != op.Multiplier || currentCandidate.Qty != op.Qty ||
+			currentCandidate.ApprovedPriceCap > op.ApprovedPriceCap ||
+			currentCandidate.DerivedMaxRisk > op.DerivedMaxRisk ||
+			currentCandidate.RequiredCash > op.RequiredCash {
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "recovery changed immutable execution facts")
 			return failErr
+		}
+		workingPrice := boundCandidate.WorkingPrice
+		if currentCandidate.WorkingPrice < workingPrice {
+			workingPrice = currentCandidate.WorkingPrice
 		}
 		if err := s.refreshGlobalHalt(); err != nil {
 			return err
@@ -306,7 +371,9 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			var account broker.AccountState
 			var err error
 			if op.Shadow {
-				account, err = s.shadowAccountSnapshot(ctx, gate)
+				markLimits := currentLimits
+				markLimits.QuoteMaxAgeSec = minInt(boundLimits.QuoteMaxAgeSec, currentLimits.QuoteMaxAgeSec)
+				account, err = s.shadowAccountSnapshotWithLimits(ctx, gate, markLimits)
 			} else {
 				accountCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 				account, err = s.accountProvider().Account(accountCtx)
@@ -319,11 +386,18 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			if err != nil {
 				return err
 			}
-			day, err := s.dayStateAtAccountExcluding(ctx, gate, op.Shadow, account, window, halted, haltReason, attempt.OperationID)
+			day, err := s.dayStateAtAccountExcluding(ctx, gate, op.Shadow, account, window, halted, haltReason, attempt.OperationID, currentLimits)
 			if err != nil {
 				return err
 			}
-			verdict = risk.Classify(candidate, s.limits, day, &quote)
+			boundVerdict := risk.Classify(boundCandidate, boundLimits, day, &quote)
+			currentVerdict := risk.Classify(currentCandidate, currentLimits, day, &quote)
+			verdict = currentVerdict
+			if boundVerdict.Class == "REJECT" {
+				verdict = boundVerdict
+			} else if !reviewApproved && boundVerdict.Class != "B" {
+				verdict = boundVerdict
+			}
 			return s.ensureMarketDay(gate, window)
 		})
 		if err != nil {
@@ -334,7 +408,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			return failErr
 		}
 		if attempt.Intent != "paper_place" {
-			if _, err := s.store.UpdatePendingAttemptLimit(attempt.ID, candidate.WorkingPrice); err != nil {
+			if _, err := s.store.UpdatePendingAttemptLimit(attempt.ID, workingPrice); err != nil {
 				return err
 			}
 		}
@@ -347,7 +421,8 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		quote, err := s.marketProvider().Quote(quoteCtx, reservation.Symbol)
 		cancel()
-		if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+		quoteMaxAge := minInt(boundLimits.QuoteMaxAgeSec, currentLimits.QuoteMaxAgeSec)
+		if err != nil || !quote.Usable(quoteMaxAge, time.Now().UTC()) {
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "market data unavailable during recovery")
 			return failErr
 		}
@@ -477,7 +552,11 @@ func (s *server) reconcilePendingReplacement(ctx context.Context, attempt *store
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "replacement trade grant is missing")
 			return errors.Join(err, failErr)
 		}
-		halted, err := s.repriceLedgerHalted(ctx, op.Shadow)
+		effective, err := s.effectiveOrderPolicy(order)
+		if err != nil {
+			return err
+		}
+		halted, err := s.repriceLedgerHalted(ctx, op.Shadow, effective.currentLimits)
 		if err != nil {
 			return err
 		}
@@ -562,7 +641,7 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 }
 
 func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.ExecutionAttempt, now time.Time) error {
-	claimed, err := s.claimRecoverableAttempt(seen, now)
+	claimed, err := s.claimRecoverableAttempt(seen)
 	if err != nil || claimed == nil {
 		return err
 	}
@@ -571,6 +650,16 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 		return err
 	}
 	if s.tradingMode() == config.ModeLive && claimed.SentAt.IsZero() && claimed.Intent == "place" {
+		if reason, err := s.recoveredUnsentPlaceRefusal(claimed); err != nil {
+			return err
+		} else if reason != "" {
+			_, resolveErr := s.store.ResolveAttempt(claimed.ID, claimed.Attempt, store.AttemptResolution{
+				State: "failed", LastError: reason, ProviderErrorCode: "recovery_policy_refused",
+				OperationStatus: "failed", ReleaseReservation: true,
+				OrderUpdate: &store.OrderUpdate{ExecutionAttemptID: claimed.ID, State: "rejected"},
+			})
+			return resolveErr
+		}
 		_, err := s.executeClaimedAttemptWithReplay(ctx, claimed, false)
 		return err
 	}
@@ -641,6 +730,52 @@ func (s *server) reconcileUncertainAttempt(ctx context.Context, seen *store.Exec
 		State: "unknown", LastError: "broker query did not prove the effect",
 	})
 	return resolveErr
+}
+
+func (s *server) recoveredUnsentPlaceRefusal(attempt *store.ExecutionAttempt) (string, error) {
+	operation, err := s.store.GetOperation(attempt.OperationID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateAttemptPolicyBinding(operation, attempt); err != nil {
+		return "execution policy binding mismatch", nil
+	}
+	var op risk.Operation
+	if err := json.Unmarshal(operation.Payload, &op); err != nil {
+		return "persisted operation is invalid", nil
+	}
+	if op.Action != "open" {
+		return "", nil
+	}
+	databaseNow, err := s.store.DatabaseNow()
+	if err != nil {
+		return "", err
+	}
+	reviewApproved := operation.Class == "C" && operation.Status == "approved"
+	if !reviewApproved && (attempt.AuthorizationExpiresAt.IsZero() || !databaseNow.Before(attempt.AuthorizationExpiresAt)) {
+		return "proposal expired before unsent recovery", nil
+	}
+	current, err := s.store.LoadKernelPolicyAuthority()
+	if err != nil {
+		return "", err
+	}
+	if current.Generation == operation.KernelPolicyGeneration {
+		return "", nil
+	}
+	bound, err := s.store.LoadBoundKernelPolicy(operation)
+	if err != nil {
+		return "", err
+	}
+	change, err := policy.ClassifyChange(bound.Policy, current.Policy)
+	if err != nil {
+		return "", err
+	}
+	if change == policy.ChangeTighten || change == policy.ChangeMixed {
+		// A full account/quote pre-effect refresh belongs to B0. Until then an
+		// unsent recovered open cannot guess which tightened field is harmless.
+		return "current policy tightened before unsent recovery", nil
+	}
+	return "", nil
 }
 
 func (s *server) reconcileLivePlaceAttempt(ctx context.Context, execution broker.ExecutionProvider, claimed *store.ExecutionAttempt) error {

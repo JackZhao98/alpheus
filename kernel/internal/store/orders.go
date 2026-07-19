@@ -18,22 +18,31 @@ var (
 )
 
 type Order struct {
-	ID                 string
-	OperationID        string
-	ExecutionAttemptID string
-	BrokerOrderID      string
-	ClientOrderID      string
-	Ledger             string
-	Symbol             string
-	Side               string
-	Kind               string
-	Multiplier         int64
-	Qty                units.Qty
-	Limit              units.Micros
-	State              string
-	Reprices           int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                     string
+	OperationID            string
+	ExecutionAttemptID     string
+	BrokerOrderID          string
+	ClientOrderID          string
+	Ledger                 string
+	Symbol                 string
+	Side                   string
+	Kind                   string
+	Multiplier             int64
+	Qty                    units.Qty
+	Limit                  units.Micros
+	State                  string
+	Reprices               int
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	KernelPolicyRevisionID int64
+	KernelPolicyGeneration int64
+	KernelPolicyDigest     string
+	AuthorizationExpiresAt time.Time
+	ApprovedPriceBound     units.Micros
+	MaxReprices            int
+	RepriceIntervalSec     int
+	QuoteMaxAgeSec         int
+	WorkingSince           time.Time
 }
 
 type FillInput struct {
@@ -53,34 +62,68 @@ type OrderUpdate struct {
 }
 
 func (t *ledgerTx) InsertOrder(order Order) error {
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO orders
+	priceBound := order.ApprovedPriceBound
+	if priceBound <= 0 {
+		priceBound = order.Limit
+	}
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO orders
 		(id,operation_id,execution_attempt_id,broker_order_id,client_order_id,
-		 ledger,symbol,side,kind,multiplier,qty,limit_micros,state,reprices)
-		VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		 ledger,symbol,side,kind,multiplier,qty,limit_micros,state,reprices,
+		 kernel_policy_revision_id,kernel_policy_generation,kernel_policy_digest,
+		 authorization_expires_at,approved_price_bound_micros,max_reprices,
+		 reprice_interval_sec,quote_max_age_sec)
+		SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+		 a.kernel_policy_revision_id,a.kernel_policy_generation,a.kernel_policy_digest,
+		 a.authorization_expires_at,
+		 CASE WHEN a.kernel_policy_revision_id IS NULL THEN NULL ELSE $14::bigint END,
+		 a.max_reprices,a.reprice_interval_sec,a.quote_max_age_sec
+		FROM execution_attempt a WHERE a.id=$3 AND a.operation_id=$2`,
 		order.ID, order.OperationID, order.ExecutionAttemptID, order.ClientOrderID,
 		order.Ledger, order.Symbol, order.Side, order.Kind, order.Multiplier,
-		int64(order.Qty), int64(order.Limit), order.State, order.Reprices)
-	return normalizeDBError(err)
+		int64(order.Qty), int64(order.Limit), order.State, order.Reprices, int64(priceBound))
+	return requireInserted(result, err)
 }
 
 const orderColumns = `id,operation_id,execution_attempt_id,broker_order_id,
 	client_order_id,ledger,symbol,side,kind,multiplier,qty,limit_micros,state,
-	reprices,created_at,updated_at`
+	reprices,created_at,updated_at,kernel_policy_revision_id,kernel_policy_generation,
+	CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END,
+	authorization_expires_at,approved_price_bound_micros,max_reprices,reprice_interval_sec,quote_max_age_sec,
+	working_since`
 
 func scanOrder(row scanner) (*Order, error) {
 	var order Order
 	var brokerOrderID sql.NullString
 	var quantity, limit int64
+	var policyRevisionID, policyGeneration, priceBound, maxReprices, repriceIntervalSec, quoteMaxAgeSec sql.NullInt64
+	var policyDigest sql.NullString
+	var authorizationExpiresAt sql.NullTime
+	var workingSince sql.NullTime
 	err := row.Scan(&order.ID, &order.OperationID, &order.ExecutionAttemptID,
 		&brokerOrderID, &order.ClientOrderID, &order.Ledger, &order.Symbol,
 		&order.Side, &order.Kind, &order.Multiplier, &quantity, &limit,
-		&order.State, &order.Reprices, &order.CreatedAt, &order.UpdatedAt)
+		&order.State, &order.Reprices, &order.CreatedAt, &order.UpdatedAt,
+		&policyRevisionID, &policyGeneration, &policyDigest, &authorizationExpiresAt,
+		&priceBound, &maxReprices, &repriceIntervalSec, &quoteMaxAgeSec, &workingSince)
 	if err != nil {
 		return nil, err
 	}
 	order.BrokerOrderID = brokerOrderID.String
 	order.Qty = units.Qty(quantity)
 	order.Limit = units.Micros(limit)
+	order.KernelPolicyRevisionID = policyRevisionID.Int64
+	order.KernelPolicyGeneration = policyGeneration.Int64
+	order.KernelPolicyDigest = policyDigest.String
+	order.ApprovedPriceBound = units.Micros(priceBound.Int64)
+	order.MaxReprices = int(maxReprices.Int64)
+	order.RepriceIntervalSec = int(repriceIntervalSec.Int64)
+	order.QuoteMaxAgeSec = int(quoteMaxAgeSec.Int64)
+	if authorizationExpiresAt.Valid {
+		order.AuthorizationExpiresAt = authorizationExpiresAt.Time
+	}
+	if workingSince.Valid {
+		order.WorkingSince = workingSince.Time
+	}
 	return &order, nil
 }
 
@@ -383,7 +426,10 @@ func applyOrderUpdate(ctx context.Context, tx *sql.Tx, update OrderUpdate, prese
 		brokerOrderID = update.BrokerOrderID
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE orders SET broker_order_id=NULLIF($2,''),
-		state=$3,updated_at=now() WHERE id=$1`, order.ID, brokerOrderID, update.State); err != nil {
+		state=$3,updated_at=clock_timestamp(),
+		working_since=CASE WHEN $3 IN ('submitted','partially_filled')
+		  THEN COALESCE(working_since,clock_timestamp()) ELSE working_since END
+		WHERE id=$1`, order.ID, brokerOrderID, update.State); err != nil {
 		return nil, err
 	}
 	if err := insertEvent(ctx, tx, "order_update", map[string]any{

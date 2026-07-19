@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"time"
 
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/store"
@@ -44,7 +43,7 @@ func (s *server) adoptExecutionCandidate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	claimed, err := s.store.ClaimRecoverableAttemptLive(
-		seen.ID, s.workerID(), seen.State, seen.Attempt, time.Now().UTC(),
+		seen.ID, s.workerID(), seen.State, seen.Attempt, s.attemptClaimTimeout(),
 	)
 	if err != nil {
 		writeStoreError(w, "claim candidate attempt", err)

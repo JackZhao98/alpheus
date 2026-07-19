@@ -11,21 +11,24 @@ import (
 )
 
 type OpenReservation struct {
-	ID            string
-	OperationID   string
-	Ledger        string
-	MarketDay     time.Time
-	Symbol        string
-	Kind          string
-	OriginalQty   units.Qty
-	RemainingQty  units.Qty
-	OriginalRisk  units.Micros
-	RemainingRisk units.Micros
-	OriginalCash  units.Micros
-	RemainingCash units.Micros
-	ResourceState string
-	CreatedAt     time.Time
-	SettledAt     time.Time
+	ID                     string
+	OperationID            string
+	Ledger                 string
+	MarketDay              time.Time
+	Symbol                 string
+	Kind                   string
+	OriginalQty            units.Qty
+	RemainingQty           units.Qty
+	OriginalRisk           units.Micros
+	RemainingRisk          units.Micros
+	OriginalCash           units.Micros
+	RemainingCash          units.Micros
+	ResourceState          string
+	CreatedAt              time.Time
+	SettledAt              time.Time
+	KernelPolicyRevisionID int64
+	KernelPolicyGeneration int64
+	KernelPolicyDigest     string
 }
 
 type LedgerResources struct {
@@ -46,17 +49,20 @@ type ShadowPosition struct {
 }
 
 func (t *ledgerTx) InsertOpenReservation(reservation OpenReservation) error {
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO open_reservation
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO open_reservation
 		(id,operation_id,ledger,market_day,symbol,kind,original_qty,remaining_qty,
 		 original_risk_micros,remaining_risk_micros,original_cash_micros,
-		 remaining_cash_micros,resource_state)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		 remaining_cash_micros,resource_state,kernel_policy_revision_id,
+		 kernel_policy_generation,kernel_policy_digest)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+		 o.kernel_policy_revision_id,o.kernel_policy_generation,o.kernel_policy_digest
+		FROM operations o WHERE o.id=$2`,
 		reservation.ID, reservation.OperationID, reservation.Ledger, reservation.MarketDay,
 		reservation.Symbol, reservation.Kind, int64(reservation.OriginalQty),
 		int64(reservation.RemainingQty), int64(reservation.OriginalRisk),
 		int64(reservation.RemainingRisk), int64(reservation.OriginalCash),
 		int64(reservation.RemainingCash), reservation.ResourceState)
-	return normalizeDBError(err)
+	return requireInserted(result, err)
 }
 
 func (t *ledgerTx) LedgerResources(ledger, excludeOperationID string) (LedgerResources, error) {
@@ -110,20 +116,27 @@ func (s *Store) GetOpenReservation(id string) (*OpenReservation, error) {
 	var reservation OpenReservation
 	var originalQty, remainingQty, originalRisk, remainingRisk, originalCash, remainingCash int64
 	var settledAt sql.NullTime
+	var policyRevisionID, policyGeneration sql.NullInt64
+	var policyDigest sql.NullString
 	err := s.DB.QueryRowContext(ctx, `SELECT id,operation_id,ledger,market_day,symbol,kind,
 		original_qty,remaining_qty,original_risk_micros,remaining_risk_micros,
-		original_cash_micros,remaining_cash_micros,resource_state,created_at,settled_at
+		original_cash_micros,remaining_cash_micros,resource_state,created_at,settled_at,
+		kernel_policy_revision_id,kernel_policy_generation,
+		CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END
 		FROM open_reservation WHERE id=$1`, id).Scan(
 		&reservation.ID, &reservation.OperationID, &reservation.Ledger, &reservation.MarketDay,
 		&reservation.Symbol, &reservation.Kind, &originalQty, &remainingQty, &originalRisk,
 		&remainingRisk, &originalCash, &remainingCash, &reservation.ResourceState,
-		&reservation.CreatedAt, &settledAt)
+		&reservation.CreatedAt, &settledAt, &policyRevisionID, &policyGeneration, &policyDigest)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
 	reservation.OriginalQty, reservation.RemainingQty = units.Qty(originalQty), units.Qty(remainingQty)
 	reservation.OriginalRisk, reservation.RemainingRisk = units.Micros(originalRisk), units.Micros(remainingRisk)
 	reservation.OriginalCash, reservation.RemainingCash = units.Micros(originalCash), units.Micros(remainingCash)
+	reservation.KernelPolicyRevisionID = policyRevisionID.Int64
+	reservation.KernelPolicyGeneration = policyGeneration.Int64
+	reservation.KernelPolicyDigest = policyDigest.String
 	if settledAt.Valid {
 		reservation.SettledAt = settledAt.Time
 	}

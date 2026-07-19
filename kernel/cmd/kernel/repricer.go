@@ -18,13 +18,6 @@ import (
 var errRepriceIneligible = errors.New("order is not eligible for repricing")
 
 func startRepricer(s *server) error {
-	interval := s.limits.ExecutionPolicy.RepriceIntervalSec
-	if interval <= 0 {
-		return fmt.Errorf("reprice_interval_sec must be positive")
-	}
-	if s.limits.ExecutionPolicy.MaxReprices < 0 {
-		return fmt.Errorf("max_reprices must not be negative")
-	}
 	// Production Robinhood remains intentionally read-only pending M11. The absence
 	// of an execution capability is a construction-time guarantee that this
 	// worker cannot issue a broker effect in read-only deployments.
@@ -32,7 +25,9 @@ func startRepricer(s *server) error {
 		return nil
 	}
 	go func() {
-		ticker := time.NewTicker(time.Duration(interval) * time.Second)
+		// Policy owns each order's durable eligibility interval. This short code-
+		// owned scan cadence is only a scheduler resolution, never authorization.
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := s.repriceOnce(context.Background()); err != nil {
@@ -69,7 +64,21 @@ func (s *server) repriceOrder(ctx context.Context, order *store.Order) error {
 	if err := json.Unmarshal(row.Payload, &op); err != nil {
 		return fmt.Errorf("decode persisted operation: %w", err)
 	}
+	if err := validateOrderPolicyBinding(row, order); err != nil {
+		return err
+	}
 	if op.Action != "open" && op.Action != "close" {
+		return nil
+	}
+	effective, err := s.effectiveOrderPolicy(order)
+	if err != nil {
+		return err
+	}
+	databaseNow, err := s.store.DatabaseNow()
+	if err != nil {
+		return err
+	}
+	if !order.WorkingSince.IsZero() && databaseNow.Before(order.WorkingSince.Add(time.Duration(effective.repriceIntervalSec)*time.Second)) {
 		return nil
 	}
 
@@ -199,13 +208,17 @@ func (s *server) deferTerminalReprice(attempt *store.ExecutionAttempt, message s
 }
 
 func (s *server) repricePolicy(ctx context.Context, op risk.Operation, order *store.Order) (string, error) {
-	if order.Reprices >= s.limits.ExecutionPolicy.MaxReprices {
+	effective, err := s.effectiveOrderPolicy(order)
+	if err != nil {
+		return "", err
+	}
+	if order.Reprices >= effective.maxReprices {
 		return "max_reprices", nil
 	}
 	if op.Action != "open" {
 		return "", nil
 	}
-	halted, err := s.repriceLedgerHalted(ctx, op.Shadow)
+	halted, err := s.repriceLedgerHalted(ctx, op.Shadow, effective.currentLimits)
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +228,7 @@ func (s *server) repricePolicy(ctx context.Context, op risk.Operation, order *st
 	return "", nil
 }
 
-func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, error) {
+func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool, limits config.Limits) (bool, error) {
 	if err := s.refreshGlobalHalt(); err != nil {
 		return true, err
 	}
@@ -228,7 +241,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 		var account broker.AccountState
 		var err error
 		if shadow {
-			account, err = s.shadowAccountSnapshot(ctx, gate)
+			account, err = s.shadowAccountSnapshotWithLimits(ctx, gate, limits)
 		} else {
 			accountCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 			account, err = s.accountProvider().Account(accountCtx)
@@ -241,7 +254,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 		if err != nil {
 			return err
 		}
-		day, err := s.dayStateAtAccount(ctx, gate, shadow, account, window, globalHalted, globalReason)
+		day, err := s.dayStateAtAccountWithLimits(ctx, gate, shadow, account, window, globalHalted, globalReason, limits)
 		if err != nil {
 			return err
 		}
@@ -252,6 +265,10 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool) (bool, er
 }
 
 func (s *server) boundedReplacementLimit(ctx context.Context, op risk.Operation, order *store.Order) (units.Micros, error) {
+	effective, err := s.effectiveOrderPolicy(order)
+	if err != nil {
+		return 0, err
+	}
 	if op.Action == "close" && op.Limit == nil {
 		return 0, errRepriceIneligible
 	}
@@ -268,7 +285,7 @@ func (s *server) boundedReplacementLimit(ctx context.Context, op risk.Operation,
 	quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	quote, err := provider.Quote(quoteCtx, order.Symbol)
 	cancel()
-	if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+	if err != nil || !quote.Usable(effective.quoteMaxAgeSec, time.Now().UTC()) {
 		return 0, fmt.Errorf("market data unavailable for repricing")
 	}
 	instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
@@ -285,13 +302,83 @@ func (s *server) boundedReplacementLimit(ctx context.Context, op risk.Operation,
 	}
 
 	if op.Side == "buy" {
-		cap := op.ApprovedPriceCap
-		if op.Action == "close" {
-			cap = *op.Limit
+		cap := order.ApprovedPriceBound
+		if cap <= 0 {
+			cap = op.ApprovedPriceCap
+			if op.Action == "close" {
+				cap = *op.Limit
+			}
 		}
 		return nextBoundedBuyLimitForInstrument(order.Limit, quote.Ask, cap, instrument)
 	}
-	return nextBoundedSellLimitForInstrument(order.Limit, quote.Bid, *op.Limit, instrument)
+	minimum := order.ApprovedPriceBound
+	if minimum <= 0 {
+		minimum = *op.Limit
+	}
+	return nextBoundedSellLimitForInstrument(order.Limit, quote.Bid, minimum, instrument)
+}
+
+type effectiveExecutionPolicy struct {
+	maxReprices        int
+	repriceIntervalSec int
+	quoteMaxAgeSec     int
+	currentLimits      config.Limits
+}
+
+func (s *server) effectiveOrderPolicy(order *store.Order) (effectiveExecutionPolicy, error) {
+	if order == nil {
+		return effectiveExecutionPolicy{}, fmt.Errorf("order is missing")
+	}
+	current, err := s.store.LoadKernelPolicyAuthority()
+	if err != nil {
+		return effectiveExecutionPolicy{}, err
+	}
+	boundMax, boundInterval, boundQuoteAge := order.MaxReprices, order.RepriceIntervalSec, order.QuoteMaxAgeSec
+	if order.KernelPolicyRevisionID == 0 {
+		// Explicit compatibility for pre-K1 rows only. Post-head inserts cannot
+		// reach this branch because migration 0013 requires their binding.
+		boundMax = s.limits.ExecutionPolicy.MaxReprices
+		boundInterval = s.limits.ExecutionPolicy.RepriceIntervalSec
+		boundQuoteAge = s.limits.QuoteMaxAgeSec
+	}
+	if boundMax < 0 || boundInterval <= 0 || boundQuoteAge <= 0 {
+		return effectiveExecutionPolicy{}, fmt.Errorf("order execution envelope is invalid")
+	}
+	return effectiveExecutionPolicy{
+		maxReprices:        minInt(boundMax, current.Policy.ExecutionPolicy.MaxReprices),
+		repriceIntervalSec: maxInt(boundInterval, current.Policy.ExecutionPolicy.RepriceIntervalSec),
+		quoteMaxAgeSec:     minInt(boundQuoteAge, current.Policy.QuoteMaxAgeSec),
+		currentLimits:      current.Policy,
+	}, nil
+}
+
+func validateOrderPolicyBinding(operation *store.OperationRow, order *store.Order) error {
+	if operation == nil || order == nil {
+		return fmt.Errorf("operation or order is missing")
+	}
+	if operation.KernelPolicyRevisionID == 0 && order.KernelPolicyRevisionID == 0 {
+		return nil
+	}
+	if order.KernelPolicyRevisionID != operation.KernelPolicyRevisionID ||
+		order.KernelPolicyGeneration != operation.KernelPolicyGeneration ||
+		order.KernelPolicyDigest != operation.KernelPolicyDigest {
+		return fmt.Errorf("order policy binding differs from operation")
+	}
+	return nil
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func nextBoundedBuyLimit(previous, ask, cap, tick units.Micros) (units.Micros, error) {

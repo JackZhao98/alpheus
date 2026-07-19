@@ -16,12 +16,15 @@ import (
 )
 
 type TradeGrant struct {
-	OperationID          string
-	Ledger               string
-	MarketDay            time.Time
-	AuthorizedRisk       units.Micros
-	RiskSource           string
-	LiveCanaryRevisionID int64
+	OperationID            string
+	Ledger                 string
+	MarketDay              time.Time
+	AuthorizedRisk         units.Micros
+	RiskSource             string
+	LiveCanaryRevisionID   int64
+	KernelPolicyRevisionID int64
+	KernelPolicyGeneration int64
+	KernelPolicyDigest     string
 }
 
 type TradeGrantUsage struct {
@@ -32,15 +35,18 @@ type TradeGrantUsage struct {
 }
 
 type CloseReservation struct {
-	ID           string
-	OperationID  string
-	Ledger       string
-	Symbol       string
-	OriginalQty  units.Qty
-	RemainingQty units.Qty
-	State        string
-	CreatedAt    time.Time
-	ReleasedAt   time.Time
+	ID                     string
+	OperationID            string
+	Ledger                 string
+	Symbol                 string
+	OriginalQty            units.Qty
+	RemainingQty           units.Qty
+	State                  string
+	CreatedAt              time.Time
+	ReleasedAt             time.Time
+	KernelPolicyRevisionID int64
+	KernelPolicyGeneration int64
+	KernelPolicyDigest     string
 }
 
 type ExecutionAttempt struct {
@@ -72,6 +78,14 @@ type ExecutionAttempt struct {
 	ProviderErrorCode      string
 	CandidateBrokerOrderID string
 	CandidateObservedAt    time.Time
+	KernelPolicyRevisionID int64
+	KernelPolicyGeneration int64
+	KernelPolicyDigest     string
+	AuthorizationExpiresAt time.Time
+	MaxReprices            int
+	RepriceIntervalSec     int
+	QuoteMaxAgeSec         int
+	LeaseExpiresAt         time.Time
 }
 
 type AttemptResolution struct {
@@ -126,12 +140,14 @@ func (t *ledgerTx) InsertTradeGrant(grant TradeGrant) error {
 	if grant.LiveCanaryRevisionID > 0 {
 		liveCanaryRevisionID = grant.LiveCanaryRevisionID
 	}
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO trade_grant
-		(operation_id,ledger,market_day,authorized_risk_micros,risk_source,live_canary_revision_id)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO trade_grant
+		(operation_id,ledger,market_day,authorized_risk_micros,risk_source,live_canary_revision_id,
+		 kernel_policy_revision_id,kernel_policy_generation,kernel_policy_digest)
+		SELECT $1,$2,$3,$4,$5,$6,o.kernel_policy_revision_id,o.kernel_policy_generation,o.kernel_policy_digest
+		FROM operations o WHERE o.id=$1`,
 		grant.OperationID, grant.Ledger, grant.MarketDay, authorizedRisk, grant.RiskSource,
 		liveCanaryRevisionID)
-	return normalizeDBError(err)
+	return requireInserted(result, err)
 }
 
 func (t *ledgerTx) TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (TradeGrantUsage, error) {
@@ -152,12 +168,14 @@ func (t *ledgerTx) TradeGrantUsage(ledger string, marketDay time.Time, excludeOp
 }
 
 func (t *ledgerTx) InsertCloseReservation(reservation CloseReservation) error {
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO close_reservation
-		(id,operation_id,ledger,symbol,original_qty,remaining_qty,state)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`, reservation.ID, reservation.OperationID,
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO close_reservation
+		(id,operation_id,ledger,symbol,original_qty,remaining_qty,state,
+		 kernel_policy_revision_id,kernel_policy_generation,kernel_policy_digest)
+		SELECT $1,$2,$3,$4,$5,$6,$7,o.kernel_policy_revision_id,o.kernel_policy_generation,o.kernel_policy_digest
+		FROM operations o WHERE o.id=$2`, reservation.ID, reservation.OperationID,
 		reservation.Ledger, reservation.Symbol, int64(reservation.OriginalQty),
 		int64(reservation.RemainingQty), reservation.State)
-	return normalizeDBError(err)
+	return requireInserted(result, err)
 }
 
 func (t *ledgerTx) InsertExecutionAttempt(attempt ExecutionAttempt) error {
@@ -177,13 +195,35 @@ func (t *ledgerTx) InsertExecutionAttempt(attempt ExecutionAttempt) error {
 	if attempt.Intent == "place" || attempt.Intent == "paper_place" {
 		quantity, limit = int64(attempt.Qty), int64(attempt.Limit)
 	}
-	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO execution_attempt
+	result, err := t.tx.ExecContext(t.ctx, `INSERT INTO execution_attempt
 		(id,operation_id,seq,close_reservation_id,open_reservation_id,intent,client_order_id,
-		 target_broker_order_id,state,qty,limit_micros,intent_fingerprint)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, attempt.ID, attempt.OperationID,
+		 target_broker_order_id,state,qty,limit_micros,intent_fingerprint,
+		 kernel_policy_revision_id,kernel_policy_generation,kernel_policy_digest,
+		 authorization_expires_at,max_reprices,reprice_interval_sec,quote_max_age_sec)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+		 o.kernel_policy_revision_id,o.kernel_policy_generation,o.kernel_policy_digest,o.expires_at,
+		 (r.policy #>> '{execution_policy,max_reprices}')::integer,
+		 (r.policy #>> '{execution_policy,reprice_interval_sec}')::integer,
+		 (r.policy ->> 'quote_max_age_sec')::integer
+		FROM operations o LEFT JOIN kernel_policy_revision r ON r.id=o.kernel_policy_revision_id
+		WHERE o.id=$2`, attempt.ID, attempt.OperationID,
 		attempt.Seq, closeReservationID, openReservationID, attempt.Intent, clientOrderID,
 		targetBrokerOrderID, attempt.State, quantity, limit, nullableBytes(attempt.IntentFingerprint))
-	return normalizeDBError(err)
+	return requireInserted(result, err)
+}
+
+func requireInserted(result sql.Result, err error) error {
+	if err != nil {
+		return normalizeDBError(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return normalizeDBError(err)
+	}
+	if affected != 1 {
+		return ErrInvalidOperationReference
+	}
+	return nil
 }
 
 func nullableBytes(value []byte) any {
@@ -206,7 +246,10 @@ const attemptColumns = `id,operation_id,seq,close_reservation_id,open_reservatio
 	target_broker_order_id,state,broker_order_id,qty,limit_micros,attempt,claimed_by,
 	created_at,claimed_at,resolved_at,last_error,intent_fingerprint,provider_account_id,provider_intent,
 	sent_at,send_window_start,send_window_end,replay_count,provider_error_code,
-	candidate_broker_order_id,candidate_observed_at`
+	candidate_broker_order_id,candidate_observed_at,
+	kernel_policy_revision_id,kernel_policy_generation,
+	CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END,
+	authorization_expires_at,max_reprices,reprice_interval_sec,quote_max_age_sec,lease_expires_at`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -217,15 +260,21 @@ func scanAttempt(row scanner) (*ExecutionAttempt, error) {
 	var reservationID, openReservationID, clientOrderID, targetOrderID, brokerOrderID, claimedBy, lastError sql.NullString
 	var quantity, limit sql.NullInt64
 	var claimedAt, resolvedAt, sentAt, sendWindowStart, sendWindowEnd, candidateObservedAt sql.NullTime
+	var authorizationExpiresAt, leaseExpiresAt sql.NullTime
 	var fingerprint []byte
 	var providerAccountID, providerErrorCode, candidateBrokerOrderID sql.NullString
+	var policyRevisionID, policyGeneration sql.NullInt64
+	var policyDigest sql.NullString
+	var maxReprices, repriceIntervalSec, quoteMaxAgeSec sql.NullInt64
 	var providerIntent []byte
 	err := row.Scan(&attempt.ID, &attempt.OperationID, &attempt.Seq, &reservationID, &openReservationID,
 		&attempt.Intent, &clientOrderID, &targetOrderID, &attempt.State, &brokerOrderID,
 		&quantity, &limit, &attempt.Attempt, &claimedBy, &attempt.CreatedAt,
 		&claimedAt, &resolvedAt, &lastError, &fingerprint, &providerAccountID, &providerIntent,
 		&sentAt, &sendWindowStart, &sendWindowEnd, &attempt.ReplayCount, &providerErrorCode,
-		&candidateBrokerOrderID, &candidateObservedAt)
+		&candidateBrokerOrderID, &candidateObservedAt,
+		&policyRevisionID, &policyGeneration, &policyDigest, &authorizationExpiresAt,
+		&maxReprices, &repriceIntervalSec, &quoteMaxAgeSec, &leaseExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +290,12 @@ func scanAttempt(row scanner) (*ExecutionAttempt, error) {
 	attempt.ProviderIntent = append(json.RawMessage(nil), providerIntent...)
 	attempt.ProviderErrorCode = providerErrorCode.String
 	attempt.CandidateBrokerOrderID = candidateBrokerOrderID.String
+	attempt.KernelPolicyRevisionID = policyRevisionID.Int64
+	attempt.KernelPolicyGeneration = policyGeneration.Int64
+	attempt.KernelPolicyDigest = policyDigest.String
+	attempt.MaxReprices = int(maxReprices.Int64)
+	attempt.RepriceIntervalSec = int(repriceIntervalSec.Int64)
+	attempt.QuoteMaxAgeSec = int(quoteMaxAgeSec.Int64)
 	attempt.Qty = units.Qty(quantity.Int64)
 	attempt.Limit = units.Micros(limit.Int64)
 	if claimedAt.Valid {
@@ -260,6 +315,12 @@ func scanAttempt(row scanner) (*ExecutionAttempt, error) {
 	}
 	if candidateObservedAt.Valid {
 		attempt.CandidateObservedAt = candidateObservedAt.Time
+	}
+	if authorizationExpiresAt.Valid {
+		attempt.AuthorizationExpiresAt = authorizationExpiresAt.Time
+	}
+	if leaseExpiresAt.Valid {
+		attempt.LeaseExpiresAt = leaseExpiresAt.Time
 	}
 	return &attempt, nil
 }
@@ -303,23 +364,26 @@ func (s *Store) UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, 
 	return true, nil
 }
 
-func (s *Store) ClaimPendingAttempt(id, instance string) (*ExecutionAttempt, error) {
-	return s.claimAttempt(id, instance, "pending", 0, time.Time{}, false)
+func (s *Store) ClaimPendingAttempt(id, instance string, leaseDuration time.Duration) (*ExecutionAttempt, error) {
+	return s.claimAttempt(id, instance, "pending", 0, leaseDuration, false)
 }
 
-func (s *Store) ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*ExecutionAttempt, error) {
-	return s.claimAttempt(id, instance, expectedState, expectedToken, claimBefore, false)
+func (s *Store) ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*ExecutionAttempt, error) {
+	return s.claimAttempt(id, instance, expectedState, expectedToken, leaseDuration, false)
 }
 
-func (s *Store) ClaimPendingAttemptLive(id, instance string) (*ExecutionAttempt, error) {
-	return s.claimAttempt(id, instance, "pending", 0, time.Time{}, true)
+func (s *Store) ClaimPendingAttemptLive(id, instance string, leaseDuration time.Duration) (*ExecutionAttempt, error) {
+	return s.claimAttempt(id, instance, "pending", 0, leaseDuration, true)
 }
 
-func (s *Store) ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*ExecutionAttempt, error) {
-	return s.claimAttempt(id, instance, expectedState, expectedToken, claimBefore, true)
+func (s *Store) ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*ExecutionAttempt, error) {
+	return s.claimAttempt(id, instance, expectedState, expectedToken, leaseDuration, true)
 }
 
-func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time, liveGate bool) (*ExecutionAttempt, error) {
+func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration, liveGate bool) (*ExecutionAttempt, error) {
+	if leaseDuration <= 0 || leaseDuration > 24*time.Hour {
+		return nil, fmt.Errorf("claim lease duration is outside the structural range")
+	}
 	ctx, cancel := s.deadline()
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -369,17 +433,17 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 			return nil, nil
 		}
 	}
-	query := `UPDATE execution_attempt SET state='claimed', attempt=attempt+1,
-		claimed_by=$2, claimed_at=now(), resolved_at=NULL
-		WHERE id=$1 AND state=$3`
-	args := []any{id, instance, expectedState}
+	query := `WITH claim_clock AS (SELECT clock_timestamp() AS ts,$4::integer AS expected_token)
+		UPDATE execution_attempt SET state='claimed', attempt=attempt+1,
+		claimed_by=$2, claimed_at=claim_clock.ts,
+		lease_expires_at=claim_clock.ts+($5 * interval '1 millisecond'), resolved_at=NULL
+		FROM claim_clock WHERE id=$1 AND state=$3`
+	args := []any{id, instance, expectedState, expectedToken, leaseDuration.Milliseconds()}
 	if expectedState != "pending" {
-		query += ` AND attempt=$4`
-		args = append(args, expectedToken)
+		query += ` AND attempt=claim_clock.expected_token`
 	}
 	if expectedState == "claimed" {
-		query += ` AND claimed_at < $5`
-		args = append(args, claimBefore)
+		query += ` AND lease_expires_at <= claim_clock.ts`
 	}
 	query += ` RETURNING ` + attemptColumns
 	attempt, err := scanAttempt(tx.QueryRowContext(ctx, query, args...))
@@ -410,7 +474,7 @@ func (s *Store) claimAttempt(id, instance, expectedState string, expectedToken i
 	}
 	if err := insertEvent(ctx, tx, "execution_attempt_claimed", map[string]any{
 		"attempt_id": attempt.ID, "operation_id": attempt.OperationID,
-		"fencing_token": attempt.Attempt,
+		"fencing_token": attempt.Attempt, "lease_expires_at": attempt.LeaseExpiresAt,
 	}); err != nil {
 		return nil, normalizeDBError(err)
 	}
@@ -782,14 +846,17 @@ func (s *Store) recordExecutionEntitlementFailure(attemptID string, cause error)
 	}, cause)
 }
 
-func (s *Store) ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]ExecutionAttempt, error) {
+func (s *Store) ListRecoverableAttempts(pendingAge time.Duration, limit int) ([]ExecutionAttempt, error) {
+	if pendingAge <= 0 || pendingAge > 24*time.Hour || limit < 1 || limit > 500 {
+		return nil, fmt.Errorf("invalid recoverable attempt query")
+	}
 	ctx, cancel := s.deadline()
 	defer cancel()
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempt
-		WHERE (state='pending' AND created_at < $1)
-		   OR (state='claimed' AND claimed_at < $2)
-		   OR (state='unknown' AND COALESCE(claimed_at,created_at) < $1)
-		ORDER BY created_at,id LIMIT $3`, pendingBefore, claimBefore, limit)
+		WHERE (state='pending' AND created_at < clock_timestamp()-($1 * interval '1 millisecond'))
+		   OR (state='claimed' AND lease_expires_at <= clock_timestamp())
+		   OR (state='unknown' AND COALESCE(claimed_at,created_at) < clock_timestamp()-($1 * interval '1 millisecond'))
+		ORDER BY created_at,id LIMIT $2`, pendingAge.Milliseconds(), limit)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
@@ -1091,16 +1158,24 @@ func (s *Store) GetCloseReservation(id string) (*CloseReservation, error) {
 	var reservation CloseReservation
 	var original, remaining int64
 	var releasedAt sql.NullTime
+	var policyRevisionID, policyGeneration sql.NullInt64
+	var policyDigest sql.NullString
 	err := s.DB.QueryRowContext(ctx, `SELECT id,operation_id,ledger,symbol,original_qty,
-		remaining_qty,state,created_at,released_at FROM close_reservation WHERE id=$1`, id).
+		remaining_qty,state,created_at,released_at,kernel_policy_revision_id,
+		kernel_policy_generation,
+		CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END
+		FROM close_reservation WHERE id=$1`, id).
 		Scan(&reservation.ID, &reservation.OperationID, &reservation.Ledger,
 			&reservation.Symbol, &original, &remaining, &reservation.State,
-			&reservation.CreatedAt, &releasedAt)
+			&reservation.CreatedAt, &releasedAt, &policyRevisionID, &policyGeneration, &policyDigest)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
 	reservation.OriginalQty = units.Qty(original)
 	reservation.RemainingQty = units.Qty(remaining)
+	reservation.KernelPolicyRevisionID = policyRevisionID.Int64
+	reservation.KernelPolicyGeneration = policyGeneration.Int64
+	reservation.KernelPolicyDigest = policyDigest.String
 	if releasedAt.Valid {
 		reservation.ReleasedAt = releasedAt.Time
 	}

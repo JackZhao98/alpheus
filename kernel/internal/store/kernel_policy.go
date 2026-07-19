@@ -226,6 +226,27 @@ func (s *Store) LoadKernelPolicyAuthority() (*KernelPolicyRevision, error) {
 	return revision, nil
 }
 
+// LoadBoundKernelPolicy verifies immutable historical authority outside a
+// proposal/review transaction. Recovery and repricing use it to preserve the
+// exact policy that authorized already-staged work.
+func (s *Store) LoadBoundKernelPolicy(operation *OperationRow) (*KernelPolicyRevision, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	revision, err := (&ledgerTx{tx: tx, ctx: ctx, marketTZ: s.marketTZ}).BoundKernelPolicy(operation)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	return revision, nil
+}
+
 // KernelPolicyAuthority binds a new operation while holding the stable policy
 // lock until the surrounding proposal/review transaction commits.
 func (t *ledgerTx) KernelPolicyAuthority() (*KernelPolicyRevision, error) {

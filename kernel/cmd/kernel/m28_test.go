@@ -429,7 +429,8 @@ func TestYoungClaimLeaseIsNotSwept(t *testing.T) {
 	if err := st.InsertExecutionAttempt(store.ExecutionAttempt{
 		ID: attemptID, OperationID: opID, Seq: 1, Intent: "cancel",
 		TargetBrokerOrderID: "target", State: "claimed", Attempt: 1,
-		ClaimedAt: time.Now(), CreatedAt: time.Now().Add(-time.Second),
+		ClaimedAt: time.Now(), LeaseExpiresAt: time.Now().Add(time.Second),
+		CreatedAt: time.Now().Add(-time.Second),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -604,6 +605,7 @@ func TestClaimStealFencesLateWorkerAndBrokerDedupes(t *testing.T) {
 	st.mu.Lock()
 	for id, attempt := range st.attempts {
 		attempt.ClaimedAt = time.Now().Add(-time.Second)
+		attempt.LeaseExpiresAt = time.Now().Add(-time.Second)
 		st.attempts[id] = attempt
 	}
 	st.mu.Unlock()

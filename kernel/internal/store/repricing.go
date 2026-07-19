@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"alpheus/kernel/internal/units"
 )
@@ -35,6 +36,9 @@ func (s *Store) StageRepriceCancel(orderID string) (*ExecutionAttempt, error) {
 		return nil, normalizeDBError(err)
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(ledger == "shadow")); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
 		return nil, normalizeDBError(err)
 	}
 	order, err := scanOrder(tx.QueryRowContext(ctx,
@@ -203,6 +207,43 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 		}
 		return nil, nil
 	}
+	if replacement != nil && source.KernelPolicyRevisionID > 0 {
+		current, err := activeKernelPolicyRevision(ctx, tx)
+		if err != nil {
+			return nil, normalizeDBError(err)
+		}
+		current.ObservedAt, err = databaseClock(ctx, tx)
+		if err != nil {
+			return nil, normalizeDBError(err)
+		}
+		if err := validateKernelPolicyAuthority(current); err != nil {
+			return nil, err
+		}
+		effectiveMax := source.MaxReprices
+		if current.Policy.ExecutionPolicy.MaxReprices < effectiveMax {
+			effectiveMax = current.Policy.ExecutionPolicy.MaxReprices
+		}
+		nextReprice := updated.Reprices + 1
+		if nextReprice > effectiveMax {
+			replacement, policyReason = nil, "max_reprices"
+		}
+		if replacement != nil && current.Policy.ExecutionPolicy.RepriceIntervalSec > source.RepriceIntervalSec {
+			now, clockErr := databaseClock(ctx, tx)
+			if clockErr != nil {
+				return nil, normalizeDBError(clockErr)
+			}
+			eligibleAt := source.WorkingSince.Add(time.Duration(current.Policy.ExecutionPolicy.RepriceIntervalSec) * time.Second)
+			if !source.WorkingSince.IsZero() && now.Before(eligibleAt) {
+				replacement, policyReason = nil, "reprice_interval_tightened"
+			}
+		}
+		if replacement != nil && current.Policy.QuoteMaxAgeSec < source.QuoteMaxAgeSec {
+			// The quote timestamp is not part of this transaction. After a quote-age
+			// tightening races the broker cancel, fail closed instead of granting the
+			// pre-change observation a wider lifetime.
+			replacement, policyReason = nil, "quote_age_tightened"
+		}
+	}
 	if replacement == nil {
 		if policyReason == "" {
 			return nil, fmt.Errorf("terminal reprice cancel has no replacement or policy reason")
@@ -256,7 +297,8 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 		ID: replacement.OrderID, OperationID: source.OperationID, ExecutionAttemptID: next.ID,
 		ClientOrderID: next.ClientOrderID, Ledger: source.Ledger, Symbol: source.Symbol,
 		Side: source.Side, Kind: source.Kind, Multiplier: source.Multiplier,
-		Qty: remaining, Limit: replacement.Limit, State: "new", Reprices: reprices,
+		Qty: remaining, Limit: replacement.Limit, ApprovedPriceBound: source.ApprovedPriceBound,
+		State: "new", Reprices: reprices,
 	}); err != nil {
 		return nil, err
 	}

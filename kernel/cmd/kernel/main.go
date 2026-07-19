@@ -79,14 +79,14 @@ type storeAPI interface {
 	ActivateGlobalHalt(reason, subject, mode string) (store.GlobalHaltTransition, error)
 	GetExecutionAttempt(id string) (*store.ExecutionAttempt, error)
 	UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error)
-	ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error)
-	ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
-	ClaimPendingAttemptLive(id, instance string) (*store.ExecutionAttempt, error)
-	ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
+	ClaimPendingAttempt(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
+	ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
+	ClaimPendingAttemptLive(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
+	ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error)
 	PrepareAttemptProviderIntent(id string, fencingToken int, accountID string, canonical json.RawMessage, fingerprint []byte) (bool, error)
 	MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence) (bool, error)
 	GetLiveExecutionGate() (store.LiveExecutionGate, error)
-	ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error)
+	ListRecoverableAttempts(pendingAge time.Duration, limit int) ([]store.ExecutionAttempt, error)
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
 	FailPendingAttempt(id, reason string) (bool, error)
 	GetCloseReservation(id string) (*store.CloseReservation, error)
@@ -105,6 +105,7 @@ type storeAPI interface {
 	FeatureActive(name string) (bool, error)
 	LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error)
 	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
+	LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error)
 	DatabaseNow() (time.Time, error)
 }
 
@@ -691,7 +692,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.WithLedgerLock(true, func(gate store.OperationGate) error {
-		shadowAccount, err := s.shadowAccountSnapshot(r.Context(), gate)
+		shadowAccount, err := s.shadowAccountSnapshotWithLimits(r.Context(), gate, kernelPolicy.Policy)
 		if err != nil {
 			return err
 		}
@@ -840,7 +841,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			// against a stale pre-lock snapshot.
 			var err error
 			if op.Shadow {
-				acct, err = s.shadowAccountSnapshot(r.Context(), gate)
+				acct, err = s.shadowAccountSnapshotWithLimits(r.Context(), gate, effectiveLimits)
 			} else {
 				accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
 				acct, err = s.accountProvider().Account(accountCtx)
@@ -1117,7 +1118,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				ClientOrderID: attempt.ClientOrderID, Ledger: ledgerName(op.Shadow),
 				Symbol: operationSymbol(op), Side: op.Side, Kind: op.Kind,
 				Multiplier: op.Multiplier, Qty: attempt.Qty, Limit: attempt.Limit,
-				State: "new",
+				ApprovedPriceBound: executionPriceBound(op, attempt.Limit), State: "new",
 			}); err != nil {
 				return err
 			}
@@ -1255,6 +1256,10 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) shadowAccountSnapshot(ctx context.Context, gate store.OperationGate) (broker.AccountState, error) {
+	return s.shadowAccountSnapshotWithLimits(ctx, gate, s.limits)
+}
+
+func (s *server) shadowAccountSnapshotWithLimits(ctx context.Context, gate store.OperationGate, limits config.Limits) (broker.AccountState, error) {
 	paper, err := gate.ShadowAccount()
 	if err != nil {
 		return broker.AccountState{}, err
@@ -1268,7 +1273,7 @@ func (s *server) shadowAccountSnapshot(ctx context.Context, gate store.Operation
 		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		quote, err := s.marketProvider().Quote(quoteCtx, position.Symbol)
 		cancel()
-		if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+		if err != nil || !quote.Usable(limits.QuoteMaxAgeSec, time.Now().UTC()) {
 			return broker.AccountState{}, fmt.Errorf("shadow mark unavailable for %s", position.Symbol)
 		}
 		// Long paper positions are marked at bid and rounded down, against the
@@ -1373,6 +1378,16 @@ func executionLimit(op risk.Operation, quote *broker.Quote, maxAgeSec int) (unit
 	return 0, fmt.Errorf("no executable price for close")
 }
 
+func executionPriceBound(op risk.Operation, fallback units.Micros) units.Micros {
+	if op.Action == "open" && op.ApprovedPriceCap > 0 {
+		return op.ApprovedPriceCap
+	}
+	if op.Action == "close" && op.Limit != nil && *op.Limit > 0 {
+		return *op.Limit
+	}
+	return fallback
+}
+
 func (s *server) brokerCallTimeout() time.Duration {
 	if s.brokerTimeout > 0 {
 		return s.brokerTimeout
@@ -1408,17 +1423,16 @@ func (s *server) executePendingAttempt(ctx context.Context, attemptID string) (m
 
 func (s *server) claimPendingAttempt(attemptID string) (*store.ExecutionAttempt, error) {
 	if s.tradingMode() == config.ModeLive {
-		return s.store.ClaimPendingAttemptLive(attemptID, s.workerID())
+		return s.store.ClaimPendingAttemptLive(attemptID, s.workerID(), s.attemptClaimTimeout())
 	}
-	return s.store.ClaimPendingAttempt(attemptID, s.workerID())
+	return s.store.ClaimPendingAttempt(attemptID, s.workerID(), s.attemptClaimTimeout())
 }
 
-func (s *server) claimRecoverableAttempt(seen *store.ExecutionAttempt, now time.Time) (*store.ExecutionAttempt, error) {
-	claimBefore := now.Add(-s.attemptClaimTimeout())
+func (s *server) claimRecoverableAttempt(seen *store.ExecutionAttempt) (*store.ExecutionAttempt, error) {
 	if s.tradingMode() == config.ModeLive {
-		return s.store.ClaimRecoverableAttemptLive(seen.ID, s.workerID(), seen.State, seen.Attempt, claimBefore)
+		return s.store.ClaimRecoverableAttemptLive(seen.ID, s.workerID(), seen.State, seen.Attempt, s.attemptClaimTimeout())
 	}
-	return s.store.ClaimRecoverableAttempt(seen.ID, s.workerID(), seen.State, seen.Attempt, claimBefore)
+	return s.store.ClaimRecoverableAttempt(seen.ID, s.workerID(), seen.State, seen.Attempt, s.attemptClaimTimeout())
 }
 
 func (s *server) executeClaimedAttempt(ctx context.Context, attempt *store.ExecutionAttempt) (map[string]any, error) {
@@ -1661,10 +1675,21 @@ func (s *server) executeClaimedPaperAttempt(ctx context.Context, attempt *store.
 	if err := json.Unmarshal(row.Payload, &op); err != nil {
 		return nil, fmt.Errorf("decode persisted paper operation: %w", err)
 	}
+	if err := validateAttemptPolicyBinding(row, attempt); err != nil {
+		return nil, err
+	}
+	_, currentLimits, err := s.operationPolicyPair(row)
+	if err != nil {
+		return nil, err
+	}
+	quoteMaxAge := currentLimits.QuoteMaxAgeSec
+	if attempt.QuoteMaxAgeSec > 0 {
+		quoteMaxAge = minInt(attempt.QuoteMaxAgeSec, currentLimits.QuoteMaxAgeSec)
+	}
 	quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	quote, err := s.marketProvider().Quote(quoteCtx, operationSymbol(op))
 	cancel()
-	if err != nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+	if err != nil || !quote.Usable(quoteMaxAge, time.Now().UTC()) {
 		_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
 			State: "failed", LastError: "paper market data unavailable",
 			OperationStatus: "failed", ReleaseReservation: true,
@@ -2224,7 +2249,9 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		}
 		var account broker.AccountState
 		if prepared.Shadow {
-			account, err = s.shadowAccountSnapshot(r.Context(), gate)
+			markLimits := currentAuthority.Policy
+			markLimits.QuoteMaxAgeSec = minInt(boundAuthority.Policy.QuoteMaxAgeSec, currentAuthority.Policy.QuoteMaxAgeSec)
+			account, err = s.shadowAccountSnapshotWithLimits(r.Context(), gate, markLimits)
 		} else {
 			accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
 			account, err = s.accountProvider().Account(accountCtx)
@@ -2488,7 +2515,7 @@ func (s *server) stageApprovedOpen(gate store.OperationGate, operationID string,
 		ClientOrderID: attempt.ClientOrderID, Ledger: ledger,
 		Symbol: operationSymbol(op), Side: op.Side, Kind: op.Kind,
 		Multiplier: op.Multiplier, Qty: attempt.Qty, Limit: attempt.Limit,
-		State: "new",
+		ApprovedPriceBound: executionPriceBound(op, attempt.Limit), State: "new",
 	}); err != nil {
 		return nil, err
 	}

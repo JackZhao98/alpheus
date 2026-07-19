@@ -70,7 +70,7 @@ func TestM3AInvalidExecutionEntitlementCannotBeClaimedPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claimed, err := s.ClaimPendingAttempt(attemptID, "invalid-entitlement-test")
+	claimed, err := s.ClaimPendingAttempt(attemptID, "invalid-entitlement-test", 30*time.Second)
 	if !errors.Is(err, ErrFillIntegrity) || claimed != nil {
 		t.Fatalf("invalid entitlement claim: claimed=%+v err=%v", claimed, err)
 	}
@@ -531,7 +531,7 @@ func settleShadowOpen(t *testing.T, s *Store, symbol string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimPendingAttempt(attemptID, "paper-test")
+	claimed, err := s.ClaimPendingAttempt(attemptID, "paper-test", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim paper attempt: attempt=%+v err=%v", claimed, err)
 	}

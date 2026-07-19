@@ -458,6 +458,7 @@ func (m *memoryStore) HeldCloseQuantity(ledger, symbol string) (units.Qty, error
 func (m *memoryStore) InsertTradeGrant(grant store.TradeGrant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	bindMemoryPolicy(m.operationRows[grant.OperationID], &grant.KernelPolicyRevisionID, &grant.KernelPolicyGeneration, &grant.KernelPolicyDigest)
 	m.grants[grant.OperationID] = grant
 	return nil
 }
@@ -511,6 +512,10 @@ func (m *memoryStore) LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, 
 	return &copy, nil
 }
 
+func (m *memoryStore) LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error) {
+	return m.BoundKernelPolicy(operation)
+}
+
 func (m *memoryStore) KernelPolicyAuthority() (*store.KernelPolicyRevision, error) {
 	return m.LoadKernelPolicyAuthority()
 }
@@ -543,6 +548,7 @@ func sameDate(left, right time.Time) bool {
 func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	bindMemoryPolicy(m.operationRows[reservation.OperationID], &reservation.KernelPolicyRevisionID, &reservation.KernelPolicyGeneration, &reservation.KernelPolicyDigest)
 	m.reservations[reservation.ID] = reservation
 	return nil
 }
@@ -550,6 +556,7 @@ func (m *memoryStore) InsertCloseReservation(reservation store.CloseReservation)
 func (m *memoryStore) InsertOpenReservation(reservation store.OpenReservation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	bindMemoryPolicy(m.operationRows[reservation.OperationID], &reservation.KernelPolicyRevisionID, &reservation.KernelPolicyGeneration, &reservation.KernelPolicyDigest)
 	m.openReservations[reservation.ID] = reservation
 	return nil
 }
@@ -712,6 +719,15 @@ func (m *memoryStore) FirstOpenExposureOperation(ledger, symbol, kind string) (s
 func (m *memoryStore) InsertExecutionAttempt(attempt store.ExecutionAttempt) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	row := m.operationRows[attempt.OperationID]
+	bindMemoryPolicy(row, &attempt.KernelPolicyRevisionID, &attempt.KernelPolicyGeneration, &attempt.KernelPolicyDigest)
+	if row.KernelPolicyRevisionID > 0 {
+		authority := m.kernelPolicyHistory[row.KernelPolicyRevisionID]
+		attempt.AuthorizationExpiresAt = row.ExpiresAt
+		attempt.MaxReprices = authority.Policy.ExecutionPolicy.MaxReprices
+		attempt.RepriceIntervalSec = authority.Policy.ExecutionPolicy.RepriceIntervalSec
+		attempt.QuoteMaxAgeSec = authority.Policy.QuoteMaxAgeSec
+	}
 	m.attempts[attempt.ID] = attempt
 	return nil
 }
@@ -719,8 +735,25 @@ func (m *memoryStore) InsertExecutionAttempt(attempt store.ExecutionAttempt) err
 func (m *memoryStore) InsertOrder(order store.Order) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	attempt := m.attempts[order.ExecutionAttemptID]
+	order.KernelPolicyRevisionID = attempt.KernelPolicyRevisionID
+	order.KernelPolicyGeneration = attempt.KernelPolicyGeneration
+	order.KernelPolicyDigest = attempt.KernelPolicyDigest
+	order.AuthorizationExpiresAt = attempt.AuthorizationExpiresAt
+	order.MaxReprices = attempt.MaxReprices
+	order.RepriceIntervalSec = attempt.RepriceIntervalSec
+	order.QuoteMaxAgeSec = attempt.QuoteMaxAgeSec
+	if order.ApprovedPriceBound <= 0 {
+		order.ApprovedPriceBound = order.Limit
+	}
 	m.orders[order.ExecutionAttemptID] = order
 	return nil
+}
+
+func bindMemoryPolicy(row store.OperationRow, revisionID, generation *int64, digest *string) {
+	*revisionID = row.KernelPolicyRevisionID
+	*generation = row.KernelPolicyGeneration
+	*digest = row.KernelPolicyDigest
 }
 
 func (m *memoryStore) GetExecutionAttempt(id string) (*store.ExecutionAttempt, error) {
@@ -751,23 +784,23 @@ func (m *memoryStore) UpdatePendingAttemptLimit(id string, limit units.Micros) (
 	return true, nil
 }
 
-func (m *memoryStore) ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error) {
-	return m.claimMemoryAttempt(id, instance, "pending", 0, time.Time{})
+func (m *memoryStore) ClaimPendingAttempt(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttempt(id, instance, "pending", 0, leaseDuration)
 }
 
-func (m *memoryStore) ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
-	return m.claimMemoryAttempt(id, instance, expectedState, expectedToken, claimBefore)
+func (m *memoryStore) ClaimRecoverableAttempt(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttempt(id, instance, expectedState, expectedToken, leaseDuration)
 }
 
-func (m *memoryStore) ClaimPendingAttemptLive(id, instance string) (*store.ExecutionAttempt, error) {
-	return m.claimMemoryAttemptLive(id, instance, "pending", 0, time.Time{})
+func (m *memoryStore) ClaimPendingAttemptLive(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttemptLive(id, instance, "pending", 0, leaseDuration)
 }
 
-func (m *memoryStore) ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
-	return m.claimMemoryAttemptLive(id, instance, expectedState, expectedToken, claimBefore)
+func (m *memoryStore) ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
+	return m.claimMemoryAttemptLive(id, instance, expectedState, expectedToken, leaseDuration)
 }
 
-func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	attempt, ok := m.attempts[id]
@@ -777,7 +810,7 @@ func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string,
 	if expectedState != "pending" && attempt.Attempt != expectedToken {
 		return nil, nil
 	}
-	if expectedState == "claimed" && !attempt.ClaimedAt.Before(claimBefore) {
+	if expectedState == "claimed" && time.Now().UTC().Before(attempt.LeaseExpiresAt) {
 		return nil, nil
 	}
 	if attempt.Intent != "paper_place" {
@@ -815,6 +848,7 @@ func (m *memoryStore) claimMemoryAttemptLive(id, instance, expectedState string,
 	attempt.Attempt++
 	attempt.ClaimedBy = instance
 	attempt.ClaimedAt = time.Now().UTC()
+	attempt.LeaseExpiresAt = attempt.ClaimedAt.Add(leaseDuration)
 	m.attempts[id] = attempt
 	copy := attempt
 	return &copy, nil
@@ -888,7 +922,7 @@ func (m *memoryStore) GetLiveExecutionGate() (store.LiveExecutionGate, error) {
 	return store.LiveExecutionGate{ActiveAttemptID: m.liveActiveAttemptID, UnknownAttemptID: m.liveUnknownAttemptID}, nil
 }
 
-func (m *memoryStore) claimMemoryAttempt(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error) {
+func (m *memoryStore) claimMemoryAttempt(id, instance, expectedState string, expectedToken int, leaseDuration time.Duration) (*store.ExecutionAttempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	attempt, ok := m.attempts[id]
@@ -898,21 +932,24 @@ func (m *memoryStore) claimMemoryAttempt(id, instance, expectedState string, exp
 	if expectedState != "pending" && attempt.Attempt != expectedToken {
 		return nil, nil
 	}
-	if expectedState == "claimed" && !attempt.ClaimedAt.Before(claimBefore) {
+	if expectedState == "claimed" && time.Now().UTC().Before(attempt.LeaseExpiresAt) {
 		return nil, nil
 	}
 	attempt.State = "claimed"
 	attempt.Attempt++
 	attempt.ClaimedBy = instance
 	attempt.ClaimedAt = time.Now().UTC()
+	attempt.LeaseExpiresAt = attempt.ClaimedAt.Add(leaseDuration)
 	m.attempts[id] = attempt
 	copy := attempt
 	return &copy, nil
 }
 
-func (m *memoryStore) ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error) {
+func (m *memoryStore) ListRecoverableAttempts(pendingAge time.Duration, limit int) ([]store.ExecutionAttempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	pendingBefore := now.Add(-pendingAge)
 	result := make([]store.ExecutionAttempt, 0, limit)
 	for _, attempt := range m.attempts {
 		unknownReference := attempt.ClaimedAt
@@ -920,7 +957,7 @@ func (m *memoryStore) ListRecoverableAttempts(pendingBefore, claimBefore time.Ti
 			unknownReference = attempt.CreatedAt
 		}
 		if (attempt.State == "pending" && attempt.CreatedAt.Before(pendingBefore)) ||
-			(attempt.State == "claimed" && attempt.ClaimedAt.Before(claimBefore)) ||
+			(attempt.State == "claimed" && !now.Before(attempt.LeaseExpiresAt)) ||
 			(attempt.State == "unknown" && unknownReference.Before(pendingBefore)) {
 			result = append(result, attempt)
 			if len(result) == limit {
@@ -1445,6 +1482,10 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate, pre
 	order.BrokerOrderID = update.BrokerOrderID
 	order.State = update.State
 	order.UpdatedAt = time.Now().UTC()
+	if order.KernelPolicyRevisionID > 0 && order.WorkingSince.IsZero() &&
+		(update.State == "submitted" || update.State == "partially_filled") {
+		order.WorkingSince = order.UpdatedAt
+	}
 	m.orders[order.ExecutionAttemptID] = order
 	m.events = append(m.events, "order_update")
 	if attemptState, operationStatus := memoryTerminalPlacementState(update.State); finalizePlacement && attemptState != "" {

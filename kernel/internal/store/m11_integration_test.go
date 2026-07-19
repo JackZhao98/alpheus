@@ -457,7 +457,7 @@ func TestPartialFillReplacementHaltCleanupPostgres(t *testing.T) {
 		{
 			name: "claimed unsent",
 			cleanup: func(t *testing.T, s *Store, fixture m11PartialFillReplacement) {
-				claimed, err := s.ClaimPendingAttemptLive(fixture.Replacement.ID, "m11-halt-claimed")
+				claimed, err := s.ClaimPendingAttemptLive(fixture.Replacement.ID, "m11-halt-claimed", 30*time.Second)
 				if err != nil || claimed == nil {
 					t.Fatalf("claim replacement=%+v err=%v", claimed, err)
 				}
@@ -501,7 +501,7 @@ func TestHaltedClaimedReplacementRejectsStaleFencingTokenPostgres(t *testing.T) 
 	defer s.DB.Close()
 	resetM3AIntegrationData(t, s)
 	fixture := seedM11PartialFillReplacement(t, s)
-	stale, err := s.ClaimPendingAttemptLive(fixture.Replacement.ID, "m11-stale-worker")
+	stale, err := s.ClaimPendingAttemptLive(fixture.Replacement.ID, "m11-stale-worker", time.Nanosecond)
 	if err != nil || stale == nil {
 		t.Fatalf("stale claim=%+v err=%v", stale, err)
 	}
@@ -509,7 +509,7 @@ func TestHaltedClaimedReplacementRejectsStaleFencingTokenPostgres(t *testing.T) 
 		t.Fatal(err)
 	}
 	winner, err := s.ClaimRecoverableAttemptLive(
-		stale.ID, "m11-winning-worker", "claimed", stale.Attempt, time.Now().Add(time.Second),
+		stale.ID, "m11-winning-worker", "claimed", stale.Attempt, 30*time.Second,
 	)
 	if err != nil || winner == nil || winner.Attempt != stale.Attempt+1 {
 		t.Fatalf("winning claim=%+v stale=%+v err=%v", winner, stale, err)
@@ -579,7 +579,7 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			claimed, err := s.ClaimPendingAttemptLive(attemptID, "barrier-worker")
+			claimed, err := s.ClaimPendingAttemptLive(attemptID, "barrier-worker", 30*time.Second)
 			results <- claimed
 			errorsCh <- err
 		}()
@@ -635,7 +635,7 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 		if attemptID == winner.ID {
 			continue
 		}
-		claimed, claimErr := s.ClaimPendingAttemptLive(attemptID, "blocked-worker")
+		claimed, claimErr := s.ClaimPendingAttemptLive(attemptID, "blocked-worker", 30*time.Second)
 		if claimErr != nil || claimed != nil {
 			t.Fatalf("latched claim=%+v err=%v", claimed, claimErr)
 		}
@@ -644,7 +644,7 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := s.ClaimRecoverableAttemptLive(winner.ID, "recovery", "unknown", current.Attempt, time.Now())
+	recovery, err := s.ClaimRecoverableAttemptLive(winner.ID, "recovery", "unknown", current.Attempt, time.Nanosecond)
 	if err != nil || recovery == nil {
 		t.Fatalf("recovery=%+v err=%v", recovery, err)
 	}
@@ -669,7 +669,7 @@ func TestLiveExecutionGateSerializesUnknownAndOneReplayPostgres(t *testing.T) {
 		t.Fatalf("rolled-back gate=%+v err=%v", gate, err)
 	}
 	recovery, err = s.ClaimRecoverableAttemptLive(
-		current.ID, "recovery-after-crash", "claimed", current.Attempt, time.Now().Add(time.Second),
+		current.ID, "recovery-after-crash", "claimed", current.Attempt, 30*time.Second,
 	)
 	if err != nil || recovery == nil {
 		t.Fatalf("reclaim unknown worker=%+v err=%v", recovery, err)
@@ -748,7 +748,7 @@ func TestCandidateAdoptionCommitsFillAndClearsLatchAtomicallyPostgres(t *testing
 		t.Fatal(err)
 	}
 
-	claimed, err := s.ClaimPendingAttemptLive(attemptID, "m11-adoption-send")
+	claimed, err := s.ClaimPendingAttemptLive(attemptID, "m11-adoption-send", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim=%+v err=%v", claimed, err)
 	}
@@ -776,7 +776,7 @@ func TestCandidateAdoptionCommitsFillAndClearsLatchAtomicallyPostgres(t *testing
 		t.Fatal(err)
 	}
 	adoption, err := s.ClaimRecoverableAttemptLive(
-		unknown.ID, "m11-adoption-admin", "unknown", unknown.Attempt, time.Now(),
+		unknown.ID, "m11-adoption-admin", "unknown", unknown.Attempt, 30*time.Second,
 	)
 	if err != nil || adoption == nil {
 		t.Fatalf("adoption=%+v err=%v", adoption, err)
@@ -1098,7 +1098,7 @@ func seedM11PartialFillReplacement(t *testing.T, s *Store) m11PartialFillReplace
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel=%+v err=%v", cancelAttempt, err)
 	}
-	claimedCancel, err := s.ClaimPendingAttempt(cancelAttempt.ID, "m11-reprice-cancel")
+	claimedCancel, err := s.ClaimPendingAttempt(cancelAttempt.ID, "m11-reprice-cancel", 30*time.Second)
 	if err != nil || claimedCancel == nil {
 		t.Fatalf("claim cancel=%+v err=%v", claimedCancel, err)
 	}

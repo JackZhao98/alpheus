@@ -201,6 +201,7 @@ func TestM9BrokerAcceptanceSurvivesDatabaseFailureBeforeResolution(t *testing.T)
 			t.Fatalf("attempt after injected failure=%+v", attempt)
 		}
 		attempt.ClaimedAt = time.Now().Add(-time.Second)
+		attempt.LeaseExpiresAt = time.Now().Add(-time.Second)
 		st.attempts[id] = attempt
 	}
 	st.mu.Unlock()

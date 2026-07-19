@@ -161,6 +161,45 @@ func newRepriceTestServer(t *testing.T, quantity string, maxReprices int) (*serv
 	return s, st, execution, order, op
 }
 
+func TestK1B2EffectiveOrderPolicyNeverWidensOldEnvelope(t *testing.T) {
+	st := newMemoryStore()
+	base := st.kernelPolicy.Policy
+	s := &server{limits: base, store: st}
+	order := &store.Order{
+		KernelPolicyRevisionID: 1, KernelPolicyGeneration: 1,
+		KernelPolicyDigest: st.kernelPolicy.Digest,
+		MaxReprices:        2, RepriceIntervalSec: 30, QuoteMaxAgeSec: 15,
+	}
+
+	wide := *st.kernelPolicy
+	wide.Generation = 2
+	wide.Policy.ExecutionPolicy.MaxReprices = 10
+	wide.Policy.ExecutionPolicy.RepriceIntervalSec = 1
+	wide.Policy.QuoteMaxAgeSec = 60
+	st.kernelPolicy = &wide
+	effective, err := s.effectiveOrderPolicy(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.maxReprices != 2 || effective.repriceIntervalSec != 30 || effective.quoteMaxAgeSec != 15 {
+		t.Fatalf("later widening expanded old envelope: %+v", effective)
+	}
+
+	tight := wide
+	tight.Generation = 3
+	tight.Policy.ExecutionPolicy.MaxReprices = 1
+	tight.Policy.ExecutionPolicy.RepriceIntervalSec = 60
+	tight.Policy.QuoteMaxAgeSec = 5
+	st.kernelPolicy = &tight
+	effective, err = s.effectiveOrderPolicy(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.maxReprices != 1 || effective.repriceIntervalSec != 60 || effective.quoteMaxAgeSec != 5 {
+		t.Fatalf("current tightening was not applied: %+v", effective)
+	}
+}
+
 func TestM5BRepriceWalksWithinCapThenExpiresAtMax(t *testing.T) {
 	s, st, execution, _, _ := newRepriceTestServer(t, "1", 1)
 	if err := s.repriceOnce(context.Background()); err != nil {
@@ -288,7 +327,7 @@ func TestM5BRecoveryFinishesConfirmedCancelWithoutDuplicateSlot(t *testing.T) {
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)
 	}
-	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker")
+	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim cancel: attempt=%+v err=%v", claimed, err)
 	}
@@ -347,7 +386,7 @@ func TestM5BPendingReplacementRecoveryUsesDurableIntent(t *testing.T) {
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)
 	}
-	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker")
+	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim cancel: attempt=%+v err=%v", claimed, err)
 	}
@@ -398,7 +437,7 @@ func TestM5BHaltBeforePendingReplacementReleasesWithoutPlacement(t *testing.T) {
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)
 	}
-	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker")
+	claimed, err := st.ClaimPendingAttempt(cancelAttempt.ID, "crashed-worker", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim cancel: attempt=%+v err=%v", claimed, err)
 	}

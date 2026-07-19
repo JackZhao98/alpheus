@@ -95,7 +95,7 @@ func TestM5BRepriceTransfersReservationAtomicallyPostgres(t *testing.T) {
 	if err != nil || duplicate != nil {
 		t.Fatalf("duplicate cancel stage: attempt=%+v err=%v", duplicate, err)
 	}
-	claimed, err := s.ClaimPendingAttempt(cancelAttempt.ID, "m5b-test")
+	claimed, err := s.ClaimPendingAttempt(cancelAttempt.ID, "m5b-test", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim cancel: attempt=%+v err=%v", claimed, err)
 	}
@@ -161,7 +161,7 @@ func TestM5BRepriceTransfersReservationAtomicallyPostgres(t *testing.T) {
 		t.Fatalf("replacement order=%+v err=%v", replacementOrder, err)
 	}
 
-	claimedReplacement, err := s.ClaimPendingAttempt(next.ID, "m5b-test")
+	claimedReplacement, err := s.ClaimPendingAttempt(next.ID, "m5b-test", 30*time.Second)
 	if err != nil || claimedReplacement == nil {
 		t.Fatalf("replacement entitlement rejected: attempt=%+v err=%v", claimedReplacement, err)
 	}
@@ -306,7 +306,7 @@ func TestM5BRepriceFillIntegrityCommitsGlobalHaltPostgres(t *testing.T) {
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)
 	}
-	claimedCancel, err := s.ClaimPendingAttemptLive(cancelAttempt.ID, "m5b-integrity-test")
+	claimedCancel, err := s.ClaimPendingAttemptLive(cancelAttempt.ID, "m5b-integrity-test", 30*time.Second)
 	if err != nil || claimedCancel == nil {
 		t.Fatalf("claim cancel: attempt=%+v err=%v", claimedCancel, err)
 	}
@@ -453,7 +453,7 @@ func TestM5BCloseBuyEntitlementCanBeClaimedPostgres(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimPendingAttempt(attemptID, "m5b-test")
+	claimed, err := s.ClaimPendingAttempt(attemptID, "m5b-test", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("close-buy claim: attempt=%+v err=%v", claimed, err)
 	}

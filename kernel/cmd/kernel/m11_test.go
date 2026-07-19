@@ -205,7 +205,7 @@ func TestHumanCandidateAdoptionRepullsAndClearsLiveLatch(t *testing.T) {
 	execution.setCandidates(broker.OrderResult{
 		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
 	})
-	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, time.Now())
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("candidate claim=%+v err=%v", claimed, err)
 	}
@@ -276,7 +276,7 @@ func m11CandidateAwaitingApproval(t *testing.T) (*server, *memoryStore, *candida
 	execution.setCandidates(broker.OrderResult{
 		BrokerOrderID: brokerOrderID, ClientOrderID: attempt.ClientOrderID, State: "submitted",
 	})
-	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, time.Now())
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "candidate-discovery", "unknown", attempt.Attempt, 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("candidate claim=%+v err=%v", claimed, err)
 	}
@@ -427,13 +427,14 @@ func TestConcurrentHumanCandidateAdoptionHasOneWinner(t *testing.T) {
 func TestUnknownRecoveryClaimSurvivesWorkerCrash(t *testing.T) {
 	_, st, _, attempt, _ := m11CandidateAwaitingApproval(t)
 	claimed, err := st.ClaimRecoverableAttemptLive(
-		attempt.ID, "first-recovery-worker", "unknown", attempt.Attempt, time.Now(),
+		attempt.ID, "first-recovery-worker", "unknown", attempt.Attempt, time.Nanosecond,
 	)
 	if err != nil || claimed == nil {
 		t.Fatalf("initial recovery claim=%+v err=%v", claimed, err)
 	}
+	time.Sleep(time.Millisecond)
 	reclaimed, err := st.ClaimRecoverableAttemptLive(
-		claimed.ID, "replacement-recovery-worker", "claimed", claimed.Attempt, time.Now().Add(time.Second),
+		claimed.ID, "replacement-recovery-worker", "claimed", claimed.Attempt, 30*time.Second,
 	)
 	gate, gateErr := st.GetLiveExecutionGate()
 	if err != nil || reclaimed == nil || reclaimed.Attempt != claimed.Attempt+1 || gateErr != nil ||
@@ -472,7 +473,7 @@ func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		claimed, err := st.ClaimRecoverableAttemptLive(current.ID, "recovery", "unknown", current.Attempt, time.Now())
+		claimed, err := st.ClaimRecoverableAttemptLive(current.ID, "recovery", "unknown", current.Attempt, 30*time.Second)
 		if err != nil || claimed == nil {
 			t.Fatalf("recovery %d claim=%+v err=%v", recovery, claimed, err)
 		}
@@ -521,7 +522,7 @@ func TestSameRefReplayExpiresWithoutProviderEffect(t *testing.T) {
 	attempt.SendWindowEnd = time.Now().UTC().Add(-time.Second)
 	st.attempts[attempt.ID] = attempt
 	st.mu.Unlock()
-	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "expired-recovery", "unknown", attempt.Attempt, time.Now())
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "expired-recovery", "unknown", attempt.Attempt, 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim=%+v err=%v", claimed, err)
 	}
@@ -544,7 +545,7 @@ func TestSameRefReplayStopsAtGlobalHaltWithoutProviderEffect(t *testing.T) {
 	if _, err := st.ActivateGlobalHalt("operator stop", "admin:test", config.ModeLive); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "halted-recovery", "unknown", attempt.Attempt, time.Now())
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "halted-recovery", "unknown", attempt.Attempt, 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim=%+v err=%v", claimed, err)
 	}
@@ -565,7 +566,7 @@ func TestSameRefReplayStopsAtGlobalHaltWithoutProviderEffect(t *testing.T) {
 func TestProviderWithoutCreatedAtBoundDoesNotAutoReplay(t *testing.T) {
 	s, st, execution, attempt := m11UnknownReplayFixture(t)
 	s.providerReplayWindowBoundVerified = false
-	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "unbounded-provider-recovery", "unknown", attempt.Attempt, time.Now())
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "unbounded-provider-recovery", "unknown", attempt.Attempt, 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim=%+v err=%v", claimed, err)
 	}
@@ -830,7 +831,7 @@ func TestHaltCleanupLostFencingDoesNotClaimDurableFailure(t *testing.T) {
 
 func TestHaltReportsPreCutSentAttempt(t *testing.T) {
 	s, st, _, _, attempt := m11StagePendingEquityOpen(t)
-	claimed, err := st.ClaimPendingAttemptLive(attempt.ID, "pre-cut-worker")
+	claimed, err := st.ClaimPendingAttemptLive(attempt.ID, "pre-cut-worker", 30*time.Second)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim=%+v err=%v", claimed, err)
 	}
