@@ -38,21 +38,22 @@ type server struct {
 	simVenue  *broker.Fake
 	// broker is a simulation/test compatibility seam. Production construction
 	// leaves it nil and registers read and execution capabilities separately.
-	broker                 broker.Adapter
-	store                  storeAPI
-	instanceID             string
-	brokerTimeout          time.Duration
-	claimTimeout           time.Duration
-	attemptStale           time.Duration
-	providerDedupeVerified bool
-	proposalTTL            time.Duration
-	runtimeURL             string
-	runtimeHTTP            *http.Client
-	consoleOrigin          string
-	marketTZ               string
-	haltMu                 sync.RWMutex
-	halted                 bool
-	haltReason             string
+	broker                            broker.Adapter
+	store                             storeAPI
+	instanceID                        string
+	brokerTimeout                     time.Duration
+	claimTimeout                      time.Duration
+	attemptStale                      time.Duration
+	providerDedupeVerified            bool
+	providerReplayWindowBoundVerified bool
+	proposalTTL                       time.Duration
+	runtimeURL                        string
+	runtimeHTTP                       *http.Client
+	consoleOrigin                     string
+	marketTZ                          string
+	haltMu                            sync.RWMutex
+	halted                            bool
+	haltReason                        string
 }
 
 // storeAPI keeps the HTTP surface testable without adding a database-mocking
@@ -76,6 +77,7 @@ type storeAPI interface {
 	GetBlackboard(day string) (json.RawMessage, error)
 	PutBlackboard(day string, doc json.RawMessage) error
 	LoadGlobalHalt() (bool, string, error)
+	ActivateGlobalHalt(reason, subject, mode string) (store.GlobalHaltTransition, error)
 	GetExecutionAttempt(id string) (*store.ExecutionAttempt, error)
 	UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error)
 	ClaimPendingAttempt(id, instance string) (*store.ExecutionAttempt, error)
@@ -83,7 +85,7 @@ type storeAPI interface {
 	ClaimPendingAttemptLive(id, instance string) (*store.ExecutionAttempt, error)
 	ClaimRecoverableAttemptLive(id, instance, expectedState string, expectedToken int, claimBefore time.Time) (*store.ExecutionAttempt, error)
 	PrepareAttemptProviderIntent(id string, fencingToken int, accountID string, canonical json.RawMessage, fingerprint []byte) (bool, error)
-	MarkAttemptSent(id string, fencingToken int, replay bool) (bool, error)
+	MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence) (bool, error)
 	GetLiveExecutionGate() (store.LiveExecutionGate, error)
 	ListRecoverableAttempts(pendingBefore, claimBefore time.Time, limit int) ([]store.ExecutionAttempt, error)
 	ResolveAttempt(id string, fencingToken int, resolution store.AttemptResolution) (bool, error)
@@ -269,10 +271,14 @@ func main() {
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
 		providerDedupeVerified: brokerName == "fake" ||
 			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive),
-		proposalTTL:   proposalTTL,
-		runtimeURL:    config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
-		consoleOrigin: consoleOrigin,
-		marketTZ:      marketTZ,
+		// FakeBroker completes synchronously inside the bounded call. Robinhood
+		// ref-id dedupe is empirically verified, but its server-side order-created
+		// latency is not; automatic replay therefore remains fail-closed there.
+		providerReplayWindowBoundVerified: brokerName == "fake",
+		proposalTTL:                       proposalTTL,
+		runtimeURL:                        config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		consoleOrigin:                     consoleOrigin,
+		marketTZ:                          marketTZ,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
@@ -746,15 +752,10 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	opID := store.NewID()
 	var halted bool
 	var haltReason string
-	if op.Action == "open" {
-		// An open and a halt transition are linearized here. Once POST /halt
-		// acquires the write lock, no later open can classify or reach a broker.
-		s.haltMu.RLock()
-		defer s.haltMu.RUnlock()
-		halted, haltReason = s.halted, s.haltReason
-	} else {
-		halted, haltReason = s.haltSnapshot()
-	}
+	// This snapshot improves local classification messages only. Admission and
+	// Provider-send authority are serialized in PostgreSQL, so no process lock
+	// is held across account or Provider network calls.
+	halted, haltReason = s.haltSnapshot()
 	var v risk.Verdict
 	status := "auto_approved"
 	var replay *store.OperationRow
@@ -932,6 +933,16 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		liveEffect := s.tradingMode() == config.ModeLive && !op.Shadow &&
+			(op.Action == "open" || op.Action == "close" || op.Action == "cancel")
+		if liveEffect && (v.Class == "A" || v.Class == "B") {
+			// The idempotency lookup above must stay first. This gate is the last
+			// read before any operation entitlement is persisted, so a busy or
+			// unknown account cannot accumulate stale Live work behind its latch.
+			if err := gate.RequireLiveExecutionIdle(op.Action == "open"); err != nil {
+				return err
+			}
+		}
 		if err := gate.InsertEvent("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v}); err != nil {
 			return err
 		}
@@ -1056,6 +1067,19 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		if errors.Is(err, errIdempotencyKeyReused) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "idempotency_key_reused"})
+			return
+		}
+		if errors.Is(err, store.ErrLiveExecutionBusy) {
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "live_execution_busy"})
+			return
+		}
+		if errors.Is(err, store.ErrLiveExecutionSuspended) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "live_execution_suspended"})
+			return
+		}
+		if errors.Is(err, store.ErrLiveSendHalted) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "global_halt_active"})
 			return
 		}
 		if errors.Is(err, errInsufficientClosableQuantity) {
@@ -1368,6 +1392,7 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 		return nil, fmt.Errorf("refusing close without reservation")
 	}
 	var placeRequest broker.PlaceRequest
+	var replayEvidence *store.ProviderIntentEvidence
 	if attempt.Intent == "place" {
 		placeRequest = persistedPlaceRequest(op, attempt)
 		if s.tradingMode() == config.ModeLive {
@@ -1386,6 +1411,9 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 						ProviderErrorCode: "replay_intent_mismatch",
 					})
 					return nil, errors.Join(fmt.Errorf("same-ref replay evidence mismatch"), resolveErr)
+				}
+				replayEvidence = &store.ProviderIntentEvidence{
+					AccountID: s.mode.LiveAccountID, Canonical: canonical, Fingerprint: fingerprint,
 				}
 			} else {
 				prepared, evidenceErr := s.store.PrepareAttemptProviderIntent(
@@ -1411,7 +1439,35 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 		return nil, bindingErr
 	}
 	if s.tradingMode() == config.ModeLive {
-		marked, markErr := s.store.MarkAttemptSent(attempt.ID, attempt.Attempt, replay)
+		marked, markErr := s.store.MarkAttemptSent(
+			attempt.ID, attempt.Attempt, replay, s.brokerCallTimeout(), replayEvidence,
+		)
+		if errors.Is(markErr, store.ErrReplayWindowExpired) {
+			unknownErr := s.keepAttemptUnknown(attempt, "same-ref replay window expired", "replay_window_expired", "")
+			return nil, errors.Join(markErr, unknownErr)
+		}
+		if errors.Is(markErr, store.ErrLiveSendHalted) {
+			if replay {
+				unknownErr := s.keepAttemptUnknown(attempt, "same-ref replay suppressed by global halt", "replay_suppressed_halt", "")
+				return nil, errors.Join(markErr, unknownErr)
+			}
+			resolved, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
+				State: "failed", LastError: "global halt committed before provider send",
+				ProviderErrorCode: "send_suppressed_halt", OperationStatus: "failed", ReleaseReservation: true,
+				OrderUpdate: &store.OrderUpdate{ExecutionAttemptID: attempt.ID, State: "rejected"},
+			})
+			if resolveErr != nil {
+				return nil, errors.Join(markErr, resolveErr)
+			}
+			if !resolved {
+				current, readErr := s.store.GetExecutionAttempt(attempt.ID)
+				if readErr != nil {
+					return nil, errors.Join(readErr, fmt.Errorf("halt suppressed provider send but cleanup lost fencing"))
+				}
+				return nil, fmt.Errorf("halt suppressed provider send but cleanup lost fencing: state=%s fencing_token=%d", current.State, current.Attempt)
+			}
+			return nil, errors.Join(markErr, errBrokerMutationFailed)
+		}
 		if markErr != nil || !marked {
 			return nil, errors.Join(markErr, fmt.Errorf("provider send was not durably marked"))
 		}
@@ -2054,11 +2110,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "refresh global halt", err)
 		return
 	}
-	// Serialize approval with POST /halt exactly as normal open proposals are
-	// serialized. Once the write lock is waiting, no later approval can commit.
-	s.haltMu.RLock()
-	defer s.haltMu.RUnlock()
-	halted, haltReason := s.halted, s.haltReason
+	halted, haltReason := s.haltSnapshot()
 
 	var attempt *store.ExecutionAttempt
 	var approvalVerdict risk.Verdict
@@ -2130,6 +2182,9 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 				conflictReason = canaryReason
 				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement, usage)
 			}
+			if err := gate.RequireLiveExecutionIdle(true); err != nil {
+				return err
+			}
 		}
 		approvedOp = prepared
 		staged, err := s.stageApprovedOpen(gate, id, prepared, window.day)
@@ -2164,6 +2219,19 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, errReviewGateRejected) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": conflictReason})
+		return
+	}
+	if errors.Is(err, store.ErrLiveExecutionBusy) {
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "live_execution_busy"})
+		return
+	}
+	if errors.Is(err, store.ErrLiveExecutionSuspended) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "live_execution_suspended"})
+		return
+	}
+	if errors.Is(err, store.ErrLiveSendHalted) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "global_halt_active"})
 		return
 	}
 	if errors.Is(err, errBrokerDataUnavailable) {

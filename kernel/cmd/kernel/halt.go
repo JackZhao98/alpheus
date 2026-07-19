@@ -23,10 +23,8 @@ func (s *server) loadGlobalHalt() error {
 	return nil
 }
 
-// refreshGlobalHalt makes the event-backed switch global across kernel
-// processes without adding mutable schema before M2.7. An open refreshes before
-// its local halt read lock, so a transition already committed by another
-// process is observed before classification.
+// refreshGlobalHalt refreshes the local classification cache. The database
+// event plus Halt/send advisory lock remain authoritative across processes.
 func (s *server) refreshGlobalHalt() error {
 	halted, reason, err := s.store.LoadGlobalHalt()
 	if err != nil {
@@ -59,23 +57,24 @@ func (s *server) postHalt(w http.ResponseWriter, r *http.Request) {
 
 	s.haltMu.Lock()
 	defer s.haltMu.Unlock()
-	var eventID int64
-	if !s.halted {
-		payload := map[string]any{
-			"halted": true, "reason": in.Reason,
-			"subject": authenticatedSubject(r), "mode": s.tradingMode(),
-		}
-		var err error
-		eventID, err = s.store.InsertEventWithID(globalHaltEvent, payload)
-		if err != nil {
-			writeStoreError(w, "persist global halt", err)
-			return
-		}
-		s.halted, s.haltReason = true, in.Reason
+	transition, err := s.store.ActivateGlobalHalt(in.Reason, authenticatedSubject(r), s.tradingMode())
+	if err != nil {
+		writeStoreError(w, "persist global halt", err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"halted": true, "reason": s.haltReason, "event_id": eventID,
-	})
+	s.halted, s.haltReason = true, transition.Reason
+	response := map[string]any{
+		"halted": true, "reason": transition.Reason, "event_id": transition.EventID,
+		"cut_at": transition.CutAt,
+	}
+	if transition.InFlightAttemptID != "" {
+		response["in_flight_attempt_id"] = transition.InFlightAttemptID
+		response["in_flight_attempt_state"] = transition.InFlightAttemptState
+	}
+	if transition.BlockedUnsentAttemptID != "" {
+		response["blocked_unsent_attempt_id"] = transition.BlockedUnsentAttemptID
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *server) assertLiveAccountBinding(ctx context.Context, operationID string) error {

@@ -133,7 +133,12 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 	}
 	updated, err := applyOrderUpdate(ctx, tx, update, true)
 	if err != nil {
-		return nil, err
+		// The failed mutation must be rolled back before recording an integrity
+		// event and its database-fenced Global Halt in a separate transaction.
+		// Calling the recorder while this transaction is alive would self-block
+		// on the ledger/global advisory lock order.
+		_ = tx.Rollback()
+		return nil, s.recordOrderUpdateFailure(update, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE execution_attempt SET state='settled',resolved_at=now()
 		WHERE id=$1 AND state='placed'`, source.ExecutionAttemptID); err != nil {
@@ -171,6 +176,18 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 	if remaining < 0 {
 		return nil, fmt.Errorf("reprice fill exceeds source order quantity")
 	}
+	failureStatus, err := operationStatusAfterFailedAttempt(ctx, tx, source.OperationID)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if failureStatus == "executed" {
+		// Once any fill is durable, every later replacement is continuation of
+		// an executed broker fact. A pending or claimed remainder may fail, but
+		// the operation itself must never move back to failed.
+		if _, err := tx.ExecContext(ctx, `UPDATE operations SET status='executed' WHERE id=$1`, source.OperationID); err != nil {
+			return nil, normalizeDBError(err)
+		}
+	}
 	var closeReservationID, openReservationID sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT close_reservation_id,open_reservation_id
 		FROM execution_attempt WHERE id=$1`, source.ExecutionAttemptID).Scan(
@@ -193,16 +210,7 @@ func (s *Store) FinalizeRepriceCancel(cancelAttemptID string, fencingToken int, 
 		if err := releaseRepriceReservation(ctx, tx, closeReservationID, openReservationID); err != nil {
 			return nil, err
 		}
-		var totalFills int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM fills f JOIN orders o ON o.id=f.order_id
-			WHERE o.operation_id=$1`, source.OperationID).Scan(&totalFills); err != nil {
-			return nil, normalizeDBError(err)
-		}
-		status := "failed"
-		if totalFills > 0 {
-			status = "executed"
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE operations SET status=$2 WHERE id=$1`, source.OperationID, status); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE operations SET status=$2 WHERE id=$1`, source.OperationID, failureStatus); err != nil {
 			return nil, normalizeDBError(err)
 		}
 		if err := insertEvent(ctx, tx, "order_expired_policy", map[string]any{

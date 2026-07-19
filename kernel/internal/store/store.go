@@ -38,6 +38,10 @@ var (
 	ErrInvalidOperationReference  = errors.New("invalid operation reference")
 	ErrBreakerNotActive           = errors.New("breaker is not active for that reason")
 	ErrOperationNotPending        = errors.New("operation is not pending review")
+	ErrLiveExecutionBusy          = errors.New("live execution busy")
+	ErrLiveExecutionSuspended     = errors.New("live execution suspended")
+	ErrLiveSendHalted             = errors.New("live send halted")
+	ErrReplayWindowExpired        = errors.New("replay window expired")
 	ErrInvalidControlWarningQuery = errors.New("invalid control warning query")
 	ErrUnavailable                = errors.New("database unavailable")
 )
@@ -77,6 +81,7 @@ type OperationGate interface {
 	FirstOpenExposureOperation(ledger, symbol, kind string) (string, error)
 	EvaluateDayRisk(input DayRiskInput) (DayRiskStats, error)
 	ResumeBreaker(ledger, reason string, marketDay, observedAt time.Time, subject string) (BreakerState, error)
+	RequireLiveExecutionIdle(blockWhenHalted bool) error
 }
 
 type ledgerTx struct {
@@ -97,6 +102,35 @@ func (t *ledgerTx) DatabaseNow() (time.Time, error) {
 func (t *ledgerTx) LockLedger(shadow bool) error {
 	_, err := t.tx.ExecContext(t.ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow))
 	return normalizeDBError(err)
+}
+
+func (t *ledgerTx) RequireLiveExecutionIdle(blockWhenHalted bool) error {
+	halted := false
+	if blockWhenHalted {
+		if _, err := t.tx.ExecContext(t.ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
+			return normalizeDBError(err)
+		}
+		var err error
+		halted, _, _, _, err = loadGlobalHalt(t.ctx, t.tx)
+		if err != nil {
+			return normalizeDBError(err)
+		}
+	}
+	var activeID, unknownID sql.NullString
+	if err := t.tx.QueryRowContext(t.ctx, `SELECT active_attempt_id,unknown_attempt_id
+		FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeID, &unknownID); err != nil {
+		return normalizeDBError(err)
+	}
+	if unknownID.Valid {
+		return ErrLiveExecutionSuspended
+	}
+	if activeID.Valid {
+		return ErrLiveExecutionBusy
+	}
+	if halted {
+		return ErrLiveSendHalted
+	}
+	return nil
 }
 
 // Open waits for postgres on cold start.
@@ -571,6 +605,14 @@ func ledgerLockKey(shadow bool) int64 {
 	return key
 }
 
+func globalHaltSendLockKey() int64 {
+	// This stable key is part of the database concurrency protocol. It is not a
+	// configurable trading policy: every Kernel instance must serialize a
+	// global Halt transition with Live open-placement send authorization.
+	const key int64 = 0x414c5048484c5400 // "ALPHHLT\x00"
+	return key
+}
+
 func (s *Store) InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error {
 	ctx, cancel := s.deadline()
 	defer cancel()
@@ -646,17 +688,88 @@ func (s *Store) PutBlackboard(day string, doc json.RawMessage) error {
 	return normalizeDBError(err)
 }
 
+type GlobalHaltTransition struct {
+	Reason                 string
+	EventID                int64
+	CutAt                  time.Time
+	InFlightAttemptID      string
+	InFlightAttemptState   string
+	BlockedUnsentAttemptID string
+}
+
 func (s *Store) LoadGlobalHalt() (bool, string, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
+	halted, reason, _, _, err := loadGlobalHalt(ctx, s.DB)
+	return halted, reason, normalizeDBError(err)
+}
+
+// ActivateGlobalHalt commits the database-authoritative Halt cut under the
+// same advisory lock used by Live open-placement send authorization. A sent
+// marker that commits first is reported as pre-cut in-flight work; a marker
+// that loses this lock race must observe Halt and cannot reach the Provider.
+func (s *Store) ActivateGlobalHalt(reason, subject, mode string) (GlobalHaltTransition, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	halted, persistedReason, eventID, cutAt, err := loadGlobalHalt(ctx, tx)
+	if err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	if !halted {
+		if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&cutAt); err != nil {
+			return GlobalHaltTransition{}, normalizeDBError(err)
+		}
+		eventID, err = insertEventWithIDAt(ctx, tx, "global_halt_transition", map[string]any{
+			"halted": true, "reason": reason, "subject": subject, "mode": mode,
+		}, cutAt)
+		if err != nil {
+			return GlobalHaltTransition{}, normalizeDBError(err)
+		}
+		persistedReason = reason
+	}
+	transition := GlobalHaltTransition{Reason: persistedReason, EventID: eventID, CutAt: cutAt}
+	var activeID, unknownID sql.NullString
+	var activeSentAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT gate.active_attempt_id,gate.unknown_attempt_id,attempt.sent_at
+		FROM live_execution_gate AS gate
+		LEFT JOIN execution_attempt AS attempt ON attempt.id=gate.active_attempt_id
+		WHERE gate.singleton=true`).Scan(&activeID, &unknownID, &activeSentAt); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	if unknownID.Valid {
+		transition.InFlightAttemptID = unknownID.String
+		transition.InFlightAttemptState = "unknown"
+	} else if activeID.Valid && activeSentAt.Valid {
+		transition.InFlightAttemptID = activeID.String
+		transition.InFlightAttemptState = "active"
+	} else if activeID.Valid {
+		transition.BlockedUnsentAttemptID = activeID.String
+	}
+	if err := tx.Commit(); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	return transition, nil
+}
+
+func loadGlobalHalt(ctx context.Context, db queryRower) (bool, string, int64, time.Time, error) {
 	var halted bool
 	var reason string
-	err := s.DB.QueryRowContext(ctx,
-		`SELECT COALESCE((payload->>'halted')::boolean, false), COALESCE(payload->>'reason','')
+	var eventID int64
+	var cutAt time.Time
+	err := db.QueryRowContext(ctx,
+		`SELECT COALESCE((payload->>'halted')::boolean, false), COALESCE(payload->>'reason',''), id, ts
 		 FROM events WHERE kind='global_halt_transition' ORDER BY id DESC LIMIT 1`).
-		Scan(&halted, &reason)
+		Scan(&halted, &reason, &eventID, &cutAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, "", nil
+		return false, "", 0, time.Time{}, nil
 	}
-	return halted, reason, normalizeDBError(err)
+	return halted, reason, eventID, cutAt, err
 }

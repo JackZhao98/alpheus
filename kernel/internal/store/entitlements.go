@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -82,6 +83,17 @@ type AttemptResolution struct {
 	ReleaseReservation     bool
 	OrderUpdate            *OrderUpdate
 	OrderEvent             any
+}
+
+// ProviderIntentEvidence is the exact provider-visible placement identity a
+// recovery worker expects to replay. MarkAttemptSent compares it with the
+// durable account, canonical JSON, and digest in the same UPDATE that consumes
+// replay_count, so a stale in-process snapshot cannot authorize a different
+// request.
+type ProviderIntentEvidence struct {
+	AccountID   string
+	Canonical   json.RawMessage
+	Fingerprint []byte
 }
 
 func ledgerName(shadow bool) string {
@@ -429,7 +441,18 @@ func (s *Store) GetLiveExecutionGate() (LiveExecutionGate, error) {
 	return gate, nil
 }
 
-func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool) (bool, error) {
+func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *ProviderIntentEvidence) (bool, error) {
+	if replay {
+		if replayEvidence == nil || strings.TrimSpace(replayEvidence.AccountID) == "" ||
+			len(replayEvidence.Canonical) == 0 || !json.Valid(replayEvidence.Canonical) ||
+			len(replayEvidence.Fingerprint) != sha256.Size {
+			return false, fmt.Errorf("replay provider intent evidence is invalid")
+		}
+		digest := sha256.Sum256(replayEvidence.Canonical)
+		if !bytes.Equal(digest[:], replayEvidence.Fingerprint) {
+			return false, fmt.Errorf("replay provider intent fingerprint mismatch")
+		}
+	}
 	ctx, cancel := s.deadline()
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -437,6 +460,9 @@ func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool) (bool,
 		return false, normalizeDBError(err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
+		return false, normalizeDBError(err)
+	}
 	var activeID, unknownID sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT active_attempt_id,unknown_attempt_id
 		FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeID, &unknownID); err != nil {
@@ -449,22 +475,83 @@ func (s *Store) MarkAttemptSent(id string, fencingToken int, replay bool) (bool,
 	if !allowed {
 		return false, nil
 	}
-	query := `UPDATE execution_attempt SET sent_at=now(),
-		send_window_start=now()-interval '30 seconds',send_window_end=now()+interval '2 minutes'
-		WHERE id=$1 AND attempt=$2 AND state='claimed' AND sent_at IS NULL
+	var intent, action string
+	var sentAt, sendWindowEnd sql.NullTime
+	var replayCount int
+	var databaseNow time.Time
+	err = tx.QueryRowContext(ctx, `SELECT attempt.intent,COALESCE(operation.payload->>'action',''),
+		attempt.sent_at,attempt.send_window_end,attempt.replay_count,clock_timestamp()
+		FROM execution_attempt AS attempt
+		JOIN operations AS operation ON operation.id=attempt.operation_id
+		WHERE attempt.id=$1 AND attempt.attempt=$2 AND attempt.state='claimed'
+		FOR UPDATE OF attempt`, id, fencingToken).
+		Scan(&intent, &action, &sentAt, &sendWindowEnd, &replayCount, &databaseNow)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	if replay || (intent == "place" && action == "open") {
+		halted, _, _, _, err := loadGlobalHalt(ctx, tx)
+		if err != nil {
+			return false, normalizeDBError(err)
+		}
+		if halted {
+			return false, ErrLiveSendHalted
+		}
+	}
+	query := `WITH send_clock AS (SELECT clock_timestamp() AS sent_at)
+		UPDATE execution_attempt SET sent_at=send_clock.sent_at,
+		send_window_start=send_clock.sent_at-interval '30 seconds',
+		send_window_end=send_clock.sent_at+interval '2 minutes'
+		FROM send_clock
+		WHERE id=$1 AND attempt=$2 AND state='claimed' AND execution_attempt.sent_at IS NULL
 		  AND (intent='cancel' OR
 		       (intent_fingerprint IS NOT NULL AND provider_intent IS NOT NULL AND provider_account_id IS NOT NULL))`
+	args := []any{id, fencingToken}
+	var guardMillis time.Duration
 	if replay {
+		if replayGuard <= 0 {
+			return false, fmt.Errorf("replay guard must be positive")
+		}
+		if !sentAt.Valid || replayCount != 0 {
+			return false, nil
+		}
+		if !sendWindowEnd.Valid || !databaseNow.Add(replayGuard).Before(sendWindowEnd.Time) {
+			return false, ErrReplayWindowExpired
+		}
+		guardMillis = replayGuard / time.Millisecond
+		if replayGuard%time.Millisecond != 0 {
+			guardMillis++
+		}
 		query = `UPDATE execution_attempt SET replay_count=replay_count+1
-			WHERE id=$1 AND attempt=$2 AND state='claimed' AND sent_at IS NOT NULL AND replay_count=0`
+			WHERE id=$1 AND attempt=$2 AND state='claimed' AND sent_at IS NOT NULL AND replay_count=0
+			  AND clock_timestamp()+($3 * interval '1 millisecond') < send_window_end
+			  AND provider_account_id=$4 AND provider_intent=$5::jsonb AND intent_fingerprint=$6`
+		args = append(args, int64(guardMillis), replayEvidence.AccountID,
+			[]byte(replayEvidence.Canonical), replayEvidence.Fingerprint)
 	}
-	result, err := tx.ExecContext(ctx, query, id, fencingToken)
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, normalizeDBError(err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil || affected != 1 {
+	if err != nil {
 		return false, normalizeDBError(err)
+	}
+	if affected != 1 {
+		if replay {
+			var expired bool
+			if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()+($3 * interval '1 millisecond') >= send_window_end
+				FROM execution_attempt WHERE id=$1 AND attempt=$2 AND state='claimed' AND replay_count=0`,
+				id, fencingToken, int64(guardMillis)).Scan(&expired); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, normalizeDBError(err)
+			} else if err == nil && expired {
+				return false, ErrReplayWindowExpired
+			}
+		}
+		return false, nil
 	}
 	if err := insertEvent(ctx, tx, "execution_attempt_sent", map[string]any{
 		"attempt_id": id, "fencing_token": fencingToken, "replay": replay,
@@ -822,7 +909,14 @@ func (s *Store) ResolveAttempt(id string, fencingToken int, resolution AttemptRe
 		}
 	}
 	if resolution.OperationStatus != "" {
-		if _, err := tx.ExecContext(ctx, `UPDATE operations SET status=$1 WHERE id=$2`, resolution.OperationStatus, operationID); err != nil {
+		operationStatus := resolution.OperationStatus
+		if operationStatus == "failed" {
+			operationStatus, err = operationStatusAfterFailedAttempt(ctx, tx, operationID)
+			if err != nil {
+				return false, normalizeDBError(err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE operations SET status=$1 WHERE id=$2`, operationStatus, operationID); err != nil {
 			return false, normalizeDBError(err)
 		}
 	}
@@ -868,33 +962,55 @@ func (s *Store) FailPendingAttempt(id, reason string) (bool, error) {
 		return false, normalizeDBError(err)
 	}
 	defer tx.Rollback()
-	var operationID string
+	var operationID, intent string
 	var reservationID, openReservationID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id
-		FROM execution_attempt WHERE id=$1 AND state='pending'`, id).Scan(&operationID, &reservationID, &openReservationID)
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id,intent
+		FROM execution_attempt WHERE id=$1 AND state='pending'`, id).Scan(&operationID, &reservationID, &openReservationID, &intent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, normalizeDBError(err)
 	}
+	if reservationID.Valid && openReservationID.Valid {
+		return false, errors.New("execution attempt references both open and close reservations")
+	}
+	var reservationLedger, closeSymbol string
 	if openReservationID.Valid {
-		var shadow bool
-		if err := tx.QueryRowContext(ctx, `SELECT ledger='shadow' FROM open_reservation WHERE id=$1`, openReservationID.String).Scan(&shadow); err != nil {
-			return false, normalizeDBError(err)
-		}
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow)); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT ledger FROM open_reservation WHERE id=$1`, openReservationID.String).Scan(&reservationLedger); err != nil {
 			return false, normalizeDBError(err)
 		}
 	}
 	if reservationID.Valid {
-		var ledger, symbol string
-		if err := tx.QueryRowContext(ctx, `SELECT ledger,symbol FROM close_reservation WHERE id=$1`, reservationID.String).Scan(&ledger, &symbol); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT ledger,symbol FROM close_reservation WHERE id=$1`, reservationID.String).Scan(&reservationLedger, &closeSymbol); err != nil {
 			return false, normalizeDBError(err)
 		}
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, symbolLockKey(ledger, symbol)); err != nil {
+	}
+	if reservationLedger != "" {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(reservationLedger == "shadow")); err != nil {
 			return false, normalizeDBError(err)
 		}
+	}
+	if reservationID.Valid {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, symbolLockKey(reservationLedger, closeSymbol)); err != nil {
+			return false, normalizeDBError(err)
+		}
+	}
+	var lockedOperationID, lockedIntent string
+	var lockedReservationID, lockedOpenReservationID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT operation_id,close_reservation_id,open_reservation_id,intent
+		FROM execution_attempt WHERE id=$1 AND state='pending' FOR UPDATE`, id).Scan(
+		&lockedOperationID, &lockedReservationID, &lockedOpenReservationID, &lockedIntent,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	if lockedOperationID != operationID || lockedReservationID != reservationID ||
+		lockedOpenReservationID != openReservationID || lockedIntent != intent {
+		return false, errors.New("execution attempt identity changed while acquiring resource locks")
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE execution_attempt SET state='failed',last_error=$2,resolved_at=now()
 		WHERE id=$1 AND state='pending'`, id, reason)
@@ -905,8 +1021,28 @@ func (s *Store) FailPendingAttempt(id, reason string) (bool, error) {
 	if err != nil || affected == 0 {
 		return false, normalizeDBError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE operations SET status='failed' WHERE id=$1`, operationID); err != nil {
+	operationStatus, err := operationStatusAfterFailedAttempt(ctx, tx, operationID)
+	if err != nil {
 		return false, normalizeDBError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE operations SET status=$2 WHERE id=$1`, operationID, operationStatus); err != nil {
+		return false, normalizeDBError(err)
+	}
+	if intent == "place" || intent == "paper_place" {
+		var orderID string
+		err := tx.QueryRowContext(ctx, `UPDATE orders SET state='rejected',updated_at=clock_timestamp()
+			WHERE execution_attempt_id=$1 AND state='new' AND broker_order_id IS NULL
+			RETURNING id`, id).Scan(&orderID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, normalizeDBError(err)
+		}
+		if err == nil {
+			if err := insertEvent(ctx, tx, "order_update", map[string]any{
+				"order_id": orderID, "operation_id": operationID, "state": "rejected",
+			}); err != nil {
+				return false, normalizeDBError(err)
+			}
+		}
 	}
 	if reservationID.Valid {
 		if _, err := tx.ExecContext(ctx, `UPDATE close_reservation SET state='released',remaining_qty=0,released_at=COALESCE(released_at,now())

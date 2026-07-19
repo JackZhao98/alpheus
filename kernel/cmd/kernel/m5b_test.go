@@ -385,7 +385,17 @@ func TestM5BPendingReplacementRecoveryUsesDurableIntent(t *testing.T) {
 }
 
 func TestM5BHaltBeforePendingReplacementReleasesWithoutPlacement(t *testing.T) {
-	s, st, execution, source, _ := newRepriceTestServer(t, "1", 3)
+	s, st, execution, source, _ := newRepriceTestServer(t, "3", 3)
+	now := time.Now().UTC()
+	execution.cancelResults[source.BrokerOrderID] = broker.OrderResult{
+		BrokerOrderID: source.BrokerOrderID, ClientOrderID: source.ClientOrderID,
+		State: "cancelled", FilledQty: units.MustQty("1"),
+		Fills: []broker.ReadFill{{
+			FillID: "halted-replacement-prior-fill", BrokerOrderID: source.BrokerOrderID,
+			Symbol: source.Symbol, Side: source.Side, Qty: units.MustQty("1"),
+			Price: units.MustMicros("105"), AsOf: now,
+		}},
+	}
 	cancelAttempt, err := st.StageRepriceCancel(source.ID)
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)
@@ -420,6 +430,17 @@ func TestM5BHaltBeforePendingReplacementReleasesWithoutPlacement(t *testing.T) {
 		if reservation.ResourceState != "released" {
 			t.Fatalf("halted pending replacement kept reservation: %+v", reservation)
 		}
+	}
+	row, err := st.GetOperation(source.OperationID)
+	if err != nil || row.Status != "executed" {
+		t.Fatalf("partial-fill operation=%+v err=%v, want executed", row, err)
+	}
+	replacementOrder, err := st.GetOrderByAttempt(next.ID)
+	if err != nil || replacementOrder.State != "rejected" || replacementOrder.BrokerOrderID != "" {
+		t.Fatalf("unsent replacement=%+v err=%v, want rejected without broker id", replacementOrder, err)
+	}
+	if len(st.fills) != 1 || len(st.grants) != 1 {
+		t.Fatalf("fills=%d grants=%d, want prior fill and burned grant preserved", len(st.fills), len(st.grants))
 	}
 }
 

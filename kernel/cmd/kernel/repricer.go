@@ -114,7 +114,7 @@ func (s *server) executeClaimedRepriceCancel(ctx context.Context, claimed *store
 		return errors.Join(bindingErr, resolveErr)
 	}
 	if s.tradingMode() == config.ModeLive {
-		marked, markErr := s.store.MarkAttemptSent(claimed.ID, claimed.Attempt, false)
+		marked, markErr := s.store.MarkAttemptSent(claimed.ID, claimed.Attempt, false, 0, nil)
 		if markErr != nil || !marked {
 			return errors.Join(markErr, fmt.Errorf("provider cancel send was not durably marked"))
 		}

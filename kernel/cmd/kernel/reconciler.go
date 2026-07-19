@@ -657,7 +657,8 @@ func (s *server) reconcileLivePlaceAttempt(ctx context.Context, execution broker
 	case 1:
 		return s.keepAttemptUnknown(claimed, "one exact broker candidate awaits human approval", "candidate_pending", candidates[0].BrokerOrderID)
 	case 0:
-		if claimed.ReplayCount == 0 && s.providerDedupeVerified && intent.Kind == "equity" {
+		if claimed.ReplayCount == 0 && s.providerDedupeVerified &&
+			s.providerReplayWindowBoundVerified && intent.Kind == "equity" {
 			_, err := s.executeClaimedAttemptWithReplay(ctx, claimed, true)
 			return err
 		}

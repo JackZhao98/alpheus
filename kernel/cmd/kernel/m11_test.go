@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -447,6 +450,7 @@ func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 	s.market = marketdata.NewFakeProvider(venue)
 	s.execution = execution
 	s.providerDedupeVerified = true
+	s.providerReplayWindowBoundVerified = true
 	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
 	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-one-replay")
 	placeCalls, _, _ := execution.callCounts()
@@ -474,6 +478,434 @@ func TestLiveUnknownPullsThenReplaysSameRefOnlyOnce(t *testing.T) {
 	placeCalls, _, _ = execution.callCounts()
 	if placeCalls != 2 || current.ReplayCount != 1 || current.State != "unknown" {
 		t.Fatalf("calls=%d attempt=%+v", placeCalls, current)
+	}
+}
+
+func m11UnknownReplayFixture(t *testing.T) (*server, *memoryStore, *candidateExecution, store.ExecutionAttempt) {
+	t.Helper()
+	s, st, venue := m11Server("35")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "EQ", InstrumentID: "55555555-5555-4555-8555-555555555555",
+		Kind: "equity", Multiplier: 1, PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
+	execution := &candidateExecution{}
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = execution
+	s.providerDedupeVerified = true
+	s.providerReplayWindowBoundVerified = true
+	payload := `{"proposer":"m11","action":"open","kind":"equity","underlying":"EQ","symbol":"EQ","side":"buy","qty":1,"max_risk_usd":10,"plan":` + m11Plan + `}`
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-v17-unknown")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("initial status=%d body=%s", response.Code, response.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, attempt := range st.attempts {
+		if attempt.State == "unknown" {
+			return s, st, execution, attempt
+		}
+	}
+	t.Fatal("unknown attempt missing")
+	return nil, nil, nil, store.ExecutionAttempt{}
+}
+
+func TestSameRefReplayExpiresWithoutProviderEffect(t *testing.T) {
+	s, st, execution, attempt := m11UnknownReplayFixture(t)
+	st.mu.Lock()
+	attempt.SendWindowEnd = time.Now().UTC().Add(-time.Second)
+	st.attempts[attempt.ID] = attempt
+	st.mu.Unlock()
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "expired-recovery", "unknown", attempt.Attempt, time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); !errors.Is(err, store.ErrReplayWindowExpired) {
+		t.Fatalf("reconcile error=%v", err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	placeCalls, findCalls, _ := execution.callCounts()
+	if err != nil || gateErr != nil || placeCalls != 1 || findCalls != 1 || current.State != "unknown" ||
+		current.ReplayCount != 0 || current.ProviderErrorCode != "replay_window_expired" ||
+		gate.UnknownAttemptID != attempt.ID {
+		t.Fatalf("attempt=%+v gate=%+v calls=%d/%d err=%v gate_err=%v",
+			current, gate, placeCalls, findCalls, err, gateErr)
+	}
+}
+
+func TestSameRefReplayStopsAtGlobalHaltWithoutProviderEffect(t *testing.T) {
+	s, st, execution, attempt := m11UnknownReplayFixture(t)
+	if _, err := st.ActivateGlobalHalt("operator stop", "admin:test", config.ModeLive); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "halted-recovery", "unknown", attempt.Attempt, time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); !errors.Is(err, store.ErrLiveSendHalted) {
+		t.Fatalf("reconcile error=%v", err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	placeCalls, findCalls, _ := execution.callCounts()
+	if err != nil || gateErr != nil || placeCalls != 1 || findCalls != 1 || current.State != "unknown" ||
+		current.ReplayCount != 0 || current.ProviderErrorCode != "replay_suppressed_halt" ||
+		gate.UnknownAttemptID != attempt.ID {
+		t.Fatalf("attempt=%+v gate=%+v calls=%d/%d err=%v gate_err=%v",
+			current, gate, placeCalls, findCalls, err, gateErr)
+	}
+}
+
+func TestProviderWithoutCreatedAtBoundDoesNotAutoReplay(t *testing.T) {
+	s, st, execution, attempt := m11UnknownReplayFixture(t)
+	s.providerReplayWindowBoundVerified = false
+	claimed, err := st.ClaimRecoverableAttemptLive(attempt.ID, "unbounded-provider-recovery", "unknown", attempt.Attempt, time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := s.reconcileLivePlaceAttempt(context.Background(), execution, claimed); err != nil {
+		t.Fatal(err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	placeCalls, findCalls, _ := execution.callCounts()
+	if err != nil || gateErr != nil || placeCalls != 1 || findCalls != 1 || current.State != "unknown" ||
+		current.ReplayCount != 0 || current.ProviderErrorCode != "candidate_zero" || gate.UnknownAttemptID != attempt.ID {
+		t.Fatalf("attempt=%+v gate=%+v calls=%d/%d err=%v gate_err=%v",
+			current, gate, placeCalls, findCalls, err, gateErr)
+	}
+}
+
+type m11EntityCounts struct {
+	operations, grants, closeReservations, openReservations, attempts, orders int
+}
+
+func m11Counts(st *memoryStore) m11EntityCounts {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return m11EntityCounts{
+		operations: len(st.operationRows), grants: len(st.grants), closeReservations: len(st.reservations),
+		openReservations: len(st.openReservations), attempts: len(st.attempts), orders: len(st.orders),
+	}
+}
+
+func TestOccupiedLiveGateRefusesNewEffectsBeforeEntitlements(t *testing.T) {
+	for _, test := range []struct {
+		name, activeID, unknownID, want string
+	}{
+		{name: "active", activeID: store.NewID(), want: "live_execution_busy"},
+		{name: "unknown", unknownID: store.NewID(), want: "live_execution_suspended"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, st, _ := m11Server("1000")
+			st.liveActiveAttemptID, st.liveUnknownAttemptID = test.activeID, test.unknownID
+			before := m11Counts(st)
+			const workers = 20
+			responses := make(chan *httptest.ResponseRecorder, workers)
+			var start sync.WaitGroup
+			start.Add(1)
+			var wait sync.WaitGroup
+			for index := range workers {
+				wait.Add(1)
+				go func() {
+					defer wait.Done()
+					start.Wait()
+					responses <- routeRequestWithKey(s.routes(), http.MethodPost, "/operations", m11OpenPayload("SPY", "35"),
+						"runtime-secret", fmt.Sprintf("m11-%s-%d", test.name, index))
+				}()
+			}
+			start.Done()
+			wait.Wait()
+			close(responses)
+			for response := range responses {
+				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), test.want) {
+					t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+				}
+			}
+			if after := m11Counts(st); after != before {
+				t.Fatalf("before=%+v after=%+v", before, after)
+			}
+			st.mu.Lock()
+			st.liveActiveAttemptID, st.liveUnknownAttemptID = "", ""
+			st.mu.Unlock()
+			retry := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", m11OpenPayload("SPY", "35"),
+				"runtime-secret", fmt.Sprintf("m11-%s-%d", test.name, 0))
+			if retry.Code != http.StatusOK || !strings.Contains(retry.Body.String(), `"class":"B"`) {
+				t.Fatalf("retry status=%d body=%s", retry.Code, retry.Body.String())
+			}
+		})
+	}
+}
+
+func TestOccupiedLiveGateKeepsClassCPendingAndIdempotencyFirst(t *testing.T) {
+	s, st, venue := m11Server("1000")
+	setQuote(venue, "SPY", "1.99", "2.00", 45_000)
+	handler := s.routes()
+	payload := m11OpenPayload("SPY", "200")
+	proposal := routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "m11-busy-class-c")
+	if proposal.Code != http.StatusOK || !strings.Contains(proposal.Body.String(), `"status":"pending_review"`) {
+		t.Fatalf("proposal status=%d body=%s", proposal.Code, proposal.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(proposal.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	operationID, _ := body["operation_id"].(string)
+	st.mu.Lock()
+	st.liveActiveAttemptID = store.NewID()
+	st.mu.Unlock()
+	replay := routeRequestWithKey(handler, http.MethodPost, "/operations", payload, "runtime-secret", "m11-busy-class-c")
+	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"idempotent_replay":true`) ||
+		!strings.Contains(replay.Body.String(), operationID) {
+		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	before := m11Counts(st)
+	review := routeRequest(handler, http.MethodPost, "/operations/"+operationID+"/review",
+		`{"verdict":"approved","rationale":"busy gate test"}`, "admin-secret")
+	if review.Code != http.StatusConflict || !strings.Contains(review.Body.String(), "live_execution_busy") {
+		t.Fatalf("review status=%d body=%s", review.Code, review.Body.String())
+	}
+	row, err := st.GetOperation(operationID)
+	if err != nil || row.Status != "pending_review" {
+		t.Fatalf("operation=%+v err=%v", row, err)
+	}
+	if after := m11Counts(st); after != before {
+		t.Fatalf("before=%+v after=%+v", before, after)
+	}
+}
+
+func TestOccupiedLiveGateDoesNotBlockShadow(t *testing.T) {
+	s, st, _ := m11Server("1000")
+	unknownID := store.NewID()
+	st.liveUnknownAttemptID = unknownID
+	payload := strings.Replace(m11OpenPayload("SPY", "35"), `"plan":`, `"shadow":true,"plan":`, 1)
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-busy-shadow")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"class":"B"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	gate, err := st.GetLiveExecutionGate()
+	if err != nil || gate.UnknownAttemptID != unknownID || gate.ActiveAttemptID != "" {
+		t.Fatalf("gate=%+v err=%v", gate, err)
+	}
+	counts := m11Counts(st)
+	if counts.grants != 1 || counts.attempts != 1 || counts.orders != 1 {
+		t.Fatalf("shadow entities=%+v", counts)
+	}
+}
+
+func m11StagePendingEquityOpen(t *testing.T) (*server, *memoryStore, *candidateExecution, risk.Operation, *store.ExecutionAttempt) {
+	t.Helper()
+	s, st, venue := m11Server("1000")
+	setQuote(venue, "EQ", "9.99", "10", 0)
+	venue.SetInstrument(broker.Instrument{
+		Symbol: "EQ", InstrumentID: "55555555-5555-4555-8555-555555555555",
+		Kind: "equity", Multiplier: 1, PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+	})
+	execution := &candidateExecution{}
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = execution
+	op := risk.Operation{
+		Proposer: "m11-v17", Action: "open", Kind: "equity", Underlying: "EQ", Symbol: "EQ",
+		InstrumentID: "55555555-5555-4555-8555-555555555555", Side: "buy",
+		Qty: units.MustQty("1"), QtyIncrement: units.MustQty("1"), Multiplier: 1,
+		WorkingPrice: units.MustMicros("10"), ApprovedPriceCap: units.MustMicros("10"),
+		DerivedMaxRisk: units.MustMicros("10"), RequiredCash: units.MustMicros("10"),
+	}
+	operationID := store.NewID()
+	if err := st.InsertOperation(operationID, op.Proposer, "B", "auto_approved", op, risk.Verdict{Class: "B"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var attempt *store.ExecutionAttempt
+	window, err := marketDayWindow(time.Now().UTC(), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WithLedgerLock(false, func(gate store.OperationGate) error {
+		var stageErr error
+		attempt, stageErr = s.stageApprovedOpen(gate, operationID, op, window.day)
+		return stageErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return s, st, execution, op, attempt
+}
+
+func TestHaltBeforeSentMarkerTerminatesUnsentOpen(t *testing.T) {
+	s, st, execution, _, attempt := m11StagePendingEquityOpen(t)
+	if _, err := st.ActivateGlobalHalt("halt before mark", "admin:test", config.ModeLive); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.executePendingAttempt(context.Background(), attempt.ID); !errors.Is(err, store.ErrLiveSendHalted) {
+		t.Fatalf("execute err=%v", err)
+	}
+	current, err := st.GetExecutionAttempt(attempt.ID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	order, orderErr := st.GetOrderByAttempt(attempt.ID)
+	reservation, reservationErr := st.GetOpenReservation(attempt.OpenReservationID)
+	placeCalls, _, _ := execution.callCounts()
+	row, rowErr := st.GetOperation(attempt.OperationID)
+	if err != nil || gateErr != nil || orderErr != nil || reservationErr != nil || rowErr != nil ||
+		placeCalls != 0 || current.State != "failed" || current.ProviderErrorCode != "send_suppressed_halt" ||
+		order.State != "rejected" || reservation.ResourceState != "released" || row.Status != "failed" ||
+		gate.ActiveAttemptID != "" || gate.UnknownAttemptID != "" {
+		t.Fatalf("attempt=%+v order=%+v reservation=%+v operation=%+v gate=%+v calls=%d errors=%v/%v/%v/%v/%v",
+			current, order, reservation, row, gate, placeCalls, err, orderErr, reservationErr, rowErr, gateErr)
+	}
+	if counts := m11Counts(st); counts.grants != 1 {
+		t.Fatalf("halt incorrectly restored the consumed grant: %+v", counts)
+	}
+}
+
+func TestHaltBeforeReplacementSendPreservesExecutedOperation(t *testing.T) {
+	s, st, execution, _, attempt := m11StagePendingEquityOpen(t)
+	st.mu.Lock()
+	replacement := st.attempts[attempt.ID]
+	replacement.Seq = 2
+	st.attempts[attempt.ID] = replacement
+	priorOrder := store.Order{
+		ID: store.NewID(), OperationID: attempt.OperationID,
+		ExecutionAttemptID: store.NewID(), State: "partially_filled",
+	}
+	st.orders[priorOrder.ExecutionAttemptID] = priorOrder
+	st.fills["prior-fill"] = memoryFill{
+		orderID: priorOrder.ID, ledger: "live",
+		fill: store.FillInput{
+			BrokerFillID: "prior-fill", Qty: units.MustQty("1"),
+			Price: units.MustMicros("10"), TS: time.Now().UTC(),
+		},
+	}
+	st.mu.Unlock()
+	if _, err := st.ActivateGlobalHalt("halt before replacement", "admin:test", config.ModeLive); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.executePendingAttempt(context.Background(), attempt.ID); !errors.Is(err, store.ErrLiveSendHalted) {
+		t.Fatalf("execute err=%v", err)
+	}
+	row, err := st.GetOperation(attempt.OperationID)
+	current, attemptErr := st.GetExecutionAttempt(attempt.ID)
+	order, orderErr := st.GetOrderByAttempt(attempt.ID)
+	placeCalls, _, _ := execution.callCounts()
+	if err != nil || attemptErr != nil || orderErr != nil || row.Status != "executed" ||
+		current.State != "failed" || order.State != "rejected" || placeCalls != 0 {
+		t.Fatalf("operation=%+v attempt=%+v order=%+v calls=%d errors=%v/%v/%v",
+			row, current, order, placeCalls, err, attemptErr, orderErr)
+	}
+}
+
+type staleHaltCleanupStore struct{ storeAPI }
+
+func (s *staleHaltCleanupStore) ResolveAttempt(string, int, store.AttemptResolution) (bool, error) {
+	return false, nil
+}
+
+func TestHaltCleanupLostFencingDoesNotClaimDurableFailure(t *testing.T) {
+	s, st, execution, _, attempt := m11StagePendingEquityOpen(t)
+	s.store = &staleHaltCleanupStore{storeAPI: st}
+	if _, err := st.ActivateGlobalHalt("halt before stale cleanup", "admin:test", config.ModeLive); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.executePendingAttempt(context.Background(), attempt.ID)
+	if err == nil || !strings.Contains(err.Error(), "cleanup lost fencing") || errors.Is(err, errBrokerMutationFailed) {
+		t.Fatalf("err=%v, want explicit lost-fencing error without durable-failure claim", err)
+	}
+	current, attemptErr := st.GetExecutionAttempt(attempt.ID)
+	order, orderErr := st.GetOrderByAttempt(attempt.ID)
+	reservation, reservationErr := st.GetOpenReservation(attempt.OpenReservationID)
+	gate, gateErr := st.GetLiveExecutionGate()
+	placeCalls, _, _ := execution.callCounts()
+	if attemptErr != nil || orderErr != nil || reservationErr != nil || gateErr != nil ||
+		current.State != "claimed" || order.State != "new" || reservation.ResourceState != "held" ||
+		gate.ActiveAttemptID != attempt.ID || placeCalls != 0 {
+		t.Fatalf("attempt=%+v order=%+v reservation=%+v gate=%+v calls=%d errors=%v/%v/%v/%v",
+			current, order, reservation, gate, placeCalls, attemptErr, orderErr, reservationErr, gateErr)
+	}
+}
+
+func TestHaltReportsPreCutSentAttempt(t *testing.T) {
+	s, st, _, _, attempt := m11StagePendingEquityOpen(t)
+	claimed, err := st.ClaimPendingAttemptLive(attempt.ID, "pre-cut-worker")
+	if err != nil || claimed == nil {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	st.mu.Lock()
+	prepared := st.attempts[claimed.ID]
+	prepared.ProviderAccountID = s.mode.LiveAccountID
+	prepared.ProviderIntent = json.RawMessage(`{"kind":"equity"}`)
+	prepared.IntentFingerprint = make([]byte, sha256.Size)
+	st.attempts[claimed.ID] = prepared
+	st.mu.Unlock()
+	marked, err := st.MarkAttemptSent(claimed.ID, claimed.Attempt, false, 0, nil)
+	if err != nil || !marked {
+		t.Fatalf("marked=%v err=%v", marked, err)
+	}
+	response := routeRequest(s.routes(), http.MethodPost, "/halt", `{"reason":"pre-cut report"}`, "admin-secret")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), claimed.ID) ||
+		!strings.Contains(response.Body.String(), `"in_flight_attempt_state":"active"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestHaltCommitsWhilePreCutProviderCallIsBlocked(t *testing.T) {
+	s, _, venue := m11Server("1000")
+	blocked := newFirstBlockingExecution(venue)
+	s.account = venue
+	s.market = marketdata.NewFakeProvider(venue)
+	s.execution = blocked
+	handler := s.routes()
+	proposalDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		proposalDone <- routeRequestWithKey(handler, http.MethodPost, "/operations", m11OpenPayload("SPY", "35"),
+			"runtime-secret", "m11-pre-cut-blocked-provider")
+	}()
+	select {
+	case <-blocked.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider call did not start")
+	}
+	haltDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		haltDone <- routeRequest(handler, http.MethodPost, "/halt", `{"reason":"blocked provider cut"}`, "admin-secret")
+	}()
+	select {
+	case response := <-haltDone:
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"in_flight_attempt_state":"active"`) {
+			t.Fatalf("halt status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("halt waited for the Provider network call")
+	}
+	close(blocked.release)
+	select {
+	case response := <-proposalDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("proposal status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proposal did not finish after Provider release")
+	}
+}
+
+func TestRepeatedHaltReturnsOriginalCut(t *testing.T) {
+	s, _, _ := m11Server("1000")
+	handler := s.routes()
+	first := routeRequest(handler, http.MethodPost, "/halt", `{"reason":"first cut"}`, "admin-secret")
+	second := routeRequest(handler, http.MethodPost, "/halt", `{"reason":"replacement reason"}`, "admin-secret")
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("first=%d %s second=%d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+	var firstBody, secondBody map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondBody); err != nil {
+		t.Fatal(err)
+	}
+	if firstBody["event_id"] != secondBody["event_id"] || firstBody["cut_at"] != secondBody["cut_at"] ||
+		secondBody["reason"] != "first cut" {
+		t.Fatalf("first=%v second=%v", firstBody, secondBody)
 	}
 }
 

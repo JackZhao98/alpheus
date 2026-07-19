@@ -64,6 +64,7 @@ type memoryStore struct {
 	journalErr           error
 	halted               bool
 	haltReason           string
+	haltedAt             time.Time
 	proposalLockErr      error
 	m3aActive            bool
 	databaseNow          func() time.Time
@@ -224,6 +225,21 @@ func (g *memoryGate) LockLedgerSymbol(ledger, symbol string) error {
 	return nil
 }
 
+func (g *memoryGate) RequireLiveExecutionIdle(blockWhenHalted bool) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.liveUnknownAttemptID != "" {
+		return store.ErrLiveExecutionSuspended
+	}
+	if g.liveActiveAttemptID != "" {
+		return store.ErrLiveExecutionBusy
+	}
+	if blockWhenHalted && g.halted {
+		return store.ErrLiveSendHalted
+	}
+	return nil
+}
+
 func (g *memoryGate) release() {
 	for i := len(g.held) - 1; i >= 0; i-- {
 		g.held[i].Unlock()
@@ -242,6 +258,7 @@ func (m *memoryStore) InsertEvent(kind string, payload any) error {
 		if fields, ok := payload.(map[string]any); ok {
 			m.halted, _ = fields["halted"].(bool)
 			m.haltReason, _ = fields["reason"].(string)
+			m.haltedAt = time.Now().UTC()
 		}
 	}
 	return nil
@@ -254,6 +271,33 @@ func (m *memoryStore) InsertEventWithID(kind string, payload any) (int64, error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return int64(len(m.events)), nil
+}
+
+func (m *memoryStore) ActivateGlobalHalt(reason, _ string, _ string) (store.GlobalHaltTransition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.halted {
+		m.events = append(m.events, globalHaltEvent)
+		m.halted, m.haltReason = true, reason
+		m.haltedAt = time.Now().UTC()
+	}
+	transition := store.GlobalHaltTransition{
+		Reason: m.haltReason, EventID: int64(len(m.events)), CutAt: m.haltedAt,
+	}
+	if m.liveUnknownAttemptID != "" {
+		transition.InFlightAttemptID = m.liveUnknownAttemptID
+		transition.InFlightAttemptState = "unknown"
+	} else if attempt, ok := m.attempts[m.liveActiveAttemptID]; ok {
+		if !attempt.SentAt.IsZero() {
+			transition.InFlightAttemptID = attempt.ID
+			transition.InFlightAttemptState = "active"
+		} else {
+			transition.BlockedUnsentAttemptID = attempt.ID
+		}
+	} else if m.liveActiveAttemptID != "" {
+		transition.BlockedUnsentAttemptID = m.liveActiveAttemptID
+	}
+	return transition, nil
 }
 
 func (m *memoryStore) ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error) {
@@ -687,16 +731,34 @@ func (m *memoryStore) PrepareAttemptProviderIntent(id string, fencingToken int, 
 	return true, nil
 }
 
-func (m *memoryStore) MarkAttemptSent(id string, fencingToken int, replay bool) (bool, error) {
+func (m *memoryStore) MarkAttemptSent(id string, fencingToken int, replay bool, replayGuard time.Duration, replayEvidence *store.ProviderIntentEvidence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	attempt, ok := m.attempts[id]
 	if !ok || attempt.State != "claimed" || attempt.Attempt != fencingToken {
 		return false, nil
 	}
+	action := ""
+	if operation, exists := m.operations[attempt.OperationID]; exists {
+		action = operation.Action
+	}
+	if m.halted && (replay || (attempt.Intent == "place" && action == "open")) {
+		return false, store.ErrLiveSendHalted
+	}
 	if replay {
+		if replayEvidence == nil || replayEvidence.AccountID != attempt.ProviderAccountID ||
+			!bytes.Equal(replayEvidence.Canonical, attempt.ProviderIntent) ||
+			!bytes.Equal(replayEvidence.Fingerprint, attempt.IntentFingerprint) {
+			return false, nil
+		}
+		if replayGuard <= 0 {
+			return false, fmt.Errorf("replay guard must be positive")
+		}
 		if m.liveUnknownAttemptID != id || attempt.SentAt.IsZero() || attempt.ReplayCount != 0 {
 			return false, nil
+		}
+		if !time.Now().UTC().Add(replayGuard).Before(attempt.SendWindowEnd) {
+			return false, store.ErrReplayWindowExpired
 		}
 		attempt.ReplayCount++
 	} else {
@@ -770,7 +832,7 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 		return false, nil
 	}
 	if resolution.OrderUpdate != nil {
-		if err := m.applyMemoryOrderUpdateLocked(*resolution.OrderUpdate, false, true); err != nil {
+		if err := m.applyMemoryOrderUpdateLocked(*resolution.OrderUpdate, false, false); err != nil {
 			return false, err
 		}
 	}
@@ -800,9 +862,13 @@ func (m *memoryStore) ResolveAttempt(id string, fencingToken int, resolution sto
 		}
 	}
 	if resolution.OperationStatus != "" {
-		m.statuses[attempt.OperationID] = resolution.OperationStatus
+		operationStatus := resolution.OperationStatus
+		if operationStatus == "failed" {
+			operationStatus = m.operationStatusAfterFailedAttemptLocked(attempt.OperationID)
+		}
+		m.statuses[attempt.OperationID] = operationStatus
 		row := m.operationRows[attempt.OperationID]
-		row.Status = resolution.OperationStatus
+		row.Status = operationStatus
 		m.operationRows[attempt.OperationID] = row
 	}
 	if resolution.ReleaseReservation && attempt.CloseReservationID != "" {
@@ -964,6 +1030,9 @@ func (m *memoryStore) FinalizeRepriceCancel(cancelAttemptID string, fencingToken
 	if remaining < 0 {
 		return nil, store.ErrFillIntegrity
 	}
+	if m.operationStatusAfterFailedAttemptLocked(source.OperationID) == "executed" {
+		m.setMemoryOperationStatusLocked(source.OperationID, "executed")
+	}
 	if update.State == "filled" || remaining == 0 {
 		m.setMemoryOperationStatusLocked(source.OperationID, "executed")
 		return nil, nil
@@ -973,14 +1042,7 @@ func (m *memoryStore) FinalizeRepriceCancel(cancelAttemptID string, fencingToken
 			return nil, errors.New("terminal reprice cancel lacks policy reason")
 		}
 		m.releaseMemoryRepriceReservationLocked(placeAttempt)
-		status := "failed"
-		for _, fill := range m.fills {
-			order := m.orderByIDLocked(fill.orderID)
-			if order != nil && order.OperationID == source.OperationID {
-				status = "executed"
-				break
-			}
-		}
+		status := m.operationStatusAfterFailedAttemptLocked(source.OperationID)
 		m.setMemoryOperationStatusLocked(source.OperationID, status)
 		m.events = append(m.events, "order_expired_policy")
 		return nil, nil
@@ -1038,6 +1100,16 @@ func (m *memoryStore) setMemoryOperationStatusLocked(operationID, status string)
 	row := m.operationRows[operationID]
 	row.Status = status
 	m.operationRows[operationID] = row
+}
+
+func (m *memoryStore) operationStatusAfterFailedAttemptLocked(operationID string) string {
+	for _, fill := range m.fills {
+		order := m.orderByIDLocked(fill.orderID)
+		if order != nil && order.OperationID == operationID {
+			return "executed"
+		}
+	}
+	return "failed"
 }
 
 func (m *memoryStore) releaseMemoryRepriceReservationLocked(attempt store.ExecutionAttempt) {
@@ -1274,7 +1346,10 @@ func (m *memoryStore) applyMemoryOrderUpdateLocked(update store.OrderUpdate, pre
 			attempt.State = attemptState
 			m.attempts[attempt.ID] = attempt
 		}
-		m.statuses[order.OperationID] = operationStatus
+		if operationStatus == "failed" {
+			operationStatus = m.operationStatusAfterFailedAttemptLocked(order.OperationID)
+		}
+		m.setMemoryOperationStatusLocked(order.OperationID, operationStatus)
 	}
 	return nil
 }
@@ -1311,7 +1386,13 @@ func (m *memoryStore) FailPendingAttempt(id, reason string) (bool, error) {
 	attempt.State = "failed"
 	attempt.LastError = reason
 	m.attempts[id] = attempt
-	m.statuses[attempt.OperationID] = "failed"
+	m.setMemoryOperationStatusLocked(attempt.OperationID, m.operationStatusAfterFailedAttemptLocked(attempt.OperationID))
+	if order, ok := m.orders[id]; ok && order.State == "new" && order.BrokerOrderID == "" {
+		order.State = "rejected"
+		order.UpdatedAt = time.Now().UTC()
+		m.orders[id] = order
+		m.events = append(m.events, "order_update")
+	}
 	if attempt.CloseReservationID != "" {
 		reservation := m.reservations[attempt.CloseReservationID]
 		reservation.State = "released"

@@ -144,6 +144,12 @@ func (s *Store) ApplyOrderUpdate(update OrderUpdate) error {
 		return s.recordOrderUpdateFailure(update, err)
 	}
 	if terminalAttemptState, operationStatus := terminalPlacementState(update.State); terminalAttemptState != "" {
+		if operationStatus == "failed" {
+			operationStatus, err = operationStatusAfterFailedAttempt(ctx, tx, order.OperationID)
+			if err != nil {
+				return normalizeDBError(err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE execution_attempt
 			SET state=$1,resolved_at=now(),last_error=NULL
 			WHERE id=$2 AND state='placed'`, terminalAttemptState, order.ExecutionAttemptID); err != nil {
@@ -154,6 +160,24 @@ func (s *Store) ApplyOrderUpdate(update OrderUpdate) error {
 		}
 	}
 	return normalizeDBError(tx.Commit())
+}
+
+// operationStatusAfterFailedAttempt preserves the broker fact represented by
+// any durable fill. A later rejected, cancelled, expired, or unsent remainder
+// may fail, but it must not rewrite the parent operation as though no execution
+// ever occurred.
+func operationStatusAfterFailedAttempt(ctx context.Context, tx *sql.Tx, operationID string) (string, error) {
+	var hasFills bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM fills f JOIN orders o ON o.id=f.order_id
+		WHERE o.operation_id=$1
+	)`, operationID).Scan(&hasFills); err != nil {
+		return "", err
+	}
+	if hasFills {
+		return "executed", nil
+	}
+	return "failed", nil
 }
 
 func terminalPlacementState(orderState string) (string, string) {
@@ -417,13 +441,29 @@ func (s *Store) recordIntegrityFailure(kind string, payload map[string]any, caus
 		return errors.Join(cause, normalizeDBError(err))
 	}
 	defer tx.Rollback()
-	if err := insertEvent(ctx, tx, kind, payload); err != nil {
+	// Integrity-triggered Halt is the same database cut as POST /halt. Without
+	// this lock, another Kernel could authorize an open send after the integrity
+	// failure was known but before its Halt event committed.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
 		return errors.Join(cause, normalizeDBError(err))
 	}
-	if err := insertEvent(ctx, tx, "global_halt_transition", map[string]any{
-		"halted": true, "reason": cause.Error(),
-	}); err != nil {
+	var cutAt time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&cutAt); err != nil {
 		return errors.Join(cause, normalizeDBError(err))
+	}
+	if err := insertEventAt(ctx, tx, kind, payload, cutAt); err != nil {
+		return errors.Join(cause, normalizeDBError(err))
+	}
+	halted, _, _, _, err := loadGlobalHalt(ctx, tx)
+	if err != nil {
+		return errors.Join(cause, normalizeDBError(err))
+	}
+	if !halted {
+		if err := insertEventAt(ctx, tx, "global_halt_transition", map[string]any{
+			"halted": true, "reason": cause.Error(),
+		}, cutAt); err != nil {
+			return errors.Join(cause, normalizeDBError(err))
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return errors.Join(cause, normalizeDBError(err))
