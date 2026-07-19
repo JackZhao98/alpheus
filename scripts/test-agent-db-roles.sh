@@ -13,6 +13,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$ARTIFACT_DIR"
+rm -f "$ARTIFACT_DIR/summary.json" "$ARTIFACT_DIR/junit.xml"
 docker run --detach --rm --name "$CONTAINER" \
 	--env POSTGRES_PASSWORD=probe --env POSTGRES_DB=probe "$IMAGE" \
 	>"$ARTIFACT_DIR/container-id.txt"
@@ -43,6 +44,10 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	>"$ARTIFACT_DIR/roles-install.txt" 2>&1
 docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe \
+	<"$ROOT/audit/repro/ap0_login_roles.sql" \
+	>"$ARTIFACT_DIR/login-roles-install.txt" 2>&1
+docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
+	--username postgres --dbname probe \
 	<"$ROOT/agent-platform/migrations/0001_delivery.sql" \
 	>"$ARTIFACT_DIR/delivery-migration.txt" 2>&1
 docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
@@ -55,7 +60,7 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	>"$ARTIFACT_DIR/role-probes.txt" 2>&1
 
 docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
-	--username postgres --dbname probe --command \
+	--username control-1 --dbname probe --command \
 	"SET ROLE alpheus_agent_control_api; SELECT agent_control.enqueue_outbox(
 	    'concurrent-' || value, 'concurrent', 'agent_control', 100 + value,
 	    'probe_event', repeat('e', 64), 'concurrent-cause', 'concurrent-run',
@@ -66,7 +71,7 @@ docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 pids=""
 for worker in 1 2 3 4 5 6 7 8; do
 	docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
-		--username postgres --dbname probe --command \
+		--username dispatcher-1 --dbname probe --command \
 		"SET ROLE alpheus_agent_delivery_dispatcher; SELECT event_id FROM agent_control.claim_outbox(
 		    'concurrent-dispatcher-$worker', 'concurrent', 20, 30
 		 ); RESET ROLE;" \
@@ -92,8 +97,8 @@ if [ "$(tr -d '[:space:]' <"$ARTIFACT_DIR/concurrent-result.txt")" != "t" ]; the
 	exit 1
 fi
 
-printf '{"status":"PASS","probe":"ap0-delivery-roles","postgres_image":"%s","concurrent_events":20,"claimers":8}\n' "$IMAGE" \
+printf '{"status":"PASS","probe":"ap0-delivery-roles","postgres_image":"%s","session_identity":true,"inbox_envelope_binding":true,"inbox_active_lease_fence":true,"policy_actor_binding":true,"concurrent_events":20,"claimers":8}\n' "$IMAGE" \
 	>"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="ap0-delivery-roles" tests="4" failures="0"><testcase name="role-isolation"/><testcase name="idempotency"/><testcase name="quarantine-replay"/><testcase name="concurrent-claim"/></testsuite>\n' \
+printf '<testsuite name="ap0-delivery-roles" tests="9" failures="0"><testcase name="role-isolation"/><testcase name="session-identity"/><testcase name="inbox-envelope-binding"/><testcase name="inbox-cross-destination-denied"/><testcase name="inbox-unclaimed-denied"/><testcase name="policy-actor-binding"/><testcase name="idempotency"/><testcase name="quarantine-replay"/><testcase name="concurrent-claim"/></testsuite>\n' \
 	>"$ARTIFACT_DIR/junit.xml"
 echo "PASS probe=ap0-delivery-roles artifacts=$ARTIFACT_DIR concurrent_events=20 claimers=8"

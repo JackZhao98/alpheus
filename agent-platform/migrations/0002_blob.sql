@@ -42,6 +42,7 @@ WHERE singleton;
 CREATE TABLE blob.blob_stage (
     stage_id UUID PRIMARY KEY,
     principal_id TEXT NOT NULL CHECK (principal_id <> '' AND principal_id !~ '[[:space:][:cntrl:]]'),
+    issuer_owner TEXT NOT NULL CHECK (issuer_owner IN ('agent_control', 'research_gateway')),
     media_type TEXT NOT NULL CHECK (media_type = lower(media_type) AND length(media_type) <= 200),
     max_bytes_snapshot BIGINT NOT NULL CHECK (max_bytes_snapshot BETWEEN 1 AND 1073741824),
     expected_digest CHAR(64) CHECK (expected_digest ~ '^[0-9a-f]{64}$'),
@@ -201,9 +202,13 @@ AS $$
 DECLARE
     previous blob.storage_policy%ROWTYPE;
     changed_at TIMESTAMPTZ;
+    invoker RECORD;
 BEGIN
-    IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
-       OR p_allowed_media_types IS NULL OR cardinality(p_allowed_media_types) NOT BETWEEN 1 AND 256
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob policy identity denied';
+    END IF;
+    IF p_allowed_media_types IS NULL OR cardinality(p_allowed_media_types) NOT BETWEEN 1 AND 256
        OR EXISTS (SELECT 1 FROM unnest(p_allowed_media_types) AS media(value)
                   WHERE value = '' OR value <> lower(value) OR length(value) > 200) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid blob policy update';
@@ -222,13 +227,13 @@ BEGIN
         max_gc_lease_seconds = p_max_gc_lease_seconds,
         allowed_media_types = p_allowed_media_types,
         updated_at = changed_at,
-        updated_by = p_actor
+        updated_by = invoker.principal_id
     WHERE singleton;
     INSERT INTO blob.storage_policy_event (previous_policy, new_policy, changed_at, changed_by)
-    SELECT to_jsonb(previous), to_jsonb(policy), changed_at, p_actor
+    SELECT to_jsonb(previous), to_jsonb(policy), changed_at, invoker.principal_id
     FROM blob.storage_policy AS policy WHERE singleton;
     RETURN changed_at;
-END
+END;
 $$;
 
 CREATE FUNCTION blob.begin_stage(
@@ -250,10 +255,17 @@ DECLARE
     existing blob.blob_stage%ROWTYPE;
     inserted BOOLEAN;
     created TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN ('alpheus_agent_control_api', 'alpheus_research_gateway')
+       OR invoker.owner_id NOT IN ('agent_control', 'research_gateway')
+       OR p_principal_id IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob stage identity denied';
+    END IF;
     SELECT * INTO STRICT policy FROM blob.storage_policy WHERE singleton;
-    IF p_stage_id IS NULL OR p_principal_id IS NULL OR p_principal_id = '' OR p_principal_id ~ '[[:space:][:cntrl:]]'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
+    IF p_stage_id IS NULL
        OR p_media_type IS NULL OR p_media_type <> lower(p_media_type) OR NOT p_media_type = ANY(policy.allowed_media_types)
        OR p_requested_max_bytes < 1 OR p_requested_max_bytes > policy.max_blob_bytes
        OR p_ttl_seconds < 1 OR p_ttl_seconds > policy.stage_ttl_seconds
@@ -262,16 +274,17 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid blob stage request';
     END IF;
     INSERT INTO blob.blob_stage (
-        stage_id, principal_id, media_type, max_bytes_snapshot,
+        stage_id, principal_id, issuer_owner, media_type, max_bytes_snapshot,
         expected_digest, expected_size_bytes, created_at, expires_at
     ) VALUES (
-        p_stage_id, p_principal_id, p_media_type, p_requested_max_bytes,
+        p_stage_id, invoker.principal_id, invoker.owner_id, p_media_type, p_requested_max_bytes,
         p_expected_digest, p_expected_size_bytes, created, created + make_interval(secs => p_ttl_seconds)
     ) ON CONFLICT ON CONSTRAINT blob_stage_pkey DO NOTHING
     RETURNING true INTO inserted;
     SELECT * INTO STRICT existing FROM blob.blob_stage AS candidate WHERE candidate.stage_id = p_stage_id;
     IF NOT coalesce(inserted, false) AND NOT (
-        existing.principal_id = p_principal_id AND existing.media_type = p_media_type
+        existing.principal_id = invoker.principal_id AND existing.issuer_owner = invoker.owner_id
+        AND existing.media_type = p_media_type
         AND existing.max_bytes_snapshot = p_requested_max_bytes
         AND existing.expected_digest IS NOT DISTINCT FROM p_expected_digest
         AND existing.expected_size_bytes IS NOT DISTINCT FROM p_expected_size_bytes
@@ -282,10 +295,10 @@ BEGIN
     IF inserted THEN
         INSERT INTO blob.lifecycle_event (
             subject_kind, subject_id, transition, generation, actor, reason_code
-        ) VALUES ('stage', p_stage_id::text, 'staged', 1, p_actor, 'stage_opened');
+        ) VALUES ('stage', p_stage_id::text, 'staged', 1, invoker.principal_id, 'stage_opened');
     END IF;
     RETURN QUERY SELECT existing.stage_id, existing.max_bytes_snapshot, existing.created_at, existing.expires_at;
-END
+END;
 $$;
 
 CREATE FUNCTION blob.record_stage_facts(
@@ -303,22 +316,30 @@ DECLARE
     staged blob.blob_stage%ROWTYPE;
     content_ready BOOLEAN;
     now_at TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
-    IF p_principal_id IS NULL OR p_principal_id = '' OR p_principal_id ~ '[[:space:][:cntrl:]]'
-       OR p_content_digest IS NULL OR p_content_digest !~ '^[0-9a-f]{64}$'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN ('alpheus_agent_control_api', 'alpheus_research_gateway')
+       OR invoker.owner_id NOT IN ('agent_control', 'research_gateway')
+       OR p_principal_id IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'staged blob identity denied';
+    END IF;
+    IF p_content_digest IS NULL OR p_content_digest !~ '^[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid staged blob facts';
     END IF;
     SELECT * INTO STRICT staged FROM blob.blob_stage AS candidate
     WHERE candidate.stage_id = p_stage_id FOR UPDATE;
     IF staged.state = 'materialized' THEN
-        IF staged.principal_id <> p_principal_id OR staged.content_digest <> p_content_digest
+        IF staged.principal_id <> invoker.principal_id OR staged.issuer_owner <> invoker.owner_id
+           OR staged.content_digest <> p_content_digest
            OR staged.size_bytes <> p_size_bytes THEN
             RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'staged blob facts conflict';
         END IF;
         RETURN false;
     END IF;
-    IF staged.state <> 'open' OR staged.expires_at <= now_at OR staged.principal_id <> p_principal_id
+    IF staged.state <> 'open' OR staged.expires_at <= now_at
+       OR staged.principal_id <> invoker.principal_id OR staged.issuer_owner <> invoker.owner_id
        OR p_size_bytes < 1 OR p_size_bytes > staged.max_bytes_snapshot
        OR (staged.expected_digest IS NOT NULL AND staged.expected_digest <> p_content_digest)
        OR (staged.expected_size_bytes IS NOT NULL AND staged.expected_size_bytes <> p_size_bytes) THEN
@@ -378,14 +399,17 @@ DECLARE
     new_blob_id UUID;
     committed TIMESTAMPTZ := clock_timestamp();
     content_ready BOOLEAN;
+    invoker RECORD;
 BEGIN
-    IF p_principal_id IS NULL OR p_principal_id = '' OR p_principal_id ~ '[[:space:][:cntrl:]]'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
-       OR p_content_digest IS NULL OR p_content_digest !~ '^[0-9a-f]{64}$'
-       OR p_origin_owner NOT IN (
-            'agent_control', 'blob', 'delegation', 'grace', 'kernel',
-            'platform_governance', 'research_gateway', 'worker'
-       )
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN ('alpheus_agent_control_api', 'alpheus_research_gateway')
+       OR invoker.owner_id NOT IN ('agent_control', 'research_gateway')
+       OR p_principal_id IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id
+       OR p_origin_owner IS DISTINCT FROM invoker.owner_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob commit identity denied';
+    END IF;
+    IF p_content_digest IS NULL OR p_content_digest !~ '^[0-9a-f]{64}$'
        OR p_origin_record_type !~ '^[a-z][a-z0-9_]{0,63}$'
        OR p_origin_record_id IS NULL OR p_origin_record_id = '' OR p_origin_record_id ~ '[[:space:][:cntrl:]]'
        OR p_origin_record_digest IS NULL OR p_origin_record_digest !~ '^[0-9a-f]{64}$' THEN
@@ -395,8 +419,9 @@ BEGIN
     WHERE candidate.stage_id = p_stage_id FOR UPDATE;
     IF staged.state = 'committed' THEN
         SELECT * INTO STRICT existing FROM blob.blob_object AS object WHERE object.stage_id = p_stage_id;
-        IF staged.principal_id <> p_principal_id OR staged.content_digest <> p_content_digest
-           OR staged.size_bytes <> p_size_bytes OR existing.origin_owner <> p_origin_owner
+        IF staged.principal_id <> invoker.principal_id OR staged.issuer_owner <> invoker.owner_id
+           OR staged.content_digest <> p_content_digest
+           OR staged.size_bytes <> p_size_bytes OR existing.origin_owner <> invoker.owner_id
            OR existing.origin_record_type <> p_origin_record_type OR existing.origin_record_id <> p_origin_record_id
            OR existing.origin_record_digest <> p_origin_record_digest THEN
             RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'blob commit identity conflict';
@@ -405,7 +430,8 @@ BEGIN
             existing.size_bytes, existing.committed_at;
         RETURN;
     END IF;
-    IF staged.state <> 'materialized' OR staged.expires_at <= committed OR staged.principal_id <> p_principal_id
+    IF staged.state <> 'materialized' OR staged.expires_at <= committed
+       OR staged.principal_id <> invoker.principal_id OR staged.issuer_owner <> invoker.owner_id
        OR staged.content_digest <> p_content_digest OR staged.size_bytes <> p_size_bytes THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'blob stage cannot commit';
     END IF;
@@ -429,7 +455,7 @@ BEGIN
         state, committed_at
     ) VALUES (
         new_blob_id, p_stage_id, p_content_digest, staged.media_type, p_size_bytes,
-        p_origin_owner, p_origin_record_type, p_origin_record_id, p_origin_record_digest,
+        invoker.owner_id, p_origin_record_type, p_origin_record_id, p_origin_record_digest,
         'committed', committed
     );
     UPDATE blob.blob_stage
@@ -440,7 +466,7 @@ BEGIN
         subject_kind, subject_id, transition, generation, actor, occurred_at, reason_code,
         details
     ) VALUES (
-        'blob', new_blob_id::text, 'committed', 1, p_actor, committed, 'stage_committed',
+        'blob', new_blob_id::text, 'committed', 1, invoker.principal_id, committed, 'stage_committed',
         jsonb_build_object('stage_id', p_stage_id, 'content_digest', p_content_digest)
     );
     RETURN QUERY SELECT new_blob_id, p_content_digest, staged.media_type, p_size_bytes, committed;
@@ -487,7 +513,11 @@ BEGIN
     PERFORM 1
     FROM blob.blob_content AS content
     JOIN blob.blob_object AS object ON object.content_digest = content.content_digest
+    JOIN blob.blob_stage AS stage ON stage.stage_id = object.stage_id
     WHERE object.blob_id = p_blob_id AND object.state = 'committed' AND content.state = 'committed'
+      AND object.origin_owner = p_reference_owner
+      AND stage.issuer_owner = p_reference_owner
+      AND stage.principal_id = p_owner_principal
     FOR UPDATE OF content;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'blob is not referenceable';
@@ -533,15 +563,26 @@ CREATE FUNCTION blob.bind_agent_control_reference(
     p_owner_principal TEXT, p_access_class TEXT,
     p_retention_until TIMESTAMPTZ, p_actor TEXT
 ) RETURNS BOOLEAN
-LANGUAGE SQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, blob
 AS $$
-    SELECT blob.bind_reference_internal(
+DECLARE
+    invoker RECORD;
+BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_control_api'
+       OR invoker.owner_id <> 'agent_control'
+       OR p_owner_principal IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'agent-control blob binding identity denied';
+    END IF;
+    RETURN blob.bind_reference_internal(
         'agent_control', p_binding_id, p_blob_id, p_reference_record_type,
-        p_reference_record_id, p_reference_record_digest, p_owner_principal,
-        p_access_class, p_retention_until, p_actor
-    )
+        p_reference_record_id, p_reference_record_digest, invoker.principal_id,
+        p_access_class, p_retention_until, invoker.principal_id
+    );
+END;
 $$;
 
 CREATE FUNCTION blob.bind_research_gateway_reference(
@@ -550,15 +591,26 @@ CREATE FUNCTION blob.bind_research_gateway_reference(
     p_owner_principal TEXT, p_access_class TEXT,
     p_retention_until TIMESTAMPTZ, p_actor TEXT
 ) RETURNS BOOLEAN
-LANGUAGE SQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, blob
 AS $$
-    SELECT blob.bind_reference_internal(
+DECLARE
+    invoker RECORD;
+BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_research_gateway'
+       OR invoker.owner_id <> 'research_gateway'
+       OR p_owner_principal IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'research blob binding identity denied';
+    END IF;
+    RETURN blob.bind_reference_internal(
         'research_gateway', p_binding_id, p_blob_id, p_reference_record_type,
-        p_reference_record_id, p_reference_record_digest, p_owner_principal,
-        p_access_class, p_retention_until, p_actor
-    )
+        p_reference_record_id, p_reference_record_digest, invoker.principal_id,
+        p_access_class, p_retention_until, invoker.principal_id
+    );
+END;
 $$;
 
 CREATE FUNCTION blob.change_acl_internal(
@@ -580,13 +632,19 @@ DECLARE
     access blob.blob_acl%ROWTYPE;
     next_generation BIGINT;
     now_at TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
-    IF p_reference_owner NOT IN ('agent_control', 'research_gateway')
-       OR p_owner_principal IS NULL OR p_owner_principal = '' OR p_owner_principal ~ '[[:space:][:cntrl:]]'
-       OR p_grantee_principal IS NULL OR p_grantee_principal = '' OR p_grantee_principal ~ '[[:space:][:cntrl:]]'
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN ('alpheus_agent_control_api', 'alpheus_research_gateway')
+       OR invoker.owner_id NOT IN ('agent_control', 'research_gateway')
+       OR p_reference_owner IS DISTINCT FROM invoker.owner_id
+       OR p_owner_principal IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob ACL identity denied';
+    END IF;
+    IF p_grantee_principal IS NULL OR p_grantee_principal = '' OR p_grantee_principal ~ '[[:space:][:cntrl:]]'
        OR p_grantee_principal = p_owner_principal OR p_action NOT IN ('grant', 'revoke')
-       OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
+       OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid blob ACL change';
     END IF;
     SELECT * INTO STRICT reference FROM blob.blob_reference AS binding
@@ -625,7 +683,7 @@ BEGIN
             details
         ) VALUES (
             'acl', p_binding_id || ':' || p_grantee_principal, 'acl_granted',
-            next_generation, p_actor, p_reason_code,
+            next_generation, invoker.principal_id, p_reason_code,
             jsonb_build_object('binding_id', p_binding_id, 'principal_id', p_grantee_principal)
         );
     ELSE
@@ -642,7 +700,7 @@ BEGIN
             details
         ) VALUES (
             'acl', p_binding_id || ':' || p_grantee_principal, 'acl_revoked',
-            next_generation, p_actor, p_reason_code,
+            next_generation, invoker.principal_id, p_reason_code,
             jsonb_build_object('binding_id', p_binding_id, 'principal_id', p_grantee_principal)
         );
     END IF;
@@ -696,10 +754,17 @@ SET search_path = pg_catalog, blob
 AS $$
 DECLARE
     next_generation BIGINT;
+    invoker RECORD;
 BEGIN
-    IF p_reference_owner NOT IN ('agent_control', 'research_gateway')
-       OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN ('alpheus_agent_control_api', 'alpheus_research_gateway')
+       OR invoker.owner_id NOT IN ('agent_control', 'research_gateway')
+       OR p_reference_owner IS DISTINCT FROM invoker.owner_id
+       OR p_owner_principal IS DISTINCT FROM invoker.principal_id
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob release identity denied';
+    END IF;
+    IF p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid blob reference release';
     END IF;
     UPDATE blob.blob_reference
@@ -714,7 +779,7 @@ BEGIN
     INSERT INTO blob.lifecycle_event (
         subject_kind, subject_id, transition, generation, actor, reason_code
     ) VALUES (
-        'binding', p_binding_id, 'reference_released', next_generation, p_actor, p_reason_code
+        'binding', p_binding_id, 'reference_released', next_generation, invoker.principal_id, p_reason_code
     );
     RETURN next_generation;
 END
@@ -758,10 +823,20 @@ CREATE FUNCTION blob.authorize_read(
     authorized_at TIMESTAMPTZ,
     valid_until TIMESTAMPTZ
 )
-LANGUAGE SQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, blob
 AS $$
+DECLARE
+    invoker RECORD;
+BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT NOT IN (
+        'alpheus_agent_control_api', 'alpheus_agent_worker', 'alpheus_research_gateway'
+    ) OR p_principal_id IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'blob read identity denied';
+    END IF;
+    RETURN QUERY
     SELECT 1::smallint, object.blob_id, object.content_digest::text,
         object.media_type, object.size_bytes, object.origin_owner,
         object.origin_record_type, object.origin_record_id,
@@ -781,17 +856,18 @@ AS $$
       AND object.state = 'committed'
       AND content.state = 'committed'
       AND (
-          reference.owner_principal = p_principal_id
+          reference.owner_principal = invoker.principal_id
           OR (
               reference.access_class = 'explicit'
               AND EXISTS (
                   SELECT 1 FROM blob.blob_acl AS acl
                   WHERE acl.binding_id = reference.binding_id
-                    AND acl.principal_id = p_principal_id
+                    AND acl.principal_id = invoker.principal_id
                     AND acl.state = 'active'
               )
           )
-      )
+      );
+END;
 $$;
 
 CREATE FUNCTION blob.claim_stage_gc(
@@ -805,10 +881,14 @@ SET search_path = pg_catalog, blob
 AS $$
 DECLARE
     policy blob.storage_policy%ROWTYPE;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_worker_id IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'stage GC identity denied';
+    END IF;
     SELECT * INTO STRICT policy FROM blob.storage_policy WHERE singleton;
-    IF p_worker_id IS NULL OR p_worker_id = '' OR p_worker_id ~ '[[:space:][:cntrl:]]'
-       OR p_limit < 1 OR p_limit > policy.max_gc_batch
+    IF p_limit < 1 OR p_limit > policy.max_gc_batch
        OR p_lease_seconds < 1 OR p_lease_seconds > policy.max_gc_lease_seconds THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid stage GC claim';
     END IF;
@@ -847,9 +927,11 @@ SET search_path = pg_catalog, blob
 AS $$
 DECLARE
     changed INTEGER;
+    invoker RECORD;
 BEGIN
-    IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
-        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid stage GC actor';
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'stage GC identity denied';
     END IF;
     UPDATE blob.blob_stage
     SET state = CASE WHEN cleanup_previous_state IN ('open', 'materialized') THEN 'aborted' ELSE 'cleaned' END,
@@ -861,7 +943,7 @@ BEGIN
     END IF;
     INSERT INTO blob.lifecycle_event (
         subject_kind, subject_id, transition, generation, actor, reason_code
-    ) VALUES ('stage', p_stage_id::text, 'deleted', 1, p_actor, 'staged_bytes_removed');
+    ) VALUES ('stage', p_stage_id::text, 'deleted', 1, invoker.principal_id, 'staged_bytes_removed');
     RETURN true;
 END
 $$;
@@ -885,10 +967,14 @@ DECLARE
     candidate RECORD;
     token UUID;
     expires TIMESTAMPTZ;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_worker_id IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'content GC identity denied';
+    END IF;
     SELECT * INTO STRICT policy FROM blob.storage_policy WHERE singleton;
-    IF p_worker_id IS NULL OR p_worker_id = '' OR p_worker_id ~ '[[:space:][:cntrl:]]'
-       OR p_limit < 1 OR p_limit > policy.max_gc_batch
+    IF p_limit < 1 OR p_limit > policy.max_gc_batch
        OR p_lease_seconds < 1 OR p_lease_seconds > policy.max_gc_lease_seconds THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid content GC claim';
     END IF;
@@ -936,7 +1022,7 @@ BEGIN
             subject_kind, subject_id, transition, generation, actor, reason_code
         ) VALUES (
             'blob', candidate.content_digest::text, 'gc_claimed', 1,
-            p_worker_id, 'committed_orphan_claimed'
+            invoker.principal_id, 'committed_orphan_claimed'
         );
         content_digest := candidate.content_digest::text;
         size_bytes := candidate.size_bytes;
@@ -959,9 +1045,13 @@ AS $$
 DECLARE
     changed INTEGER;
     deleted_time TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
-    IF p_content_digest !~ '^[0-9a-f]{64}$'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'content GC identity denied';
+    END IF;
+    IF p_content_digest !~ '^[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid content GC completion';
     END IF;
     UPDATE blob.blob_content
@@ -977,7 +1067,7 @@ BEGIN
     INSERT INTO blob.lifecycle_event (
         subject_kind, subject_id, transition, generation, actor, occurred_at, reason_code
     ) VALUES (
-        'blob', p_content_digest, 'deleted', 1, p_actor, deleted_time, 'committed_orphan_removed'
+        'blob', p_content_digest, 'deleted', 1, invoker.principal_id, deleted_time, 'committed_orphan_removed'
     );
     RETURN true;
 END
@@ -994,9 +1084,13 @@ SET search_path = pg_catalog, blob
 AS $$
 DECLARE
     changed INTEGER;
+    invoker RECORD;
 BEGIN
-    IF p_content_digest !~ '^[0-9a-f]{64}$' OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$'
-       OR p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_blob_gc' OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'content quarantine identity denied';
+    END IF;
+    IF p_content_digest !~ '^[0-9a-f]{64}$' OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid content quarantine';
     END IF;
     UPDATE blob.blob_content
@@ -1012,7 +1106,7 @@ BEGIN
     WHERE content_digest = p_content_digest AND state IN ('committed', 'deleting');
     INSERT INTO blob.lifecycle_event (
         subject_kind, subject_id, transition, generation, actor, reason_code
-    ) VALUES ('blob', p_content_digest, 'quarantined', 1, p_actor, p_reason_code);
+    ) VALUES ('blob', p_content_digest, 'quarantined', 1, invoker.principal_id, p_reason_code);
     RETURN true;
 END
 $$;

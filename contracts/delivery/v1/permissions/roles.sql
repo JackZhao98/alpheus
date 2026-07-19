@@ -26,7 +26,8 @@ GRANT SELECT ON agent_control.delivery_health TO alpheus_agent_diagnostics;
 
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
     ON ALL TABLES IN SCHEMA agent_control
-    FROM alpheus_agent_worker, alpheus_research_gateway, alpheus_grace_intake,
+    FROM alpheus_agent_control_api, alpheus_agent_delivery_repair,
+         alpheus_agent_worker, alpheus_research_gateway, alpheus_grace_intake,
          alpheus_grace_engine, alpheus_delegation_engine, alpheus_agent_validator,
          alpheus_agent_activator, alpheus_agent_web, alpheus_agent_diagnostics,
          alpheus_agent_delivery_dispatcher;

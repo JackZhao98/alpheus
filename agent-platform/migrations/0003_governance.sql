@@ -9,6 +9,55 @@ BEGIN
 END
 $$;
 
+-- This is an installation property, not an operator-selectable policy.  Only
+-- the migrator owns the row; ordinary governance functions may read it but no
+-- platform profile may raise it.  A later deployment can change the ceiling
+-- only through an explicit migrator-owned installation migration.
+CREATE TABLE platform_governance.installation_ceiling (
+    ceiling_id TEXT PRIMARY KEY CHECK (ceiling_id = 'global'),
+    schema_revision SMALLINT NOT NULL CHECK (schema_revision = 1),
+    mode_ceiling TEXT NOT NULL CHECK (mode_ceiling IN (
+        'disabled', 'read_only', 'shadow', 'live_confirmed', 'live_autonomous'
+    )),
+    effect_ceiling TEXT NOT NULL CHECK (effect_ceiling IN (
+        'none', 'external_read', 'operation_intent', 'exact_confirmation', 'broker_mutation'
+    )),
+    installed_by NAME NOT NULL,
+    installed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+INSERT INTO platform_governance.installation_ceiling (
+    ceiling_id, schema_revision, mode_ceiling, effect_ceiling, installed_by
+) VALUES ('global', 1, 'read_only', 'external_read', current_user);
+
+-- Fixed lock rows serialize each governance subject without exposing a
+-- predictable pg_advisory_lock key to every database LOGIN. Only definer
+-- functions owned by the migrator may lock these rows.
+CREATE TABLE platform_governance.governance_subject_lock (
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('platform_mode', 'effect_class', 'kill_switch')),
+    subject_id TEXT NOT NULL CHECK (subject_id <> '' AND subject_id !~ '[[:space:][:cntrl:]]'),
+    PRIMARY KEY (subject_kind, subject_id)
+);
+
+INSERT INTO platform_governance.governance_subject_lock (subject_kind, subject_id) VALUES
+    ('platform_mode', 'global'),
+    ('effect_class', 'external_read'),
+    ('effect_class', 'operation_intent'),
+    ('effect_class', 'exact_confirmation'),
+    ('effect_class', 'broker_mutation'),
+    ('kill_switch', 'agent_operation_emission'),
+    ('kill_switch', 'agent_release_activation'),
+    ('kill_switch', 'autonomous_live'),
+    ('kill_switch', 'capability_external_execution'),
+    ('kill_switch', 'delegation_activation'),
+    ('kill_switch', 'exact_confirmation_live'),
+    ('kill_switch', 'grace_publication'),
+    ('kill_switch', 'product_crypto'),
+    ('kill_switch', 'product_equity'),
+    ('kill_switch', 'product_option'),
+    ('kill_switch', 'shadow_integration'),
+    ('kill_switch', 'strategy_activation');
+
 CREATE TABLE platform_governance.platform_mode_revision (
     revision_id UUID PRIMARY KEY,
     schema_revision SMALLINT NOT NULL CHECK (schema_revision = 1),
@@ -206,30 +255,36 @@ SET search_path = pg_catalog, platform_governance
 AS $$
 DECLARE
     created TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
     IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
        OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$'
        OR p_revision_digest !~ '^[0-9a-f]{64}$' OR p_generation <= 0 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid governance revision';
+    END IF;
+    IF invoker.group_role <> 'alpheus_platform_owner'::name
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'governance actor does not match authenticated owner';
     END IF;
     IF p_target_kind = 'platform_mode' AND p_target_id = 'global' AND p_state IS NULL THEN
         INSERT INTO platform_governance.platform_mode_revision (
             revision_id, schema_revision, generation, mode, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, p_generation, p_value, p_revision_digest,
-            p_actor, 'user', 'activator', p_reason_code, created);
+            invoker.principal_id, 'user', 'activator', p_reason_code, created);
     ELSIF p_target_kind = 'effect_class' AND p_target_id = p_value THEN
         INSERT INTO platform_governance.effect_class_revision (
             revision_id, schema_revision, generation, effect_class, state, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, p_generation, p_value, p_state, p_revision_digest,
-            p_actor, 'user', 'activator', p_reason_code, created);
+            invoker.principal_id, 'user', 'activator', p_reason_code, created);
     ELSIF p_target_kind = 'kill_switch' AND p_target_id = p_value THEN
         INSERT INTO platform_governance.kill_switch_revision (
             revision_id, schema_revision, generation, switch_id, state, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, p_generation, p_value, p_state, p_revision_digest,
-            p_actor, 'user', 'activator', p_reason_code, created);
+            invoker.principal_id, 'user', 'activator', p_reason_code, created);
     ELSE
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid governance revision target';
     END IF;
@@ -261,7 +316,12 @@ SET search_path = pg_catalog, platform_governance
 AS $$
 DECLARE
     candidate_matches BOOLEAN := false;
+    candidate_value TEXT;
+    candidate_state TEXT;
+    installed platform_governance.installation_ceiling%ROWTYPE;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
     IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
        OR p_receipt_digest !~ '^[0-9a-f]{64}$' OR p_request_digest !~ '^[0-9a-f]{64}$'
        OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$'
@@ -269,6 +329,29 @@ BEGIN
        OR p_issued_at > clock_timestamp() OR p_expires_at <= clock_timestamp()
        OR p_expires_at > p_issued_at + interval '1 hour' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid activation receipt';
+    END IF;
+    IF invoker.group_role <> 'alpheus_platform_owner'::name
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'receipt actor does not match authenticated owner';
+    END IF;
+    IF p_deployment_mode_ceiling IS NULL
+       OR p_deployment_effect_ceiling IS NULL
+       OR p_deployment_mode_ceiling NOT IN (
+           'disabled', 'read_only', 'shadow', 'live_confirmed', 'live_autonomous'
+       ) OR p_deployment_effect_ceiling NOT IN (
+           'none', 'external_read', 'operation_intent', 'exact_confirmation', 'broker_mutation'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid asserted deployment ceiling';
+    END IF;
+    SELECT * INTO STRICT installed
+    FROM platform_governance.installation_ceiling
+    WHERE ceiling_id = 'global'
+    FOR SHARE;
+    IF platform_governance.mode_rank(p_deployment_mode_ceiling) >
+           platform_governance.mode_rank(installed.mode_ceiling)
+       OR platform_governance.effect_rank(p_deployment_effect_ceiling) >
+           platform_governance.effect_rank(installed.effect_ceiling) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'asserted ceiling exceeds installed ceiling';
     END IF;
     IF p_target_kind = 'platform_mode' AND p_target_id = 'global' THEN
         SELECT EXISTS (SELECT 1 FROM platform_governance.platform_mode_revision
@@ -286,6 +369,32 @@ BEGIN
     IF NOT candidate_matches THEN
         RAISE EXCEPTION USING ERRCODE = '23503', MESSAGE = 'activation target revision mismatch';
     END IF;
+    IF p_target_kind = 'platform_mode' THEN
+        SELECT mode INTO STRICT candidate_value
+        FROM platform_governance.platform_mode_revision
+        WHERE revision_id = p_target_revision_id;
+        IF platform_governance.mode_rank(candidate_value) >
+               platform_governance.mode_rank(p_deployment_mode_ceiling)
+           OR platform_governance.mode_rank(candidate_value) >
+               platform_governance.mode_rank(installed.mode_ceiling) THEN
+            RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'mode exceeds installed ceiling';
+        END IF;
+    ELSIF p_target_kind = 'effect_class' THEN
+        SELECT state INTO STRICT candidate_state
+        FROM platform_governance.effect_class_revision
+        WHERE revision_id = p_target_revision_id;
+        IF candidate_state = 'enabled' AND (
+            platform_governance.effect_rank(p_target_id) >
+                platform_governance.effect_rank(p_deployment_effect_ceiling)
+            OR platform_governance.effect_rank(p_target_id) >
+                platform_governance.effect_rank(installed.effect_ceiling)
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'effect exceeds installed ceiling';
+        END IF;
+    END IF;
+    IF clock_timestamp() < p_issued_at OR clock_timestamp() >= p_expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'activation receipt expired before persistence';
+    END IF;
     INSERT INTO platform_governance.activation_receipt (
         receipt_id, schema_revision, receipt_digest, target_kind, target_id,
         target_revision_id, target_generation, target_revision_digest,
@@ -295,10 +404,15 @@ BEGIN
     ) VALUES (
         p_receipt_id, 1, p_receipt_digest, p_target_kind, p_target_id,
         p_target_revision_id, p_target_generation, p_target_revision_digest,
-        p_expected_head_generation, p_transition, p_actor, 'user', 'activator',
+        p_expected_head_generation, p_transition, invoker.principal_id, 'user', 'activator',
         p_deployment_mode_ceiling, p_deployment_effect_ceiling, p_request_digest,
         p_reason_code, p_issued_at, p_expires_at
     );
+    -- A unique-index conflict can itself block. If that wait crossed the
+    -- half-open deadline, aborting here rolls the just-inserted row back.
+    IF clock_timestamp() < p_issued_at OR clock_timestamp() >= p_expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'activation receipt expired before persistence';
+    END IF;
     RETURN p_receipt_id;
 END
 $$;
@@ -321,25 +435,57 @@ DECLARE
     target_state TEXT;
     event UUID := gen_random_uuid();
     transition_ok BOOLEAN := false;
+    installed platform_governance.installation_ceiling%ROWTYPE;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
     IF p_activator IS NULL OR p_activator = '' OR p_activator ~ '[[:space:][:cntrl:]]' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid activator';
     END IF;
+    IF invoker.group_role <> 'alpheus_agent_activator'::name
+       OR p_activator IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'activator does not match authenticated principal';
+    END IF;
     SELECT * INTO STRICT receipt FROM platform_governance.activation_receipt
     WHERE receipt_id = p_receipt_id FOR UPDATE;
+    SELECT * INTO STRICT installed
+    FROM platform_governance.installation_ceiling
+    WHERE ceiling_id = 'global'
+    FOR SHARE;
+    IF platform_governance.mode_rank(receipt.deployment_mode_ceiling) >
+           platform_governance.mode_rank(installed.mode_ceiling)
+       OR platform_governance.effect_rank(receipt.deployment_effect_ceiling) >
+           platform_governance.effect_rank(installed.effect_ceiling) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'receipt ceiling exceeds installed ceiling';
+    END IF;
     IF clock_timestamp() < receipt.issued_at OR clock_timestamp() >= receipt.expires_at
        OR receipt.expected_head_generation <> p_expected_generation THEN
         RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'stale or expired activation receipt';
     END IF;
-    -- A stable subject lock also serializes bootstrap while no head row exists.
-    PERFORM pg_advisory_xact_lock(hashtextextended(
-        'alpheus.platform_governance.' || receipt.target_kind || '.' || receipt.target_id, 0
-    ));
+    -- A stable, private subject row also serializes bootstrap while no head
+    -- row exists. Application LOGINs have no direct table privilege here.
+    PERFORM 1
+    FROM platform_governance.governance_subject_lock AS subject_lock
+    WHERE subject_lock.subject_kind = receipt.target_kind
+      AND subject_lock.subject_id = receipt.target_id
+    FOR UPDATE OF subject_lock;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'unknown governance subject';
+    END IF;
+    -- The subject lock may have blocked behind another database session. Time
+    -- authority is half-open, so recheck after that untrusted wait before any
+    -- idempotent return or head mutation.
+    IF clock_timestamp() < receipt.issued_at OR clock_timestamp() >= receipt.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'stale or expired activation receipt';
+    END IF;
 
     IF receipt.target_kind = 'platform_mode' THEN
         SELECT head.generation, head.revision_id, head.mode
         INTO current_generation, previous_revision, current_value
         FROM platform_governance.platform_mode_head AS head WHERE head.head_id = 'global' FOR UPDATE;
+        IF clock_timestamp() < receipt.issued_at OR clock_timestamp() >= receipt.expires_at THEN
+            RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'stale or expired activation receipt';
+        END IF;
         current_generation := coalesce(current_generation, 0);
         IF current_generation = receipt.target_generation AND EXISTS (
             SELECT 1 FROM platform_governance.platform_mode_head WHERE activation_receipt_id = receipt.receipt_id
@@ -357,13 +503,17 @@ BEGIN
                 THEN receipt.transition IN ('lower', 'halt')
             ELSE false
         END;
-        IF platform_governance.mode_rank(target_value) > platform_governance.mode_rank(receipt.deployment_mode_ceiling) THEN
+        IF platform_governance.mode_rank(target_value) > platform_governance.mode_rank(receipt.deployment_mode_ceiling)
+           OR platform_governance.mode_rank(target_value) > platform_governance.mode_rank(installed.mode_ceiling) THEN
             RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'mode exceeds deployment ceiling';
         END IF;
     ELSIF receipt.target_kind = 'effect_class' THEN
         SELECT head.generation, head.revision_id, head.state
         INTO current_generation, previous_revision, current_value
         FROM platform_governance.effect_class_head AS head WHERE head.effect_class = receipt.target_id FOR UPDATE;
+        IF clock_timestamp() < receipt.issued_at OR clock_timestamp() >= receipt.expires_at THEN
+            RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'stale or expired activation receipt';
+        END IF;
         current_generation := coalesce(current_generation, 0);
         IF current_generation = receipt.target_generation AND EXISTS (
             SELECT 1 FROM platform_governance.effect_class_head WHERE effect_class = receipt.target_id AND activation_receipt_id = receipt.receipt_id
@@ -381,14 +531,21 @@ BEGIN
                 THEN receipt.transition IN ('lower', 'halt')
             ELSE false
         END;
-        IF target_state = 'enabled' AND platform_governance.effect_rank(receipt.target_id) >
-            platform_governance.effect_rank(receipt.deployment_effect_ceiling) THEN
+        IF target_state = 'enabled' AND (
+            platform_governance.effect_rank(receipt.target_id) >
+                platform_governance.effect_rank(receipt.deployment_effect_ceiling)
+            OR platform_governance.effect_rank(receipt.target_id) >
+                platform_governance.effect_rank(installed.effect_ceiling)
+        ) THEN
             RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'effect exceeds deployment ceiling';
         END IF;
     ELSIF receipt.target_kind = 'kill_switch' THEN
         SELECT head.generation, head.revision_id, head.state
         INTO current_generation, previous_revision, current_value
         FROM platform_governance.kill_switch_head AS head WHERE head.switch_id = receipt.target_id FOR UPDATE;
+        IF clock_timestamp() < receipt.issued_at OR clock_timestamp() >= receipt.expires_at THEN
+            RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'stale or expired activation receipt';
+        END IF;
         current_generation := coalesce(current_generation, 0);
         IF current_generation = receipt.target_generation AND EXISTS (
             SELECT 1 FROM platform_governance.kill_switch_head WHERE switch_id = receipt.target_id AND activation_receipt_id = receipt.receipt_id
@@ -425,7 +582,7 @@ BEGIN
             head_id, schema_revision, generation, revision_id, mode,
             activation_receipt_id, activated_by, activated_at
         ) VALUES ('global', 1, receipt.target_generation, receipt.target_revision_id, target_value,
-            receipt.receipt_id, p_activator, clock_timestamp())
+            receipt.receipt_id, invoker.principal_id, clock_timestamp())
         ON CONFLICT (head_id) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, mode = EXCLUDED.mode,
             activation_receipt_id = EXCLUDED.activation_receipt_id,
@@ -435,7 +592,7 @@ BEGIN
             effect_class, schema_revision, generation, revision_id, state,
             activation_receipt_id, activated_by, activated_at
         ) VALUES (receipt.target_id, 1, receipt.target_generation, receipt.target_revision_id, target_state,
-            receipt.receipt_id, p_activator, clock_timestamp())
+            receipt.receipt_id, invoker.principal_id, clock_timestamp())
         ON CONFLICT (effect_class) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, state = EXCLUDED.state,
             activation_receipt_id = EXCLUDED.activation_receipt_id,
@@ -445,7 +602,7 @@ BEGIN
             switch_id, schema_revision, generation, revision_id, state,
             activation_receipt_id, activated_by, activated_at
         ) VALUES (receipt.target_id, 1, receipt.target_generation, receipt.target_revision_id, target_state,
-            receipt.receipt_id, p_activator, clock_timestamp())
+            receipt.receipt_id, invoker.principal_id, clock_timestamp())
         ON CONFLICT (switch_id) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, state = EXCLUDED.state,
             activation_receipt_id = EXCLUDED.activation_receipt_id,
@@ -457,7 +614,7 @@ BEGIN
         actor_principal, actor_kind, actor_audience, occurred_at, reason_code
     ) VALUES (event, 1, receipt.target_kind, receipt.target_id, receipt.target_generation, receipt.transition,
         previous_revision, receipt.target_revision_id, receipt.receipt_id,
-        p_activator, 'workload', 'activator', clock_timestamp(), receipt.reason_code);
+        invoker.principal_id, 'workload', 'activator', clock_timestamp(), receipt.reason_code);
     RETURN QUERY SELECT receipt.target_kind, receipt.target_id, receipt.target_generation;
 END
 $$;
@@ -481,15 +638,26 @@ DECLARE
     next_generation BIGINT := p_expected_generation + 1;
     event UUID := gen_random_uuid();
     now_at TIMESTAMPTZ := clock_timestamp();
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker FROM platform_security.invoker_identity();
     IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]'
        OR p_revision_digest !~ '^[0-9a-f]{64}$'
        OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$' OR p_expected_generation < 0 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid emergency halt';
     END IF;
-    PERFORM pg_advisory_xact_lock(hashtextextended(
-        'alpheus.platform_governance.' || p_target_kind || '.' || p_target_id, 0
-    ));
+    IF invoker.group_role <> 'alpheus_platform_halt'::name
+       OR p_actor IS DISTINCT FROM invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'halt actor does not match authenticated principal';
+    END IF;
+    PERFORM 1
+    FROM platform_governance.governance_subject_lock AS subject_lock
+    WHERE subject_lock.subject_kind = p_target_kind
+      AND subject_lock.subject_id = p_target_id
+    FOR UPDATE OF subject_lock;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid emergency halt target';
+    END IF;
     IF p_target_kind = 'platform_mode' AND p_target_id = 'global' THEN
         SELECT generation, revision_id INTO current_generation, previous_revision
         FROM platform_governance.platform_mode_head WHERE head_id = 'global' FOR UPDATE;
@@ -501,10 +669,10 @@ BEGIN
             revision_id, schema_revision, generation, mode, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, next_generation, 'disabled', p_revision_digest,
-            p_actor, 'workload', 'activator', p_reason_code, now_at);
+            invoker.principal_id, 'workload', 'activator', p_reason_code, now_at);
         INSERT INTO platform_governance.platform_mode_head (
             head_id, schema_revision, generation, revision_id, mode, activation_receipt_id, activated_by, activated_at
-        ) VALUES ('global', 1, next_generation, p_revision_id, 'disabled', NULL, p_actor, now_at)
+        ) VALUES ('global', 1, next_generation, p_revision_id, 'disabled', NULL, invoker.principal_id, now_at)
         ON CONFLICT (head_id) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, mode = EXCLUDED.mode, activation_receipt_id = NULL,
             activated_by = EXCLUDED.activated_by, activated_at = EXCLUDED.activated_at;
@@ -519,10 +687,10 @@ BEGIN
             revision_id, schema_revision, generation, effect_class, state, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, next_generation, p_target_id, 'halted', p_revision_digest,
-            p_actor, 'workload', 'activator', p_reason_code, now_at);
+            invoker.principal_id, 'workload', 'activator', p_reason_code, now_at);
         INSERT INTO platform_governance.effect_class_head (
             effect_class, schema_revision, generation, revision_id, state, activation_receipt_id, activated_by, activated_at
-        ) VALUES (p_target_id, 1, next_generation, p_revision_id, 'halted', NULL, p_actor, now_at)
+        ) VALUES (p_target_id, 1, next_generation, p_revision_id, 'halted', NULL, invoker.principal_id, now_at)
         ON CONFLICT (effect_class) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, state = EXCLUDED.state, activation_receipt_id = NULL,
             activated_by = EXCLUDED.activated_by, activated_at = EXCLUDED.activated_at;
@@ -537,10 +705,10 @@ BEGIN
             revision_id, schema_revision, generation, switch_id, state, revision_digest,
             author_principal, author_kind, author_audience, reason_code, created_at
         ) VALUES (p_revision_id, 1, next_generation, p_target_id, 'halted', p_revision_digest,
-            p_actor, 'workload', 'activator', p_reason_code, now_at);
+            invoker.principal_id, 'workload', 'activator', p_reason_code, now_at);
         INSERT INTO platform_governance.kill_switch_head (
             switch_id, schema_revision, generation, revision_id, state, activation_receipt_id, activated_by, activated_at
-        ) VALUES (p_target_id, 1, next_generation, p_revision_id, 'halted', NULL, p_actor, now_at)
+        ) VALUES (p_target_id, 1, next_generation, p_revision_id, 'halted', NULL, invoker.principal_id, now_at)
         ON CONFLICT (switch_id) DO UPDATE SET generation = EXCLUDED.generation,
             revision_id = EXCLUDED.revision_id, state = EXCLUDED.state, activation_receipt_id = NULL,
             activated_by = EXCLUDED.activated_by, activated_at = EXCLUDED.activated_at;
@@ -552,7 +720,7 @@ BEGIN
         previous_revision_id, current_revision_id, activation_receipt_id,
         actor_principal, actor_kind, actor_audience, occurred_at, reason_code
     ) VALUES (event, 1, p_target_kind, p_target_id, next_generation, 'halt',
-        previous_revision, p_revision_id, NULL, p_actor, 'workload', 'activator', now_at, p_reason_code);
+        previous_revision, p_revision_id, NULL, invoker.principal_id, 'workload', 'activator', now_at, p_reason_code);
     RETURN next_generation;
 END
 $$;

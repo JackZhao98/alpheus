@@ -13,6 +13,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$ARTIFACT_DIR"
+rm -f "$ARTIFACT_DIR/summary.json" "$ARTIFACT_DIR/junit.xml"
 docker run --detach --rm --name "$CONTAINER" \
 	--env POSTGRES_PASSWORD=probe --env POSTGRES_DB=probe "$IMAGE" \
 	>"$ARTIFACT_DIR/container-id.txt"
@@ -41,6 +42,9 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe <"$ROOT/contracts/security/v1/permissions/roles.sql" \
 	>"$ARTIFACT_DIR/roles-install.txt" 2>&1
 docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
+	--username postgres --dbname probe <"$ROOT/audit/repro/ap0_login_roles.sql" \
+	>"$ARTIFACT_DIR/login-fixtures.txt" 2>&1
+docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe <"$ROOT/agent-platform/migrations/0002_blob.sql" \
 	>"$ARTIFACT_DIR/blob-migration.txt" 2>&1
 docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
@@ -54,18 +58,18 @@ pids=""
 for worker in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 	stage_id=$(printf '50000000-0000-4000-8000-%012d' "$worker")
 	docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
-		--username postgres --dbname probe --command \
+		--username control-1 --dbname probe --command \
 		"SET ROLE alpheus_agent_control_api;
 		 SELECT * FROM blob.begin_stage(
-		     '$stage_id', 'concurrent-user', 'application/json', 10,
-		     repeat('e', 64), 10, 60, 'control-api'
+		     '$stage_id', 'control-1', 'application/json', 10,
+		     repeat('e', 64), 10, 60, 'control-1'
 		 );
 		 SELECT blob.record_stage_facts(
-		     '$stage_id', 'concurrent-user', repeat('e', 64), 10, 'control-api'
+		     '$stage_id', 'control-1', repeat('e', 64), 10, 'control-1'
 		 );
 		 SELECT * FROM blob.commit_stage(
-		     '$stage_id', 'concurrent-user', repeat('e', 64), 10,
-		     'agent_control', 'raw_document', 'concurrent-$worker', repeat('f', 64), 'control-api'
+		     '$stage_id', 'control-1', repeat('e', 64), 10,
+		     'agent_control', 'raw_document', 'concurrent-$worker', repeat('f', 64), 'control-1'
 		 );
 		 RESET ROLE;" \
 		>"$ARTIFACT_DIR/concurrent-commit-$worker.txt" 2>&1 &

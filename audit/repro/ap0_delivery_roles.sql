@@ -57,6 +57,33 @@ BEGIN
 END
 $$;
 
+SET ROLE alpheus_agent_migrator;
+CREATE FUNCTION agent_control.ap0_assert_current_fails(p_sql TEXT, p_expected_state TEXT)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    observed_state TEXT;
+BEGIN
+    BEGIN
+        EXECUTE p_sql;
+    EXCEPTION WHEN OTHERS THEN
+        observed_state := SQLSTATE;
+    END;
+    IF observed_state IS NULL THEN
+        RAISE EXCEPTION 'statement unexpectedly succeeded for session user %', session_user;
+    END IF;
+    IF observed_state <> p_expected_state THEN
+        RAISE EXCEPTION 'session user % got SQLSTATE %, expected %', session_user, observed_state, p_expected_state;
+    END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION agent_control.ap0_assert_current_fails(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION agent_control.ap0_assert_current_fails(TEXT, TEXT) TO
+    alpheus_agent_control_api, alpheus_agent_delivery_dispatcher,
+    alpheus_agent_delivery_repair;
+RESET ROLE;
+
 SELECT pg_temp.assert_fails(
     'alpheus_agent_worker',
     'INSERT INTO agent_control.delivery_outbox (
@@ -104,32 +131,29 @@ SELECT pg_temp.assert_fails(
     '42501'
 );
 
+SET SESSION AUTHORIZATION "control-1";
 SET ROLE alpheus_agent_control_api;
 SELECT CASE WHEN agent_control.enqueue_outbox(
     'event-1', 'grace-intake', 'agent_control', 1, 'artifact_published',
     repeat('a', 64), 'task-1', 'run-1', '{"probe":1}'::jsonb,
     '2026-07-19T12:00:00Z'::timestamptz, '2026-07-19T12:00:00Z'::timestamptz
 ) THEN 'true' ELSE 'false' END AS first_enqueue \gset
-RESET ROLE;
 \if :first_enqueue
 \else
     \quit 1
 \endif
 
-SET ROLE alpheus_agent_control_api;
 SELECT CASE WHEN NOT agent_control.enqueue_outbox(
     'event-1', 'grace-intake', 'agent_control', 1, 'artifact_published',
     repeat('a', 64), 'task-1', 'run-1', '{"probe":1}'::jsonb,
     '2026-07-19T12:00:00Z'::timestamptz, '2026-07-19T12:00:00Z'::timestamptz
 ) THEN 'true' ELSE 'false' END AS exact_retry \gset
-RESET ROLE;
 \if :exact_retry
 \else
     \quit 1
 \endif
 
-SELECT pg_temp.assert_fails(
-    'alpheus_agent_control_api',
+SELECT agent_control.ap0_assert_current_fails(
     $$SELECT agent_control.enqueue_outbox(
         'event-1', 'grace-intake', 'agent_control', 1, 'artifact_published',
         repeat('b', 64), 'task-1', 'run-1', '{"probe":2}'::jsonb,
@@ -137,8 +161,7 @@ SELECT pg_temp.assert_fails(
     )$$,
     '23505'
 );
-SELECT pg_temp.assert_fails(
-    'alpheus_agent_control_api',
+SELECT agent_control.ap0_assert_current_fails(
     $$SELECT agent_control.enqueue_outbox(
         'spoofed-owner', 'grace-intake', 'kernel', 99, 'artifact_published',
         repeat('a', 64), 'task-spoof', 'run-spoof', '{}'::jsonb,
@@ -146,12 +169,15 @@ SELECT pg_temp.assert_fails(
     )$$,
     '22023'
 );
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
 
 DO $$
 DECLARE
     claim_definition text;
     complete_definition text;
     quarantine_definition text;
+    inbox_definition text;
 BEGIN
     SELECT pg_get_functiondef('agent_control.claim_outbox(text,text,integer,integer)'::regprocedure)
     INTO claim_definition;
@@ -159,6 +185,8 @@ BEGIN
     INTO complete_definition;
     SELECT pg_get_functiondef('agent_control.quarantine_outbox(text,text,uuid,text)'::regprocedure)
     INTO quarantine_definition;
+    SELECT pg_get_functiondef('agent_control.record_inbox(text,text,text,text,bigint,text)'::regprocedure)
+    INTO inbox_definition;
     IF claim_definition NOT LIKE '%lease_expires_at <= clock_timestamp()%' THEN
         RAISE EXCEPTION 'claim lease boundary is not half-open';
     END IF;
@@ -168,44 +196,122 @@ BEGIN
     IF quarantine_definition NOT LIKE '%lease_expires_at > clock_timestamp()%' THEN
         RAISE EXCEPTION 'quarantine lease boundary is not half-open';
     END IF;
+    IF inbox_definition NOT LIKE '%state = ''leased''%'
+       OR inbox_definition NOT LIKE '%lease_expires_at > clock_timestamp()%'
+       OR inbox_definition NOT LIKE '%FOR SHARE%' THEN
+        RAISE EXCEPTION 'first inbox receipt is not fenced by an active leased envelope';
+    END IF;
 END
 $$;
 
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
-SELECT * FROM agent_control.claim_outbox('dispatcher-1', 'grace-intake', 10, 30);
+SELECT * FROM agent_control.claim_outbox('delivery-node-a', 'grace-intake', 10, 30);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SELECT lease_token AS event_1_lease
 FROM agent_control.delivery_outbox
 WHERE event_id = 'event-1' AND destination = 'grace-intake' \gset
 
+DO $$
+BEGIN
+    IF (SELECT lease_dispatcher_id FROM agent_control.delivery_outbox
+        WHERE event_id = 'event-1' AND destination = 'grace-intake') <> 'delivery-node-a' THEN
+        RAISE EXCEPTION 'dispatcher node label was rewritten as principal identity';
+    END IF;
+END
+$$;
+
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT CASE WHEN agent_control.complete_outbox(
     'event-1', 'grace-intake', :'event_1_lease'::uuid
 ) THEN 'true' ELSE 'false' END AS completed \gset
-RESET ROLE;
 \if :completed
 \else
     \quit 1
 \endif
 
-SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT CASE WHEN NOT agent_control.complete_outbox(
     'event-1', 'grace-intake', :'event_1_lease'::uuid
 ) THEN 'true' ELSE 'false' END AS stale_completion \gset
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 \if :stale_completion
 \else
     \quit 1
 \endif
 
+SET SESSION AUTHORIZATION "control-1";
+SET ROLE alpheus_agent_control_api;
+SELECT agent_control.enqueue_outbox(
+    'event-inbox', 'control-api', 'agent_control', 1, 'artifact_published',
+    repeat('9', 64), 'task-inbox', 'run-inbox', '{"probe":"inbox"}'::jsonb,
+    '2026-07-19T12:00:02Z'::timestamptz, '2026-07-19T12:00:02Z'::timestamptz
+);
+SELECT agent_control.enqueue_outbox(
+    'event-cross-destination', 'grace-intake', 'agent_control', 90, 'artifact_published',
+    repeat('7', 64), 'task-cross', 'run-cross', '{"probe":"cross-destination"}'::jsonb,
+    '2026-07-19T12:00:03Z'::timestamptz, '2026-07-19T12:00:03Z'::timestamptz
+);
+SELECT agent_control.enqueue_outbox(
+    'event-unclaimed', 'control-api', 'agent_control', 91, 'artifact_published',
+    repeat('6', 64), 'task-unclaimed', 'run-unclaimed', '{"probe":"unclaimed"}'::jsonb,
+    '2026-07-19T12:00:04Z'::timestamptz, '2026-07-19T12:00:04Z'::timestamptz
+);
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION "dispatcher-1";
+SET ROLE alpheus_agent_delivery_dispatcher;
+SELECT count(*) AS inbox_claim_count
+FROM agent_control.claim_outbox('delivery-node-inbox', 'control-api', 1, 30) \gset
+SELECT count(*) AS cross_claim_count
+FROM agent_control.claim_outbox('delivery-node-cross', 'grace-intake', 1, 30) \gset
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+\if :inbox_claim_count
+\else
+    \quit 1
+\endif
+\if :cross_claim_count
+\else
+    \quit 1
+\endif
+
+SET SESSION AUTHORIZATION "control-1";
 SET ROLE alpheus_agent_control_api;
 SELECT CASE WHEN agent_control.record_inbox(
-    'control-api', 'event-1', repeat('a', 64), 'agent_control', 1, repeat('c', 64)
+    'control-api', 'event-inbox', repeat('9', 64), 'agent_control', 1, repeat('c', 64)
 ) THEN 'true' ELSE 'false' END AS first_inbox \gset
 SELECT CASE WHEN NOT agent_control.record_inbox(
-    'control-api', 'event-1', repeat('a', 64), 'agent_control', 1, repeat('c', 64)
+    'control-api', 'event-inbox', repeat('9', 64), 'agent_control', 1, repeat('c', 64)
 ) THEN 'true' ELSE 'false' END AS inbox_retry \gset
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.record_inbox(
+        'control-api', 'event-inbox', repeat('b', 64), 'agent_control', 1, repeat('c', 64)
+    )$$,
+    '23505'
+);
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.record_inbox(
+        'grace-intake', 'event-1', repeat('a', 64), 'agent_control', 1, repeat('c', 64)
+    )$$,
+    '42501'
+);
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.record_inbox(
+        'control-api', 'event-cross-destination', repeat('7', 64), 'agent_control', 90, repeat('c', 64)
+    )$$,
+    '23503'
+);
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.record_inbox(
+        'control-api', 'event-unclaimed', repeat('6', 64), 'agent_control', 91, repeat('c', 64)
+    )$$,
+    '23503'
+);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 \if :first_inbox
 \else
     \quit 1
@@ -214,14 +320,27 @@ RESET ROLE;
 \else
     \quit 1
 \endif
-SELECT pg_temp.assert_fails(
-    'alpheus_agent_control_api',
-    $$SELECT agent_control.record_inbox(
-        'control-api', 'event-1', repeat('b', 64), 'agent_control', 1, repeat('c', 64)
-    )$$,
-    '23505'
-);
 
+SET SESSION AUTHORIZATION "multi-role-attacker";
+SET ROLE alpheus_agent_control_api;
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.record_inbox(
+        'control-api', 'event-inbox', repeat('9', 64), 'agent_control', 1, repeat('c', 64)
+    )$$,
+    '42501'
+);
+SELECT agent_control.ap0_assert_current_fails(
+    $$SELECT agent_control.enqueue_outbox(
+        'event-ambiguous', 'grace-intake', 'agent_control', 98, 'probe_event',
+        repeat('8', 64), 'ambiguous-cause', 'ambiguous-run', '{}'::jsonb,
+        clock_timestamp(), clock_timestamp()
+    )$$,
+    '42501'
+);
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+SET SESSION AUTHORIZATION "control-1";
 SET ROLE alpheus_agent_control_api;
 SELECT agent_control.enqueue_outbox(
     'event-2', 'grace-intake', 'agent_control', 2, 'artifact_published',
@@ -229,43 +348,54 @@ SELECT agent_control.enqueue_outbox(
     '2026-07-19T12:00:01Z'::timestamptz, '2026-07-19T12:00:01Z'::timestamptz
 );
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-1', 'grace-intake', 10, 30);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SELECT lease_token AS event_2_lease
 FROM agent_control.delivery_outbox
 WHERE event_id = 'event-2' AND destination = 'grace-intake' \gset
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT CASE WHEN agent_control.quarantine_outbox(
     'event-2', 'grace-intake', :'event_2_lease'::uuid, 'unsupported_revision'
 ) THEN 'true' ELSE 'false' END AS quarantined \gset
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 \if :quarantined
 \else
     \quit 1
 \endif
 
+SET SESSION AUTHORIZATION "repair-1";
 SET ROLE alpheus_agent_delivery_repair;
 SELECT agent_control.request_outbox_replay(
     'event-2', 'grace-intake', 0, 'decoder deployed with schema support'
 ) AS replay_generation \gset
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 \if :{?replay_generation}
 \else
     \quit 1
 \endif
 
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-2', 'grace-intake', 10, 30);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SELECT lease_token AS event_2_replay_lease
 FROM agent_control.delivery_outbox
 WHERE event_id = 'event-2' AND destination = 'grace-intake' \gset
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT CASE WHEN agent_control.complete_outbox(
     'event-2', 'grace-intake', :'event_2_replay_lease'::uuid
 ) THEN 'true' ELSE 'false' END AS replay_completed \gset
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 \if :replay_completed
 \else
     \quit 1
@@ -281,26 +411,33 @@ $$;
 
 SELECT updated_at AS original_policy_updated_at
 FROM agent_control.delivery_policy WHERE singleton \gset
+SET SESSION AUTHORIZATION "repair-1";
 SET ROLE alpheus_agent_delivery_repair;
-SELECT agent_control.update_delivery_policy(
-    :'original_policy_updated_at'::timestamptz, 50, 10000, 100, 300, 'delivery-repair-1'
-) AS new_policy_updated_at \gset
-RESET ROLE;
-SELECT pg_temp.assert_fails(
-    'alpheus_agent_delivery_repair',
+SELECT agent_control.ap0_assert_current_fails(
     format(
-        'SELECT agent_control.update_delivery_policy(%L::timestamptz, 50, 10000, 100, 300, ''delivery-repair-1'')',
+        'SELECT agent_control.update_delivery_policy(%L::timestamptz, 50, 10000, 100, 300, ''spoofed-repair'')',
+        :'original_policy_updated_at'
+    ),
+    '42501'
+);
+SELECT agent_control.update_delivery_policy(
+    :'original_policy_updated_at'::timestamptz, 50, 10000, 100, 300, 'repair-1'
+) AS new_policy_updated_at \gset
+SELECT agent_control.ap0_assert_current_fails(
+    format(
+        'SELECT agent_control.update_delivery_policy(%L::timestamptz, 50, 10000, 100, 300, ''repair-1'')',
         :'original_policy_updated_at'
     ),
     '40001'
 );
 
-SET ROLE alpheus_agent_delivery_repair;
 SELECT agent_control.update_delivery_policy(
-    :'new_policy_updated_at'::timestamptz, 1, 1, 100, 300, 'delivery-repair-1'
+    :'new_policy_updated_at'::timestamptz, 1, 1, 100, 300, 'repair-1'
 ) AS bounded_policy_updated_at \gset
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 
+SET SESSION AUTHORIZATION "control-1";
 SET ROLE alpheus_agent_control_api;
 SELECT agent_control.enqueue_outbox(
     'event-3', 'bounded', 'agent_control', 3, 'artifact_published',
@@ -308,13 +445,14 @@ SELECT agent_control.enqueue_outbox(
     clock_timestamp(), clock_timestamp()
 );
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-bounded', 'bounded', 10, 1);
-RESET ROLE;
 SELECT pg_sleep(1.1);
-SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-bounded', 'bounded', 10, 1);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 
 DO $$
 BEGIN
@@ -327,6 +465,7 @@ BEGIN
 END
 $$;
 
+SET SESSION AUTHORIZATION "control-1";
 SET ROLE alpheus_agent_control_api;
 SELECT agent_control.enqueue_outbox(
     'event-4', 'bounded', 'agent_control', 4, 'artifact_published',
@@ -334,27 +473,41 @@ SELECT agent_control.enqueue_outbox(
     clock_timestamp(), clock_timestamp()
 );
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION "dispatcher-1";
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-bounded', 'bounded', 10, 30);
 RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SELECT lease_token AS event_4_lease
 FROM agent_control.delivery_outbox
 WHERE event_id = 'event-4' AND destination = 'bounded' \gset
-SELECT pg_temp.assert_fails(
-    'alpheus_agent_delivery_dispatcher',
+SET SESSION AUTHORIZATION "dispatcher-1";
+SET ROLE alpheus_agent_delivery_dispatcher;
+SELECT agent_control.ap0_assert_current_fails(
     format(
         'SELECT agent_control.quarantine_outbox(''event-4'', ''bounded'', %L::uuid, ''unsupported_revision'')',
         :'event_4_lease'
     ),
     '54000'
 );
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+SET ROLE alpheus_agent_migrator;
+DROP FUNCTION agent_control.ap0_assert_current_fails(TEXT, TEXT);
+RESET ROLE;
 
 DO $$
 BEGIN
     IF (SELECT count(*) FROM agent_control.delivery_policy_event) <> 3 THEN
         RAISE EXCEPTION 'delivery policy audit event missing';
     END IF;
-    IF (SELECT count(*) FROM agent_control.delivery_inbox WHERE consumer_id = 'control-api' AND event_id = 'event-1') <> 1 THEN
+    IF (SELECT updated_by FROM agent_control.delivery_policy WHERE singleton) <> 'repair-1'
+       OR (SELECT changed_by FROM agent_control.delivery_policy_event ORDER BY event_id DESC LIMIT 1) <> 'repair-1' THEN
+        RAISE EXCEPTION 'delivery policy actor was not bound to authenticated principal';
+    END IF;
+    IF (SELECT count(*) FROM agent_control.delivery_inbox WHERE consumer_id = 'control-api' AND event_id = 'event-inbox') <> 1 THEN
         RAISE EXCEPTION 'inbox dedupe failed';
     END IF;
 END

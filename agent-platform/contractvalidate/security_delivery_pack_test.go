@@ -50,6 +50,29 @@ func TestSecurityRoleSQLCoversEveryProfile(t *testing.T) {
 			t.Fatalf("required operational role %s missing", role)
 		}
 	}
+	for _, fragment := range []string{
+		"CREATE OR REPLACE FUNCTION platform_security.invoker_identity()",
+		"principal_id TEXT",
+		"profile_id TEXT",
+		"group_role NAME",
+		"owner_id TEXT",
+		"session_user",
+		"pg_has_role(session_user, 'alpheus_agent_migrator', 'MEMBER')",
+		"JOIN pg_catalog.pg_auth_members AS membership",
+		"pg_catalog.bool_or(membership.admin_option) AS has_admin_option",
+		"membership_count <> 1 OR has_admin_membership",
+		"pg_catalog.pg_advisory_lock(BIGINT)",
+		"pg_catalog.pg_advisory_xact_lock(BIGINT)",
+		"FROM PUBLIC",
+		"REVOKE ALL ON FUNCTION platform_security.invoker_identity() FROM PUBLIC",
+	} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("invoker identity root missing %q", fragment)
+		}
+	}
+	if strings.Contains(text, "CREATE TABLE platform_security.") {
+		t.Fatal("caller-writable platform security identity mapping introduced")
+	}
 }
 
 func validatePackInventory(t *testing.T, root string) []string {

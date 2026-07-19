@@ -46,12 +46,15 @@ type ProfileSpec struct {
 }
 
 type ProfileConfig struct {
-	SchemaRevision uint16             `json:"schema_revision"`
-	Profile        ProfileID          `json:"profile"`
-	PrincipalID    string             `json:"principal_id"`
-	Audience       contracts.Audience `json:"audience"`
-	DatabaseRole   string             `json:"database_role"`
-	SecretFiles    map[string]string  `json:"secret_files"`
+	SchemaRevision uint16    `json:"schema_revision"`
+	Profile        ProfileID `json:"profile"`
+	// PrincipalID is also the production PostgreSQL LOGIN name. Database
+	// SECURITY DEFINER boundaries derive it from session_user; configuration
+	// cannot alias a different principal onto the authenticated connection.
+	PrincipalID  string             `json:"principal_id"`
+	Audience     contracts.Audience `json:"audience"`
+	DatabaseRole string             `json:"database_role"`
+	SecretFiles  map[string]string  `json:"secret_files"`
 }
 
 type ProfileSet struct {

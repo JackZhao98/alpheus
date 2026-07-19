@@ -14,6 +14,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$ARTIFACT_DIR"
+rm -f "$ARTIFACT_DIR/summary.json" "$ARTIFACT_DIR/junit.xml"
 docker run --detach --rm --name "$CONTAINER" \
 	--env POSTGRES_PASSWORD=probe --env POSTGRES_DB=probe "$IMAGE" \
 	>"$ARTIFACT_DIR/container-id.txt"
@@ -65,6 +66,10 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--single-transaction --username postgres --dbname probe \
 	<"$ROOT/contracts/security/v1/permissions/roles.sql" \
 	>"$ARTIFACT_DIR/roles-install.txt" 2>&1
+docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
+	--username postgres --dbname probe \
+	<"$ROOT/audit/repro/ap0_login_roles.sql" \
+	>"$ARTIFACT_DIR/login-identity-probe.txt" 2>&1
 
 agent_count=0
 for migration in "$ROOT"/agent-platform/migrations/*.sql; do
@@ -123,8 +128,21 @@ fi
 docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe --tuples-only --no-align --command \
 	"SELECT (SELECT count(*) = 1 FROM public.ap0_agent_migration_sentinel)
-	        AND (SELECT count(*) = 3 FROM pg_namespace
-	             WHERE nspname IN ('agent_control', 'blob', 'platform_governance'))
+	        AND (SELECT count(*) = 4 FROM pg_namespace
+	             WHERE nspname IN ('agent_control', 'blob', 'platform_governance', 'platform_security'))
+	        AND EXISTS (
+	            SELECT 1
+	            FROM pg_proc AS routine
+	            JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+	            JOIN pg_roles AS owner ON owner.oid = routine.proowner
+	            WHERE namespace.nspname = 'platform_security'
+	              AND routine.proname = 'invoker_identity'
+	              AND routine.prosecdef
+	              AND owner.rolname = 'alpheus_agent_migrator'
+	        )
+	        AND NOT has_function_privilege(
+	            'worker-1', 'platform_security.invoker_identity()', 'EXECUTE'
+	        )
 	        AND NOT EXISTS (
 	            SELECT 1 FROM pg_roles WHERE rolname LIKE 'alpheus_%'
 	              AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
@@ -135,8 +153,8 @@ if [ "$(tr -d '[:space:]' <"$ARTIFACT_DIR/final-result.txt")" != "t" ]; then
 	exit 1
 fi
 
-printf '{"status":"PASS","probe":"ap0-migration-compatibility","kernel_migrations":%s,"agent_migrations":%s,"public_schema_preserved":true,"transactional_rollback":true}\n' \
+printf '{"status":"PASS","probe":"ap0-migration-compatibility","kernel_migrations":%s,"agent_migrations":%s,"public_schema_preserved":true,"transactional_rollback":true,"login_identity":true}\n' \
 	"$kernel_count" "$agent_count" >"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="ap0-migration-compatibility" tests="4" failures="0"><testcase name="kernel-forward-migrations"/><testcase name="agent-forward-migrations"/><testcase name="public-schema-preserved"/><testcase name="transactional-rollback"/></testsuite>\n' \
+printf '<testsuite name="ap0-migration-compatibility" tests="5" failures="0"><testcase name="kernel-forward-migrations"/><testcase name="agent-forward-migrations"/><testcase name="public-schema-preserved"/><testcase name="transactional-rollback"/><testcase name="login-identity"/></testsuite>\n' \
 	>"$ARTIFACT_DIR/junit.xml"
 echo "PASS probe=ap0-migration-compatibility artifacts=$ARTIFACT_DIR kernel_migrations=$kernel_count agent_migrations=$agent_count"

@@ -146,9 +146,19 @@ AS $$
 DECLARE
     previous agent_control.delivery_policy%ROWTYPE;
     changed_at TIMESTAMPTZ;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_delivery_repair'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery policy caller is not authorized';
+    END IF;
     IF p_actor IS NULL OR p_actor = '' OR p_actor ~ '[[:space:][:cntrl:]]' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid policy actor';
+    END IF;
+    IF p_actor <> invoker.principal_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery policy actor does not match authenticated principal';
     END IF;
     SELECT * INTO STRICT previous
     FROM agent_control.delivery_policy
@@ -164,10 +174,10 @@ BEGIN
         max_claim_batch = p_max_claim_batch,
         max_lease_seconds = p_max_lease_seconds,
         updated_at = changed_at,
-        updated_by = p_actor
+        updated_by = invoker.principal_id
     WHERE singleton;
     INSERT INTO agent_control.delivery_policy_event (previous_policy, new_policy, changed_at, changed_by)
-    SELECT to_jsonb(previous), to_jsonb(policy), changed_at, p_actor
+    SELECT to_jsonb(previous), to_jsonb(policy), changed_at, invoker.principal_id
     FROM agent_control.delivery_policy AS policy
     WHERE singleton;
     RETURN changed_at;
@@ -194,10 +204,17 @@ AS $$
 DECLARE
     inserted BOOLEAN;
     existing agent_control.delivery_outbox%ROWTYPE;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_control_api'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'outbox caller is not authorized';
+    END IF;
     -- This app-facing function is owned by agent_control. Other owners must
     -- expose their own owner-pinned wrapper instead of borrowing this grant.
-    IF p_source_owner <> 'agent_control' THEN
+    IF p_source_owner <> invoker.owner_id THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid outbox source owner';
     END IF;
     IF p_committed_at > clock_timestamp() THEN
@@ -260,7 +277,14 @@ DECLARE
     policy agent_control.delivery_policy%ROWTYPE;
     exhausted agent_control.delivery_outbox%ROWTYPE;
     quarantine_changed INTEGER;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_delivery_dispatcher'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery dispatcher is not authorized';
+    END IF;
     SELECT * INTO STRICT policy FROM agent_control.delivery_policy WHERE singleton;
     IF p_dispatcher_id IS NULL OR p_dispatcher_id = '' OR p_dispatcher_id ~ '[[:space:][:cntrl:]]'
        OR p_destination IS NULL OR p_destination = '' OR p_destination ~ '[[:space:][:cntrl:]]'
@@ -366,7 +390,14 @@ AS $$
 DECLARE
     changed INTEGER;
     generation INTEGER;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_delivery_dispatcher'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery dispatcher is not authorized';
+    END IF;
     UPDATE agent_control.delivery_outbox
     SET state = 'delivered', delivered_at = clock_timestamp(),
         lease_dispatcher_id = NULL, lease_token = NULL, lease_claimed_at = NULL, lease_expires_at = NULL
@@ -401,7 +432,14 @@ DECLARE
     policy agent_control.delivery_policy%ROWTYPE;
     queued agent_control.delivery_outbox%ROWTYPE;
     quarantine_changed INTEGER;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_delivery_dispatcher'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery dispatcher is not authorized';
+    END IF;
     IF p_reason_code IS NULL OR p_reason_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid quarantine reason';
     END IF;
@@ -465,7 +503,45 @@ AS $$
 DECLARE
     inserted BOOLEAN;
     existing agent_control.delivery_inbox%ROWTYPE;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_control_api'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'inbox caller is not authorized';
+    END IF;
+    IF p_consumer_id IS NULL OR p_consumer_id <> invoker.profile_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'inbox consumer does not match authenticated profile';
+    END IF;
+
+    SELECT * INTO existing
+    FROM agent_control.delivery_inbox
+    WHERE consumer_id = p_consumer_id AND event_id = p_event_id;
+    IF FOUND THEN
+        IF existing.event_digest = p_event_digest
+           AND existing.source_owner = p_source_owner
+           AND existing.owner_sequence = p_owner_sequence
+           AND existing.effect_digest = p_effect_digest THEN
+            RETURN false;
+        END IF;
+        RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'inbox identity conflict';
+    END IF;
+
+    PERFORM 1
+    FROM agent_control.delivery_outbox
+    WHERE event_id = p_event_id
+      AND destination = p_consumer_id
+      AND event_digest = p_event_digest
+      AND source_owner = p_source_owner
+      AND owner_sequence = p_owner_sequence
+      AND state = 'leased'
+      AND lease_expires_at > clock_timestamp()
+    FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '23503', MESSAGE = 'matching durable outbox envelope is missing';
+    END IF;
+
     INSERT INTO agent_control.delivery_inbox (
         consumer_id, event_id, event_digest, source_owner, owner_sequence, effect_digest
     ) VALUES (
@@ -501,7 +577,14 @@ SET search_path = pg_catalog, agent_control
 AS $$
 DECLARE
     next_generation INTEGER;
+    invoker RECORD;
 BEGIN
+    SELECT * INTO STRICT invoker
+    FROM platform_security.invoker_identity();
+    IF invoker.group_role::TEXT <> 'alpheus_agent_delivery_repair'
+       OR invoker.owner_id <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'delivery repair caller is not authorized';
+    END IF;
     IF p_reason IS NULL OR length(btrim(p_reason)) = 0 OR length(p_reason) > 500 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid replay reason';
     END IF;
