@@ -41,11 +41,12 @@ GRACE score, or Delegation proposal can directly mutate a broker or manufacture
 Kernel permission. The architecture findings discovered during this audit were
 closed in the same document revision.
 
-AP0 is nevertheless not authorized. The Kernel clock blocker is closed and its
-complete certification is green, but M11 v1.7 recovery/Halt, v1.8 K0 canary
-authority, the separately confirmed canary stop/recovery evidence, K1, Lean v1
-freeze and the post-M11 Charter/audit closeout remain incomplete. These are hard
-release gates, not optional follow-up work.
+AP0 is nevertheless not authorized. The Kernel clock blocker is closed, its
+complete certification is green, and M11 v1.7.1 recovery/Halt landed in
+`0913010`; however, v1.8 K0 canary authority, the separately confirmed canary
+stop/recovery evidence, K1, Lean v1 freeze and the post-M11 Charter/audit
+closeout remain incomplete. These are hard release gates, not optional
+follow-up work.
 
 ## 2. Scope and method
 
@@ -236,8 +237,8 @@ remains read-only, and the first Alpheus-routed one-share Live canary still need
 its separately confirmed exact ticket. Plan amendments v1.7 (`5df440c`) and
 v1.8 (`4328327`) now define the missing pre-canary code gates: bounded same-ref
 recovery, transactional Live admission/Halt serialization and database-
-authoritative canary policy. Those code changes and non-money acceptance are
-not yet landed.
+authoritative canary policy. Recovery/Halt and its non-money acceptance landed
+in `0913010`; K0 database canary authority is not yet landed.
 
 After they land, execute only the already specified one-share equity canary
 under a fresh confirmation. Halt new risk, preserve the Live recovery adapter,
@@ -319,9 +320,10 @@ ARCHITECTURE_REVIEW_REOPENED
 AP0_RELEASE_STATUS: WITHHELD
 ```
 
-No Agent Platform implementation should begin from this audit alone. The next
-code module is M11 v1.7 recovery/Halt plus v1.8 K0 canary policy authority,
-committed and pushed by cohesive function. Only after its non-money acceptance
+No Agent Platform implementation should begin from this audit alone. M11
+v1.7.1 recovery/Halt is committed and pushed; the next code module is v1.8 K0
+canary policy authority, again committed and pushed by cohesive function. Only
+after its non-money acceptance
 may the separately confirmed one-share canary and M11 landing proceed; neither
 this audit nor the Lean amendment authorizes that order. K1, Lean v1 freeze,
 Charter closeout and a refreshed audit/release record precede AP0.

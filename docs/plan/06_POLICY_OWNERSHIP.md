@@ -212,7 +212,8 @@ Do only the Live-critical repair:
 4. expose the active canary revision/generation in state and refusal events;
 5. prove editing `limits.yaml` after activation cannot change the running or
    restarted canary; and
-6. land the v1.7 replay/admission/Halt fixes before any real canary.
+6. retain landed commit `0913010` as the v1.7.1 replay/admission/Halt
+   prerequisite before any real canary.
 
 Do not combine the first one-share canary with a migration of every existing
 limit. Until K1, the remaining frozen YAML thresholds are a temporary,

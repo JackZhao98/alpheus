@@ -200,17 +200,26 @@ violated, and severity.
 - **I15 Ambiguous-send containment and canary recovery.** In an isolated Live-
   shaped Fake Provider, lose the first placement response. Verify a zero-
   candidate recovery may consume exactly one byte-identical same-`ref_id`
-  replay only while database time is strictly before the original persisted
-  `send_window_end`; inject another lost response and require the replay order
-  to remain discoverable in that same window. At deadline equality and on every
-  later scan there is no replay. Release 20 recovery workers from one barrier:
-  one Provider replay at most. Race `POST /halt` against initial, recovered-
+  replay only while database time plus the certified Provider creation-latency
+  guard is strictly before the original persisted `send_window_end`; inject
+  another lost response and, only for a Provider with that certified bound,
+  require the replay order to remain discoverable in the same window. A
+  Provider without the bound must make zero replay calls and retain `unknown`.
+  At guard equality and on every later scan there is no replay. Release 20
+  recovery workers from one barrier: one Provider replay at most. Inject
+  different bound-account/canonical-intent/fingerprint evidence and prove the
+  same atomic predicate refuses it without consuming `replay_count`. Race
+  `POST /halt` against initial, recovered-
   pending, replacement and replay sends; the database cut must prevent every
   not-yet-authorized send, and pre-cut in-flight attempts must be reported for
-  reconciliation rather than called rolled back. While the live gate is active
-  and again while it is unknown, release
-  20 distinct new Live proposals: all are refused before creating a grant,
-  reservation, attempt or order, while idempotent replay of the original HTTP
+  reconciliation rather than called rolled back. Inject a reprice fill-
+  integrity failure and prove the failed fill transaction rolls back before the
+  same database cut commits Global Halt. A partial fill followed by Halt
+  cleanup must retain `executed`, its fill and exposure while rejecting only
+  the unsent replacement. While the live gate is active and again while it is
+  unknown, release 20 distinct new Live proposals: all are refused before
+  creating a grant, reservation, attempt or order, while idempotent replay of
+  the original HTTP
   request returns its existing identity. Restart the Kernel with the unknown
   attempt and prove the latch, replay consumption and original window survive.
   Finally exercise the non-money canary sequence: Halt first, keep the Live

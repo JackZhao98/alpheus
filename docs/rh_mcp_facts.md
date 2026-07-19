@@ -97,7 +97,12 @@ equity-only; option read metadata does not authorize an option mutation.
   after an uncertain outcome. Pull-based reconciliation requires an exact,
   unique provider-visible fingerprint and remains human-gated unless an
   audited exclusive-writer mode is active. A fresh ref is always a new order;
-  option automatic recovery remains disabled.
+  option automatic recovery remains disabled. Amendment v1.7.1 records that
+  this probe did not certify a server-side order-creation latency bound;
+  Robinhood automatic replay therefore remains disabled while exact pulls,
+  the unknown latch and Admin adoption stay available. Commit `0913010`
+  enforces that distinction: only a Provider with the separate creation-window
+  bound can enter automatic replay, so the Robinhood path sends nothing again.
 - The v1.5 recovery path is implemented: durable account-level
   unknown latch, canonical provider intent/fingerprint/time window, exact
   paged equity candidate matching, and human-only sole-candidate adoption with

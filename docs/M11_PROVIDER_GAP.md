@@ -301,6 +301,24 @@ existing account latch, Halt, exact matcher and two-step adoption. No second
 send window, configurable replay TTL, `recovery_only` mode, retry framework or
 automatic heuristic adoption is introduced.
 
+Implementation clarification v1.7.1 supersedes one over-strong implication in
+that contract: authorizing a replay immediately before `send_window_end` does
+not prove that Provider `created_at` will remain in the original match window.
+The atomic replay predicate therefore also reserves a certified Provider
+creation-latency guard inside the same window. FakeBroker can prove that bound;
+the current Robinhood evidence proves same-`ref_id` dedupe but not server-side
+creation latency, so production automatic replay remains disabled there. This
+does not disable exact pulls, the durable unknown latch or Admin adoption, and
+it introduces no second window or policy parameter.
+
+Commit `0913010` lands the non-money v1.7.1 recovery implementation. It makes
+the Halt cut database-authoritative, refuses new Live entitlements while the
+account latch is active or unknown, atomically compares replay evidence while
+consuming the single replay slot, and preserves `executed` whenever any fill is
+durable. Fill-integrity failures now enter the same database-fenced Global Halt
+path rather than relying on a process-local refresh. Robinhood automatic replay
+remains disabled because the required creation-latency bound is still absent.
+
 The canary completion artifact is named **M11 Canary Stop and Recovery
 Acceptance**. It records real broker facts and returns the deployment to
 `read_only` only after reconciliation is clean. It never claims that a fill can
@@ -327,8 +345,10 @@ The v1.5 bounded recovery design remains the correct identity model without
 weakening it to loose field matching. The v1.6 evidence closes the equity-limit
 metadata gate and commit `319f657` wires the equity-only adapter behind explicit
 live startup controls. The isolated no-order live-mode startup certification
-passes. The v1.7 local recovery hardening above and its acceptance evidence must
-land before a canary. M11 is not yet marked landed:
+passes. The v1.7 local recovery hardening above and its acceptance evidence had
+to land before a canary. Commit `0913010` now satisfies that non-money gate; K0
+database-authoritative canary policy and the separately confirmed canary still
+remain. M11 is not yet marked landed:
 
 1. The first Alpheus-routed live canary remains a separate human-confirmed
    action. Its ticket must be exactly one share and remain within the immutable

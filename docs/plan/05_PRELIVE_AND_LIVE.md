@@ -258,3 +258,39 @@ money end-to-end canary harness proves
 halt -> adopt/query -> cancel or fill reconciliation -> clean gate -> read-only
 ordering. No test intentionally creates a production network ambiguity and no
 real order is authorized by this amendment.
+
+### Implementation clarification v1.7.1 — replay observability bound
+
+The strict database predicate `clock_timestamp() < send_window_end` is
+necessary but is not, by itself, proof that a Provider-created order will have
+a `created_at` inside the original candidate window. Authorization can occur
+before the deadline while network or server-side processing creates the order
+after it. Amendment v1.7's stronger claim that such a replay necessarily
+"remains discoverable" is superseded as follows:
+
+- automatic replay additionally requires enough original-window time for a
+  separately certified Provider creation-latency bound; the comparison and
+  `replay_count` consumption remain atomic and use database time;
+- this is a guard inside the one original window, not a second window, replay
+  TTL or runtime policy knob;
+- FakeBroker has a synchronous bounded path and may exercise this recovery in
+  certification; and
+- Robinhood `ref_id` dedupe is empirically verified, but no server-side
+  creation-latency bound is currently certified. Robinhood automatic replay
+  therefore remains disabled. Exact candidate pulls, the unknown latch and
+  Admin adoption remain available and fail closed without sending again.
+
+The durable sent marker is the formal Halt/send linearization point. It and
+the Halt cut timestamp are created from advancing database time after the
+shared control lock is acquired. A claimed open that loses the cut is
+terminally rejected without a Provider call, its unsent typed order and held
+reservation are closed, its consumed trade grant is not restored, and any
+already-executed replacement source remains recorded as executed.
+
+Commit `0913010` implements this clarification without a production order. The
+bound account, canonical Provider intent and SHA-256 fingerprint are compared
+in the same database update that consumes `replay_count`. Automatic integrity
+Halts use the same Halt/send cut after rolling back the failed fill transaction.
+Across ordinary terminal updates, pending cleanup and claimed cleanup, any
+durable fill keeps the parent operation `executed`; only the unsent remainder
+and its typed order become failed/rejected.

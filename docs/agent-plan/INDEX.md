@@ -83,9 +83,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Implement and certify M11 v1.7 recovery/Halt plus v1.8 K0 canary authority;
-   then complete only the separately confirmed one-share canary and its stop/
-   recovery acceptance before marking M11 `LANDED`.
+1. Treat M11 v1.7.1 recovery/Halt commit `0913010` as landed non-money
+   evidence; implement and certify v1.8 K0 canary authority, then complete only
+   the separately confirmed one-share canary and its stop/recovery acceptance
+   before marking M11 `LANDED`.
 2. Implement K1 Kernel policy ownership, then owner-review/freeze Lean v1.
 3. Land the remaining post-M11 Charter amendment and run the digest-pinned
    audit release check. Record owner acceptance plus independent review in a
