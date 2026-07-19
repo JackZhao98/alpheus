@@ -137,6 +137,39 @@ SELECT pg_temp.assert_fails(
     )$$,
     '23505'
 );
+SELECT pg_temp.assert_fails(
+    'alpheus_agent_control_api',
+    $$SELECT agent_control.enqueue_outbox(
+        'spoofed-owner', 'grace-intake', 'kernel', 99, 'artifact_published',
+        repeat('a', 64), 'task-spoof', 'run-spoof', '{}'::jsonb,
+        '2026-07-19T12:00:00Z'::timestamptz, '2026-07-19T12:00:00Z'::timestamptz
+    )$$,
+    '22023'
+);
+
+DO $$
+DECLARE
+    claim_definition text;
+    complete_definition text;
+    quarantine_definition text;
+BEGIN
+    SELECT pg_get_functiondef('agent_control.claim_outbox(text,text,integer,integer)'::regprocedure)
+    INTO claim_definition;
+    SELECT pg_get_functiondef('agent_control.complete_outbox(text,text,uuid)'::regprocedure)
+    INTO complete_definition;
+    SELECT pg_get_functiondef('agent_control.quarantine_outbox(text,text,uuid,text)'::regprocedure)
+    INTO quarantine_definition;
+    IF claim_definition NOT LIKE '%lease_expires_at <= clock_timestamp()%' THEN
+        RAISE EXCEPTION 'claim lease boundary is not half-open';
+    END IF;
+    IF complete_definition NOT LIKE '%lease_expires_at > clock_timestamp()%' THEN
+        RAISE EXCEPTION 'complete lease boundary is not half-open';
+    END IF;
+    IF quarantine_definition NOT LIKE '%lease_expires_at > clock_timestamp()%' THEN
+        RAISE EXCEPTION 'quarantine lease boundary is not half-open';
+    END IF;
+END
+$$;
 
 SET ROLE alpheus_agent_delivery_dispatcher;
 SELECT * FROM agent_control.claim_outbox('dispatcher-1', 'grace-intake', 10, 30);

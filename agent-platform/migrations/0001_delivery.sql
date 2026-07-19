@@ -195,6 +195,11 @@ DECLARE
     inserted BOOLEAN;
     existing agent_control.delivery_outbox%ROWTYPE;
 BEGIN
+    -- This app-facing function is owned by agent_control. Other owners must
+    -- expose their own owner-pinned wrapper instead of borrowing this grant.
+    IF p_source_owner <> 'agent_control' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid outbox source owner';
+    END IF;
     IF p_committed_at > clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE = '22007', MESSAGE = 'future outbox commit time';
     END IF;
@@ -269,7 +274,7 @@ BEGIN
         FROM agent_control.delivery_outbox AS queued
         WHERE queued.destination = p_destination
           AND queued.state = 'leased'
-          AND queued.lease_expires_at < clock_timestamp()
+          AND queued.lease_expires_at <= clock_timestamp()
           AND queued.attempt_count >= policy.max_attempts
         ORDER BY queued.committed_at, queued.event_id
         FOR UPDATE SKIP LOCKED
@@ -327,7 +332,7 @@ BEGIN
           AND queued.attempt_count < policy.max_attempts
           AND (
               queued.state = 'available'
-              OR (queued.state = 'leased' AND queued.lease_expires_at < clock_timestamp())
+              OR (queued.state = 'leased' AND queued.lease_expires_at <= clock_timestamp())
           )
         ORDER BY queued.committed_at, queued.event_id
         FOR UPDATE SKIP LOCKED
@@ -366,7 +371,7 @@ BEGIN
     SET state = 'delivered', delivered_at = clock_timestamp(),
         lease_dispatcher_id = NULL, lease_token = NULL, lease_claimed_at = NULL, lease_expires_at = NULL
     WHERE event_id = p_event_id AND destination = p_destination AND state = 'leased'
-      AND lease_token = p_lease_token AND lease_expires_at >= clock_timestamp()
+      AND lease_token = p_lease_token AND lease_expires_at > clock_timestamp()
     RETURNING replay_generation INTO generation;
     GET DIAGNOSTICS changed = ROW_COUNT;
     IF changed = 0 THEN
@@ -403,7 +408,7 @@ BEGIN
     SELECT * INTO queued
     FROM agent_control.delivery_outbox
     WHERE event_id = p_event_id AND destination = p_destination AND state = 'leased'
-      AND lease_token = p_lease_token AND lease_expires_at >= clock_timestamp()
+      AND lease_token = p_lease_token AND lease_expires_at > clock_timestamp()
     FOR UPDATE;
     IF NOT FOUND THEN
         RETURN false;
