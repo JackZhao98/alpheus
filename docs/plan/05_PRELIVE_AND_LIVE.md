@@ -134,6 +134,22 @@ grant is created, and forcing that attempt to fail does not restore the allowanc
 
 <!-- END FROZEN SPEC -->
 
+## Amendment v1.8.1 — canary authority and widening evidence
+
+K0 supersedes only the frozen canary storage/activation mechanism. Commit
+`d24b8b9` removes the Live canary from `limits.yaml`, makes the typed immutable
+database revision the startup and admission authority, and binds each new Live
+grant to its revision/generation. The $50/five-day human policy value is not
+changed by this amendment.
+
+The frozen text allowed a widening after clean days, but implementation review
+proved the former `day_open` query was not a durable completed-day
+attestation. K0 therefore denies all widening, including a clean-days decrease
+or mixed change. K1 must add the typed final-reconciliation attestation defined
+in [`06_POLICY_OWNERSHIP.md`](06_POLICY_OWNERSHIP.md) before any widening can be
+enabled. This is a fail-closed evidence correction, not removal of the human
+policy.
+
 ## Amendment v1.5 implementation status
 
 The bounded equity recovery alternative is implemented offline in migration

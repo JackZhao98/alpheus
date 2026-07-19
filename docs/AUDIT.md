@@ -227,14 +227,18 @@ violated, and severity.
   remainder or ingest a partial/full fill, prove clean accounting and gate, and
   only then restart `read_only`. A filled order is never reported as rolled
   back, and the certification harness must never invoke a production mutation.
-- **I16 K0 canary authority.** Activate the database canary revision/head, edit
-  only YAML canary values and restart two differently configured Kernel
-  instances: both use the same database cap/clean-days generation. Missing or
-  corrupt canary authority closes Live without YAML fallback. Race 20 candidate
-  changes and prove one latest generation/head wins. Lower
-  `clean_days_before_raise` and require the widening proof; mixed cap/threshold
-  changes cannot bypass it. State and refusal events expose the authoritative
-  revision/generation.
+- **I16 K0 canary authority.** Bootstrap through the deployment CLI and prove
+  legacy 0008 rows remain non-authoritative after the 0009→0010 upgrade. Live
+  startup and every new-grant path use the same database cap/clean-days
+  generation with no YAML field or fallback. Missing/corrupt/future authority
+  closes Live; sim/shadow/read-only remain startable. Race 20 identical
+  bootstraps and activation against admission; require one generation and an
+  exact grant foreign-key/event binding. UPDATE or DELETE of authoritative
+  rows, and in-place promotion of a legacy row, must fail. A clean-days
+  decrease and every mixed widening are classified as widening and denied in
+  K0; do not accept `day_open` as completed-day proof. State and refusal events
+  expose the authoritative revision/generation. K1 separately audits the
+  durable completed-day attestation before widening is enabled.
 - **I17 K1 Kernel policy and temporal binding.** After K1 migration, change
   migrated `limits.yaml` values and restart two differently configured Kernel
   instances: effective business/risk policy remains bound to the database head.

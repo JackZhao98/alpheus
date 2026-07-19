@@ -101,10 +101,12 @@ Canonical input+output schema SHA-256:
 
 ## Enforced production boundary
 
-- Robinhood execution is constructed only in explicit `live` mode after all
-  existing account, secret, canary and `LIVE_TRADING_ENABLED` gates pass.
-  `read_only` and `shadow` construct no execution provider. The currently
-  deployed stack remains `read_only`.
+- Robinhood execution is constructed only in explicit `live` mode after the
+  account, secret and `LIVE_TRADING_ENABLED` gates pass. A valid database
+  canary authority is then required before watchdog, reconciler, repricer or
+  HTTP workers start and before any effect admission. `read_only` and `shadow`
+  construct no execution provider. The currently deployed stack remains
+  `read_only`.
 - The read client always rejects mutation tools. Live mode constructs a second,
   no-retry MCP session whose capability is restricted to four reviewed order
   mutation tools and the exact bound Agentic account.
@@ -128,11 +130,11 @@ Canonical input+output schema SHA-256:
   quantity increment. Missing or inconsistent metadata fails before the grant;
   the certified equity canary increment is one share. Option canaries remain
   disabled despite their read-only instrument metadata.
-- Canary limit revisions have an immutable database audit trail. Tightening is
-  immediate; widening requires the greater of the old/new clean-day thresholds,
-  that many completed live-ledger days, no PnL-divergence event on those days,
-  and zero currently unresolved `unknown` attempts. Concurrent identical
-  startup revisions collapse to one row under a transaction advisory lock.
+- Authoritative canary limit revisions are immutable and audit-bound.
+  Tightening is immediate; K0 classifies but denies every widening. K1 must add
+  durable completed-day reconciliation attestations before any widening can be
+  enabled. Concurrent identical CLI bootstraps collapse to one row under the
+  stable Live-ledger transaction advisory lock.
 - No further autonomous real-money deduplication experiment is permitted. The
   bounded probe above was initiated and confirmed by the human owner; future
   probes require equally explicit authority and a separately bounded ticket.
@@ -254,43 +256,44 @@ pretending that non-unique order attributes are a client identity.
   network and volume were removed; the running production stack remained
   healthy and `read_only`.
 
-## Remaining gates for M11
+## M11 gate status
 
-### v1.8 canary policy authority
+### v1.8.1 canary policy authority — landed
 
-Migration 0008 and `RecordLiveCanaryRevision` currently provide an immutable
-audit ledger, but the production gate still reads `s.limits.LiveCanary` and no
-production path records or activates the database revision. The ledger is not
-yet authority. In addition, lowering `clean_days_before_raise` without raising
-the cap is currently classified as an ordinary policy change even though it
-widens when a future cap increase becomes eligible.
+Commit `d24b8b9` lands K0. Migration 0010 distinguishes legacy descriptive rows
+from authoritative rows, makes authoritative revisions append-only, and binds
+new Live grants to the exact revision. A single deployment-only
+`canary-policy` CLI performs explicit bootstrap/tightening with expected-
+revision CAS and DB-derived market time. Live startup, both grant paths,
+`/state`, `/limits`, grant/refusal events and cap enforcement now read the
+database authority; `limits.yaml` has no canary field or fallback.
 
-Before the separately confirmed one-share canary, plan v1.8 K0 requires the
-database canary revision/head to drive startup, gate decisions, state and
-events; missing/invalid authority fails Live closed with no YAML fallback.
-`cap increase OR clean-days decrease` is widening. Editing `limits.yaml` and
-restarting after activation must not change the effective canary. The broader
-Kernel policy migration remains a separate post-M11/pre-AP0 module so the first
-canary is not coupled to an unnecessary configuration rewrite.
+The 0009→0010 preservation test, 20-way bootstrap, activation/admission
+linearization, immutable-row probes and full isolated PostgreSQL race suite are
+green. K0 made no production/Robinhood Provider call and did not restart the
+production stack. Review also proved that the former `day_open` query was not
+final-day evidence, so K0 classifies but denies every widening. K1 must add a
+durable completed-day reconciliation attestation before any cap increase or
+clean-days decrease can be enabled.
 
-### v1.7 recovery hardening found by cross-module review
+### v1.7 recovery hardening found by cross-module review — landed
 
-The verified upstream `ref_id` behavior remains sufficient for duplicate-effect
-containment, but the local implementation is not yet the complete recovery
-contract:
+The verified upstream `ref_id` behavior was sufficient for duplicate-effect
+containment, but cross-module review found that the local implementation was
+not yet the complete recovery contract:
 
-- the first send persists one fixed candidate window, while replay currently
-  advances only `replay_count` without proving it is still inside that window;
+- the first send persisted one fixed candidate window, while replay advanced
+  only `replay_count` without proving it was still inside that window;
   a delayed replay can therefore create an order that exact recovery can never
   discover;
-- the account gate prevents a second Provider mutation but currently allows new
-  Live operations, grants, reservations and pending attempts to be staged while
-  the account is active or unknown;
-- the in-memory Halt check is not serialized with every background send path,
-  so a recovered pending attempt, replacement or replay can cross a committed
+- the account gate prevented a second Provider mutation but allowed new Live
+  operations, grants, reservations and pending attempts to be staged while the
+  account was active or unknown;
+- the in-memory Halt check was not serialized with every background send path,
+  so a recovered pending attempt, replacement or replay could cross a committed
   Halt; and
-- changing the deployment to `read_only` removes the execution adapter and the
-  Admin adoption route, so it cannot be the first response to an unresolved
+- changing the deployment to `read_only` removed the execution adapter and the
+  Admin adoption route, so it could not be the first response to an unresolved
   attempt.
 
 Plan v1.7 makes the persisted original `send_window_end` the immutable replay
@@ -346,13 +349,15 @@ weakening it to loose field matching. The v1.6 evidence closes the equity-limit
 metadata gate and commit `319f657` wires the equity-only adapter behind explicit
 live startup controls. The isolated no-order live-mode startup certification
 passes. The v1.7 local recovery hardening above and its acceptance evidence had
-to land before a canary. Commit `0913010` now satisfies that non-money gate; K0
-database-authoritative canary policy and the separately confirmed canary still
-remain. M11 is not yet marked landed:
+to land before a canary. Commit `0913010` satisfies that non-money gate and
+commit `d24b8b9` satisfies K0 database authority. Only the separately confirmed
+canary remains before M11 can be marked landed:
 
 1. The first Alpheus-routed live canary remains a separate human-confirmed
-   action. Its ticket must be exactly one share and remain within the immutable
-   daily canary risk cap. Direct MCP evidence is not silently treated as that
+   action. The confirmed sequence first bootstraps/verifies the $50/five-day
+   revision on the exact target database; K0 did not mutate production. Its
+   trade ticket must then be exactly one share and remain within that immutable
+   daily canary risk cap. Direct MCP evidence is not silently treated as the
    acceptance order.
 2. The currently running Robinhood deployment remains `read_only`; do not
    change its mode or restart it as part of documentation work.

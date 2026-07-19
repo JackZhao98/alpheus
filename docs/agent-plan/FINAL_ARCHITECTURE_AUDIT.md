@@ -43,10 +43,10 @@ closed in the same document revision.
 
 AP0 is nevertheless not authorized. The Kernel clock blocker is closed, its
 complete certification is green, and M11 v1.7.1 recovery/Halt landed in
-`0913010`; however, v1.8 K0 canary authority, the separately confirmed canary
-stop/recovery evidence, K1, Lean v1 freeze and the post-M11 Charter/audit
-closeout remain incomplete. These are hard release gates, not optional
-follow-up work.
+`0913010`, while v1.8.1 K0 database canary authority landed in `d24b8b9`;
+however, the separately confirmed canary stop/recovery evidence, K1, Lean v1
+freeze and the post-M11 Charter/audit closeout remain incomplete. These are
+hard release gates, not optional follow-up work.
 
 ## 2. Scope and method
 
@@ -238,15 +238,17 @@ its separately confirmed exact ticket. Plan amendments v1.7 (`5df440c`) and
 v1.8 (`4328327`) now define the missing pre-canary code gates: bounded same-ref
 recovery, transactional Live admission/Halt serialization and database-
 authoritative canary policy. Recovery/Halt and its non-money acceptance landed
-in `0913010`; K0 database canary authority is not yet landed.
+in `0913010`; K0 database canary authority and its non-money acceptance landed
+in `d24b8b9` without a production Provider call.
 
-After they land, execute only the already specified one-share equity canary
-under a fresh confirmation. Halt new risk, preserve the Live recovery adapter,
+Next, under a fresh confirmation, bootstrap and verify the $50/five-day policy
+on the exact target database, then execute only the already specified one-share
+equity canary. Halt new risk, preserve the Live recovery adapter,
 reconcile/adopt/cancel or ingest every real order/fill/position/PnL fact, prove
 the gate/accounting clean, and only then return deployment to `read_only`. A
 real fill is never rolled back; any reduction is a new Kernel-verified effect.
 Mark M11 `LANDED` only if every frozen acceptance item passes. This audit
-authorizes no real-money order.
+authorizes neither the target-database mutation nor a real-money order.
 
 ### R-03 — Post-M11 Charter amendment is not landed
 
@@ -321,9 +323,8 @@ AP0_RELEASE_STATUS: WITHHELD
 ```
 
 No Agent Platform implementation should begin from this audit alone. M11
-v1.7.1 recovery/Halt is committed and pushed; the next code module is v1.8 K0
-canary policy authority, again committed and pushed by cohesive function. Only
-after its non-money acceptance
-may the separately confirmed one-share canary and M11 landing proceed; neither
-this audit nor the Lean amendment authorizes that order. K1, Lean v1 freeze,
-Charter closeout and a refreshed audit/release record precede AP0.
+v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority are committed and
+pushed. The separately confirmed target-database bootstrap, one-share canary
+and M11 landing are next; neither this audit nor the Lean amendment authorizes
+the database mutation or that order. K1, Lean v1 freeze, Charter closeout and a
+refreshed audit/release record precede AP0.

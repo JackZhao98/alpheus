@@ -2,7 +2,7 @@
 
 [Back to Plan Index](INDEX.md)
 
-> Amendment: **v1.8**
+> Amendment: **v1.8.1**
 >
 > Status: normative ownership model; implementation is split into the narrow
 > M11 blocker and the post-M11/pre-AP0 migration below.
@@ -15,11 +15,13 @@ policy: values change by editing a deployment file and restarting, old work
 does not bind the policy that authorized it, and multiple instances may load
 different values.
 
-The concrete M11 audit exposed the problem. `live_canary_revision` already has
-an immutable database ledger, but the production canary gate still reads
-`limits.yaml`; no production path records or activates the database revision.
-The audit trail is therefore descriptive, not authoritative. Editing the YAML
-and restarting can bypass the clean-day widening proof.
+The concrete M11 audit exposed the pre-K0 problem. `live_canary_revision`
+already had a database ledger, but the production canary gate still read
+`limits.yaml`; no production path recorded or activated the database revision.
+The audit trail was therefore descriptive, not authoritative, and editing the
+YAML plus restarting could bypass the intended clean-day widening proof. K0
+closed this canary-specific hole; K1 remains responsible for migrating the
+broader Kernel policy domains below.
 
 This amendment moves human/business policy to typed immutable database
 revisions without turning every constant into a remotely editable setting and
@@ -96,9 +98,8 @@ policy document and a small active head:
   policy, digest, author/reason, creation/effective time and change class;
 - `kernel_policy_head`: one active revision for the bound deployment/account,
   with a monotonically increasing generation and activation audit identity;
-- the existing `live_canary_revision`, whose latest effective row may be its
-  head for K0, or a separate head/generation if recording and activation are
-  separated; and
+- the existing `live_canary_revision`, whose latest authoritative immutable row
+  is the K0 head and whose row ID is its generation; and
 - revision foreign keys/digests on the records that consume authorization.
 
 `KernelPolicyRevision` does not duplicate canary values or platform mode. An
@@ -113,14 +114,15 @@ revision creation occur through the Kernel's Admin boundary or a small
 governance CLI using existing authentication and audit machinery. There is no
 new daemon.
 
-`limits.yaml` becomes input to an explicit, one-time empty-database bootstrap
-command and a human-readable export for development. Normal production startup
-does not record a revision from the file. Once the corresponding domain head
-exists, startup never reads that domain's YAML values as an alternative
-authority. Failure to load, decode or verify the required head prevents the
-effects it governs. Shadow inherits the same Kernel policy by default; a future
-experimental Shadow policy must be explicitly bound and cannot silently alter
-Live.
+For K1's general policy migration, `limits.yaml` becomes input to an explicit,
+one-time empty-database bootstrap command and a human-readable export for
+development. The K0 canary CLI deliberately does not read YAML. Normal
+production startup does not record a revision from the file. Once the
+corresponding domain head exists, startup never reads that domain's YAML values
+as an alternative authority. Failure to load, decode or verify the required
+head prevents the effects it governs. Shadow inherits the same Kernel policy
+by default; a future experimental Shadow policy must be explicitly bound and
+cannot silently alter Live.
 
 ## Binding and time semantics
 
@@ -215,6 +217,23 @@ Do only the Live-critical repair:
 6. retain landed commit `0913010` as the v1.7.1 replay/admission/Halt
    prerequisite before any real canary.
 
+K0 uses one append-only authoritative row stream: `authority_version=1` marks
+post-K0 rows, the latest such row is active, and its row ID is the generation.
+Pre-K0 descriptive rows are never promoted. Authoritative rows cannot be
+updated, deleted or promoted in place; activation and Live grant admission
+serialize on the stable Live-ledger database lock. New Live grants bind the
+exact canary revision by foreign key.
+
+K0 deliberately supports only explicit initial bootstrap and tightening. The
+implementation review proved that `day_open` means a day was observed, not
+that the final broker PnL, fills and reconciliation were completed. Therefore
+every widening (`cap increase OR clean_days decrease`, including mixed changes)
+is classified correctly but denied fail-closed in K0. K1 owns a typed durable
+completed-day attestation and may enable widening only after proving
+`max(old_clean_days,new_clean_days)` consecutive eligible attestations with no
+unknown effect or PnL divergence. A startup file, ordinary event or `day_open`
+row can never serve as that proof.
+
 Do not combine the first one-share canary with a migration of every existing
 limit. Until K1, the remaining frozen YAML thresholds are a temporary,
 build-pinned ceiling for that separately human-confirmed one-share ticket; the
@@ -227,7 +246,9 @@ Add `KernelPolicyRevision/Head`, one-time bootstrap/import, revision bindings,
 absolute proposal expiry and database lease expiry. Migrate only live fields
 with proven readers, then stop loading policy values from YAML whenever a head
 exists. Remove dead fields. This is an in-process Kernel/Store module and schema
-migration, not a service.
+migration, not a service. Add the typed Live-canary completed-day attestation
+and guarded widening path described above; the attestation is evidence, not a
+generic settings mechanism.
 
 ### K2 — with the owning Agent modules
 
@@ -255,7 +276,20 @@ justify a Config Service.
 - Changing YAML after canary activation changes no running/restarted canary
   behavior.
 - Canary clean-days decrease is widening; cap/threshold mixed changes cannot
-  bypass the proof.
+  bypass classification, and every widening is denied until K1's durable
+  completed-day attestation lands.
+- Pre-K0 rows remain non-authoritative after 0009→0010 migration; authoritative
+  rows reject update/delete/in-place promotion, and concurrent activation plus
+  grant admission binds wholly to the old or new generation, never torn fields.
+
+### K0 implementation status
+
+**LANDED** in `d24b8b9`. Migration 0010, the single deployment-only
+`canary-policy` CLI, Live startup check, per-admission database read, grant
+foreign key, state/limits projection, immutable-row trigger, legacy upgrade and
+concurrency/race probes are complete. No HTTP mutation surface, head table,
+Config Service, hot reload, automatic YAML import or production broker call was
+added. See [`../k0_certification.md`](../k0_certification.md).
 
 ### K1 probes
 
