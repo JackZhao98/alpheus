@@ -37,60 +37,69 @@ type memoryFill struct {
 	fill    store.FillInput
 }
 
+type memoryBrokerProjection struct {
+	provider units.Qty
+	tracked  units.Qty
+}
+
 type memoryStore struct {
-	mu                     sync.Mutex
-	idempotencyMu          sync.Mutex
-	symbolMu               sync.Mutex
-	ledgerLocks            [2]sync.Mutex
-	idempotencyLocks       map[string]*sync.Mutex
-	symbolLocks            map[string]*sync.Mutex
-	statuses               map[string]string
-	classes                map[string]string
-	shadows                map[string]bool
-	operations             map[string]risk.Operation
-	operationRows          map[string]store.OperationRow
-	grants                 map[string]store.TradeGrant
-	reservations           map[string]store.CloseReservation
-	openReservations       map[string]store.OpenReservation
-	shadowAccount          store.ShadowAccount
-	shadowPositions        map[string]store.ShadowPosition
-	exposureQty            map[string]units.Qty
-	firstExposureOp        map[string]string
-	attempts               map[string]store.ExecutionAttempt
-	orders                 map[string]store.Order
-	fills                  map[string]memoryFill
-	verdicts               map[string]json.RawMessage
-	journals               []journalEntry
-	events                 []string
-	eventPayloads          map[string][]any
-	blackboards            map[string]json.RawMessage
-	journalErr             error
-	halted                 bool
-	haltReason             string
-	haltedAt               time.Time
-	proposalLockErr        error
-	m3aActive              bool
-	databaseNow            func() time.Time
-	databaseNowErr         error
-	dayOpenEquity          map[string]units.Micros
-	realizedPnL            map[string]units.Micros
-	breakerStates          map[string]store.BreakerState
-	breakerOverrides       map[string]bool
-	consecutiveLossDays    map[string]int
-	liveActiveAttemptID    string
-	liveUnknownAttemptID   string
-	liveCanary             *store.LiveCanaryRevision
-	liveCanaryErr          error
-	kernelPolicy           *store.KernelPolicyRevision
-	kernelPolicyErr        error
-	kernelPolicyHistory    map[int64]*store.KernelPolicyRevision
-	brokerObservationGen   int64
-	brokerAccountView      *store.BrokerAccountView
-	brokerObservationViews map[string]*store.BrokerAccountView
-	preEffectManifests     map[string]store.PreEffectManifest
-	externalControls       map[string]store.ExternalControlEpisode
-	controlTrackedFilled   map[string]units.Qty
-	controlExternalFilled  map[string]units.Qty
+	mu                       sync.Mutex
+	idempotencyMu            sync.Mutex
+	symbolMu                 sync.Mutex
+	ledgerLocks              [2]sync.Mutex
+	idempotencyLocks         map[string]*sync.Mutex
+	symbolLocks              map[string]*sync.Mutex
+	statuses                 map[string]string
+	classes                  map[string]string
+	shadows                  map[string]bool
+	operations               map[string]risk.Operation
+	operationRows            map[string]store.OperationRow
+	grants                   map[string]store.TradeGrant
+	reservations             map[string]store.CloseReservation
+	openReservations         map[string]store.OpenReservation
+	shadowAccount            store.ShadowAccount
+	shadowPositions          map[string]store.ShadowPosition
+	exposureQty              map[string]units.Qty
+	firstExposureOp          map[string]string
+	attempts                 map[string]store.ExecutionAttempt
+	orders                   map[string]store.Order
+	fills                    map[string]memoryFill
+	verdicts                 map[string]json.RawMessage
+	journals                 []journalEntry
+	events                   []string
+	eventPayloads            map[string][]any
+	blackboards              map[string]json.RawMessage
+	journalErr               error
+	halted                   bool
+	haltReason               string
+	haltedAt                 time.Time
+	proposalLockErr          error
+	m3aActive                bool
+	databaseNow              func() time.Time
+	databaseNowErr           error
+	dayOpenEquity            map[string]units.Micros
+	realizedPnL              map[string]units.Micros
+	breakerStates            map[string]store.BreakerState
+	breakerOverrides         map[string]bool
+	consecutiveLossDays      map[string]int
+	liveActiveAttemptID      string
+	liveUnknownAttemptID     string
+	liveCanary               *store.LiveCanaryRevision
+	liveCanaryErr            error
+	kernelPolicy             *store.KernelPolicyRevision
+	kernelPolicyErr          error
+	kernelPolicyHistory      map[int64]*store.KernelPolicyRevision
+	brokerObservationGen     int64
+	brokerReconciliationGen  int64
+	brokerAccountView        *store.BrokerAccountView
+	brokerObservationViews   map[string]*store.BrokerAccountView
+	brokerPositionProjection map[string]memoryBrokerProjection
+	externalChangeEpisodes   []store.BrokerExternalChangeEpisode
+	brokerInvalidations      []string
+	preEffectManifests       map[string]store.PreEffectManifest
+	externalControls         map[string]store.ExternalControlEpisode
+	controlTrackedFilled     map[string]units.Qty
+	controlExternalFilled    map[string]units.Qty
 }
 
 func newMemoryStore() *memoryStore {
@@ -121,21 +130,22 @@ func newMemoryStore() *memoryStore {
 		shadowAccount: store.ShadowAccount{
 			Cash: units.MustMicros("300"), BuyingPower: units.MustMicros("300"),
 		},
-		shadowPositions:       map[string]store.ShadowPosition{},
-		exposureQty:           map[string]units.Qty{},
-		firstExposureOp:       map[string]string{},
-		attempts:              map[string]store.ExecutionAttempt{},
-		orders:                map[string]store.Order{},
-		fills:                 map[string]memoryFill{},
-		verdicts:              map[string]json.RawMessage{},
-		blackboards:           map[string]json.RawMessage{},
-		preEffectManifests:    map[string]store.PreEffectManifest{},
-		externalControls:      map[string]store.ExternalControlEpisode{},
-		controlTrackedFilled:  map[string]units.Qty{},
-		controlExternalFilled: map[string]units.Qty{},
-		eventPayloads:         map[string][]any{},
-		dayOpenEquity:         map[string]units.Micros{},
-		realizedPnL:           map[string]units.Micros{},
+		shadowPositions:          map[string]store.ShadowPosition{},
+		exposureQty:              map[string]units.Qty{},
+		firstExposureOp:          map[string]string{},
+		attempts:                 map[string]store.ExecutionAttempt{},
+		orders:                   map[string]store.Order{},
+		fills:                    map[string]memoryFill{},
+		verdicts:                 map[string]json.RawMessage{},
+		blackboards:              map[string]json.RawMessage{},
+		brokerPositionProjection: map[string]memoryBrokerProjection{},
+		preEffectManifests:       map[string]store.PreEffectManifest{},
+		externalControls:         map[string]store.ExternalControlEpisode{},
+		controlTrackedFilled:     map[string]units.Qty{},
+		controlExternalFilled:    map[string]units.Qty{},
+		eventPayloads:            map[string][]any{},
+		dayOpenEquity:            map[string]units.Micros{},
+		realizedPnL:              map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},
@@ -541,6 +551,10 @@ func (m *memoryStore) LoadBoundKernelPolicy(operation *store.OperationRow) (*sto
 	return m.BoundKernelPolicy(operation)
 }
 
+func (m *memoryStore) BrokerLocalStateGeneration() (int64, error) {
+	return 0, nil
+}
+
 func (m *memoryStore) RecordBrokerObservation(input store.BrokerObservationInput) (*store.BrokerObservation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -549,6 +563,7 @@ func (m *memoryStore) RecordBrokerObservation(input store.BrokerObservationInput
 		ID: input.ID, Generation: m.brokerObservationGen, AccountID: input.AccountID,
 		Source: input.Source, Purpose: input.Purpose, StartedAt: input.StartedAt,
 		CompletedAt: input.CompletedAt, Status: "complete", ManifestDigest: strings.Repeat("0", 64),
+		LocalStateGeneration: input.LocalStateGeneration,
 	}
 	if observation.ID == "" {
 		observation.ID = store.NewID()
@@ -625,6 +640,218 @@ func (m *memoryStore) LoadBrokerAccountView(accountID string) (*store.BrokerAcco
 	copy := *m.brokerAccountView
 	copy.Objects = append([]store.BrokerObservedObject(nil), m.brokerAccountView.Objects...)
 	return &copy, nil
+}
+
+func (m *memoryStore) ReconcileBrokerObservation(observationID string) (*store.BrokerReconciliationResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	view := m.brokerObservationViews[observationID]
+	if m.brokerAccountView != nil && (view == nil || m.brokerAccountView.Observation.Generation > view.Observation.Generation) {
+		view = m.brokerAccountView
+	}
+	if view == nil {
+		return nil, sql.ErrNoRows
+	}
+	result := &store.BrokerReconciliationResult{
+		ObservationID: view.Observation.ID, ObservationGeneration: view.Observation.Generation,
+	}
+	if view.Observation.Generation <= m.brokerReconciliationGen {
+		return result, nil
+	}
+	if m.liveActiveAttemptID != "" || m.liveUnknownAttemptID != "" {
+		result.Deferred, result.DeferredReason = true, "live_execution_unresolved"
+		return result, nil
+	}
+	current := map[string]broker.Position{}
+	positionKeys := map[string][]string{}
+	observedOrders := map[string]broker.ReadOrder{}
+	for _, object := range view.Objects {
+		switch object.Family {
+		case store.BrokerFamilyPositions:
+			var position broker.Position
+			if err := json.Unmarshal(object.Canonical, &position); err != nil {
+				return nil, err
+			}
+			key := position.Kind + "\x00" + position.Symbol
+			aggregate := current[key]
+			aggregate.Symbol, aggregate.Kind = position.Symbol, position.Kind
+			quantity, err := units.AddQty(aggregate.Qty, position.Qty)
+			if err != nil {
+				return nil, err
+			}
+			aggregate.Qty = quantity
+			current[key] = aggregate
+			positionKeys[key] = append(positionKeys[key], object.ObjectKey)
+		case store.BrokerFamilyOrders:
+			var order broker.ReadOrder
+			if err := json.Unmarshal(object.Canonical, &order); err != nil {
+				return nil, err
+			}
+			observedOrders[object.ObjectKey] = order
+		}
+	}
+	for _, local := range m.orders {
+		if local.Ledger != "live" || local.BrokerOrderID == "" ||
+			(local.State != "submitted" && local.State != "partially_filled") {
+			continue
+		}
+		observed, ok := observedOrders[local.BrokerOrderID]
+		var durable units.Qty
+		for _, fill := range m.fills {
+			if fill.orderID == local.ID {
+				durable += fill.fill.Qty
+			}
+		}
+		if !ok || observed.FilledQty != durable {
+			result.Deferred, result.DeferredReason = true, "alpheus_order_effect_not_yet_applied"
+			return result, nil
+		}
+	}
+	keySet := map[string]bool{}
+	for key := range current {
+		keySet[key] = true
+	}
+	for key := range m.brokerPositionProjection {
+		keySet[key] = true
+	}
+	for key := range m.exposureQty {
+		parts := strings.Split(key, "\x00")
+		if len(parts) == 3 && parts[0] == "live" {
+			keySet[parts[2]+"\x00"+parts[1]] = true
+		}
+	}
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	changed := false
+	for _, key := range keys {
+		parts := strings.SplitN(key, "\x00", 2)
+		kind, symbol := parts[0], parts[1]
+		providerQty := current[key].Qty
+		exposureKey := memoryExposureKey("live", symbol, kind)
+		trackedBefore := m.exposureQty[exposureKey]
+		providerLong := providerQty
+		if providerLong < 0 {
+			providerLong = 0
+		}
+		trackedAfter := trackedBefore
+		if trackedAfter > providerLong {
+			trackedAfter = providerLong
+		}
+		adjusted := trackedBefore - trackedAfter
+		prior, hasPrior := m.brokerPositionProjection[key]
+		beforeExternal, afterExternal := units.Qty(0), providerQty-trackedAfter
+		if hasPrior {
+			beforeExternal = prior.provider - prior.tracked
+		}
+		if adjusted > 0 || (hasPrior && beforeExternal != afterExternal) || (!hasPrior && providerQty != trackedAfter) {
+			episode := store.BrokerExternalChangeEpisode{
+				ID: store.NewID(), AccountID: view.Observation.AccountID,
+				BrokerObservationID: view.Observation.ID, ObservationGeneration: view.Observation.Generation,
+				Symbol: symbol, Kind: kind, ProviderQtyAfter: providerQty,
+				TrackedQtyBefore: trackedBefore, TrackedQtyAfter: trackedAfter,
+				AdjustedTrackedQty: adjusted, PositionKeys: append([]string(nil), positionKeys[key]...),
+				AttributionStatus: "uncertain", Origin: "external", ChangeKind: "baseline",
+			}
+			if trackedBefore > 0 {
+				episode.Origin = "mixed"
+			}
+			if len(positionKeys[key]) > 1 {
+				episode.Origin = "ambiguous"
+			}
+			if hasPrior {
+				before := prior.provider
+				episode.ProviderQtyBefore = &before
+				switch {
+				case beforeExternal != 0 && afterExternal != 0 && (beforeExternal < 0) != (afterExternal < 0):
+					episode.ChangeKind = "external_reversal"
+				case adjusted > 0 || memoryAbsoluteQty(afterExternal) < memoryAbsoluteQty(beforeExternal):
+					episode.ChangeKind = "external_reduce"
+				default:
+					episode.ChangeKind = "external_add"
+				}
+			}
+			m.exposureQty[exposureKey] = trackedAfter
+			if adjusted > 0 {
+				m.events = append(m.events, "position_exposure_mismatch")
+			}
+			m.externalChangeEpisodes = append(m.externalChangeEpisodes, episode)
+			result.Episodes = append(result.Episodes, episode)
+			changed = true
+		}
+		m.brokerPositionProjection[key] = memoryBrokerProjection{provider: providerQty, tracked: trackedAfter}
+	}
+	if changed {
+		for id, status := range m.statuses {
+			row := m.operationRows[id]
+			if !row.TS.Before(view.Observation.CompletedAt) || m.shadows[id] ||
+				(status != "auto_approved" && status != "pending_review" && status != "approved") {
+				continue
+			}
+			unsafe := false
+			for _, attempt := range m.attempts {
+				if attempt.OperationID == id && (attempt.State == "claimed" || attempt.State == "unknown") {
+					unsafe = true
+				}
+			}
+			for _, order := range m.orders {
+				if order.OperationID == id && (order.State == "submitted" || order.State == "partially_filled") {
+					unsafe = true
+				}
+			}
+			if unsafe {
+				continue
+			}
+			for attemptID, attempt := range m.attempts {
+				if attempt.OperationID == id && attempt.State == "pending" {
+					attempt.State, attempt.LastError = "failed", "external broker state changed"
+					m.attempts[attemptID] = attempt
+				}
+			}
+			for attemptID, order := range m.orders {
+				if order.OperationID == id && order.State == "new" && order.BrokerOrderID == "" {
+					order.State = "rejected"
+					m.orders[attemptID] = order
+				}
+			}
+			if reservation, ok := m.reservations[id]; ok && reservation.State == "held" {
+				reservation.State, reservation.RemainingQty = "released", 0
+				m.reservations[id] = reservation
+			}
+			for reservationID, reservation := range m.reservations {
+				if reservation.OperationID == id && reservation.State == "held" {
+					reservation.State, reservation.RemainingQty = "released", 0
+					m.reservations[reservationID] = reservation
+				}
+			}
+			for reservationID, reservation := range m.openReservations {
+				if reservation.OperationID == id && reservation.ResourceState == "held" {
+					reservation.ResourceState = "released"
+					reservation.RemainingRisk, reservation.RemainingCash = 0, 0
+					m.openReservations[reservationID] = reservation
+				}
+			}
+			nextStatus := "failed"
+			if status == "pending_review" {
+				nextStatus = "expired"
+			}
+			m.setMemoryOperationStatusLocked(id, nextStatus)
+			m.brokerInvalidations = append(m.brokerInvalidations, id)
+			result.InvalidatedOperationIDs = append(result.InvalidatedOperationIDs, id)
+		}
+	}
+	m.brokerReconciliationGen = view.Observation.Generation
+	result.Applied = true
+	return result, nil
+}
+
+func memoryAbsoluteQty(qty units.Qty) units.Qty {
+	if qty < 0 {
+		return -qty
+	}
+	return qty
 }
 
 func (m *memoryStore) RecordPreEffectManifest(input store.PreEffectManifestInput) (*store.PreEffectManifest, error) {

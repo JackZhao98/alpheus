@@ -108,9 +108,11 @@ type storeAPI interface {
 	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
 	LoadBoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error)
 	DatabaseNow() (time.Time, error)
+	BrokerLocalStateGeneration() (int64, error)
 	RecordBrokerObservation(input store.BrokerObservationInput) (*store.BrokerObservation, error)
 	LoadBrokerAccountView(accountID string) (*store.BrokerAccountView, error)
 	LoadBrokerObservation(id string) (*store.BrokerAccountView, error)
+	ReconcileBrokerObservation(observationID string) (*store.BrokerReconciliationResult, error)
 }
 
 type dayStateReader interface {
@@ -780,8 +782,12 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	var closeInstrument *broker.Instrument
 	var decisionSnapshot *providerSnapshot
 	if !op.Shadow && (op.Action == "close" || op.Action == "cancel") {
-		decisionSnapshot, err = s.captureProviderSnapshot(r.Context(), "decision")
+		decisionSnapshot, err = s.captureReconciledProviderDecision(r.Context())
 		if err != nil {
+			if errors.Is(err, errAccountBindingViolation) {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "account_binding_violation"})
+				return
+			}
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "broker decision snapshot unavailable"})
 			return
 		}

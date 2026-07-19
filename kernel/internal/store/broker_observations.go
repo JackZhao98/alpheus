@@ -23,13 +23,14 @@ const (
 )
 
 type BrokerObservationInput struct {
-	ID          string
-	AccountID   string
-	Source      string
-	Purpose     string
-	StartedAt   time.Time
-	CompletedAt time.Time
-	Families    []BrokerObservationFamilyInput
+	ID                   string
+	AccountID            string
+	Source               string
+	Purpose              string
+	StartedAt            time.Time
+	CompletedAt          time.Time
+	LocalStateGeneration int64
+	Families             []BrokerObservationFamilyInput
 }
 
 type BrokerObservationFamilyInput struct {
@@ -47,15 +48,16 @@ type BrokerObservationItemInput struct {
 }
 
 type BrokerObservation struct {
-	ID             string    `json:"id"`
-	Generation     int64     `json:"generation"`
-	AccountID      string    `json:"account_id"`
-	Source         string    `json:"source"`
-	Purpose        string    `json:"purpose"`
-	StartedAt      time.Time `json:"started_at"`
-	CompletedAt    time.Time `json:"completed_at"`
-	Status         string    `json:"status"`
-	ManifestDigest string    `json:"manifest_digest"`
+	ID                   string    `json:"id"`
+	Generation           int64     `json:"generation"`
+	AccountID            string    `json:"account_id"`
+	Source               string    `json:"source"`
+	Purpose              string    `json:"purpose"`
+	StartedAt            time.Time `json:"started_at"`
+	CompletedAt          time.Time `json:"completed_at"`
+	Status               string    `json:"status"`
+	ManifestDigest       string    `json:"manifest_digest"`
+	LocalStateGeneration int64     `json:"local_state_generation"`
 }
 
 type BrokerObservedObject struct {
@@ -116,10 +118,10 @@ func (s *Store) RecordBrokerObservation(input BrokerObservationInput) (*BrokerOb
 
 	var observation BrokerObservation
 	err = tx.QueryRowContext(ctx, `INSERT INTO broker_observation
-		(id,account_id,source,purpose,started_at,completed_at,status,manifest_digest)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		(id,account_id,source,purpose,started_at,completed_at,status,manifest_digest,local_state_generation)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		RETURNING generation`, input.ID, input.AccountID, input.Source, input.Purpose,
-		input.StartedAt, input.CompletedAt, status, manifest[:]).Scan(&observation.Generation)
+		input.StartedAt, input.CompletedAt, status, manifest[:], input.LocalStateGeneration).Scan(&observation.Generation)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
@@ -127,6 +129,7 @@ func (s *Store) RecordBrokerObservation(input BrokerObservationInput) (*BrokerOb
 		ID: input.ID, Generation: observation.Generation, AccountID: input.AccountID,
 		Source: input.Source, Purpose: input.Purpose, StartedAt: input.StartedAt,
 		CompletedAt: input.CompletedAt, Status: status, ManifestDigest: hex.EncodeToString(manifest[:]),
+		LocalStateGeneration: input.LocalStateGeneration,
 	}
 	for _, family := range families {
 		var errorCode any
@@ -176,7 +179,8 @@ func (s *Store) RecordBrokerObservation(input BrokerObservationInput) (*BrokerOb
 		"observation_id": input.ID, "generation": observation.Generation,
 		"account_id": input.AccountID, "source": input.Source, "purpose": input.Purpose,
 		"status": status, "manifest_digest": observation.ManifestDigest,
-		"complete_account_view": completeAccountView,
+		"local_state_generation": input.LocalStateGeneration,
+		"complete_account_view":  completeAccountView,
 	}); err != nil {
 		return nil, normalizeDBError(err)
 	}
@@ -188,7 +192,7 @@ func (s *Store) RecordBrokerObservation(input BrokerObservationInput) (*BrokerOb
 
 func normalizeBrokerObservation(input BrokerObservationInput) ([]normalizedObservationFamily, string, [sha256.Size]byte, bool, error) {
 	var zero [sha256.Size]byte
-	if input.ID == "" || input.AccountID == "" || input.Source == "" ||
+	if input.ID == "" || input.AccountID == "" || input.Source == "" || input.LocalStateGeneration < 0 ||
 		input.StartedAt.IsZero() || input.CompletedAt.IsZero() || input.CompletedAt.Before(input.StartedAt) {
 		return nil, "", zero, false, fmt.Errorf("broker observation identity or time range is invalid")
 	}
@@ -264,8 +268,9 @@ func normalizeBrokerObservation(input BrokerObservationInput) ([]normalizedObser
 	}
 	manifestBytes, _ := json.Marshal(map[string]any{
 		"id": input.ID, "account_id": input.AccountID, "source": input.Source, "purpose": input.Purpose,
-		"started_at":   input.StartedAt.UTC().Format(time.RFC3339Nano),
-		"completed_at": input.CompletedAt.UTC().Format(time.RFC3339Nano), "families": manifestFamilies,
+		"started_at":             input.StartedAt.UTC().Format(time.RFC3339Nano),
+		"completed_at":           input.CompletedAt.UTC().Format(time.RFC3339Nano),
+		"local_state_generation": input.LocalStateGeneration, "families": manifestFamilies,
 	})
 	completeAccountView := status == "complete" && seenFamilies[BrokerFamilyAccount] &&
 		seenFamilies[BrokerFamilyPositions] && seenFamilies[BrokerFamilyOrders]
@@ -319,6 +324,7 @@ type observedOrderIdentity struct {
 	Kind            string       `json:"kind"`
 	PositionEffect  string       `json:"position_effect"`
 	Qty             units.Qty    `json:"qty"`
+	FilledQty       units.Qty    `json:"filled_qty"`
 	LimitPrice      units.Micros `json:"limit_price"`
 	LimitPriceKnown bool         `json:"limit_price_known"`
 }
@@ -509,10 +515,12 @@ func loadBrokerObservation(ctx context.Context, db *sql.DB, id string) (*BrokerA
 	var view BrokerAccountView
 	var digest []byte
 	err := db.QueryRowContext(ctx, `SELECT id,generation,account_id,source,purpose,
-		started_at,completed_at,status,manifest_digest FROM broker_observation WHERE id=$1`, id).
+		started_at,completed_at,status,manifest_digest,local_state_generation
+		FROM broker_observation WHERE id=$1`, id).
 		Scan(&view.Observation.ID, &view.Observation.Generation, &view.Observation.AccountID,
 			&view.Observation.Source, &view.Observation.Purpose, &view.Observation.StartedAt,
-			&view.Observation.CompletedAt, &view.Observation.Status, &digest)
+			&view.Observation.CompletedAt, &view.Observation.Status, &digest,
+			&view.Observation.LocalStateGeneration)
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}

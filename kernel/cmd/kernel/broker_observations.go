@@ -176,6 +176,10 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 	if provider == nil {
 		return nil, fmt.Errorf("account provider unavailable")
 	}
+	localStateGeneration, err := s.store.BrokerLocalStateGeneration()
+	if err != nil {
+		return nil, fmt.Errorf("local broker state generation unavailable")
+	}
 	started := time.Now().UTC()
 	accountIDCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	accountID, err := provider.AccountID(accountIDCtx)
@@ -261,7 +265,7 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 	completed := time.Now().UTC()
 	observation, err := s.store.RecordBrokerObservation(store.BrokerObservationInput{
 		AccountID: accountID, Source: source, Purpose: purpose, StartedAt: started,
-		CompletedAt: completed, Families: families,
+		CompletedAt: completed, LocalStateGeneration: localStateGeneration, Families: families,
 	})
 	if err != nil {
 		return nil, err
@@ -281,7 +285,33 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 	return snapshot, nil
 }
 
+// captureReconciledProviderDecision is the only automatic entrypoint which
+// may turn Provider positions into reconciliation state. Its reads bypass the
+// interactive MCP cache; read-model and ordinary cached snapshots remain
+// evidence only and can never reduce the internal exposure ledger.
+func (s *server) captureReconciledProviderDecision(ctx context.Context) (*providerSnapshot, error) {
+	freshCtx := rhmcp.WithFreshReads(ctx)
+	bindingCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+	bindingErr := s.assertLiveAccountBinding(bindingCtx, "")
+	cancel()
+	if bindingErr != nil {
+		return nil, bindingErr
+	}
+	snapshot, err := s.captureProviderSnapshot(freshCtx, "decision")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.ReconcileBrokerObservation(snapshot.Observation.ID); err != nil {
+		return nil, fmt.Errorf("reconcile broker observation: %w", err)
+	}
+	return snapshot, nil
+}
+
 func (s *server) captureProviderFills(ctx context.Context, purpose, accountID, source string, since time.Time) ([]broker.ReadFill, *store.BrokerObservation, []store.BrokerObservedObject, error) {
+	localStateGeneration, err := s.store.BrokerLocalStateGeneration()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("local broker state generation unavailable")
+	}
 	started := time.Now().UTC()
 	providerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	fills, providerErr := s.accountProvider().RecentFills(providerCtx, since)
@@ -302,7 +332,8 @@ func (s *server) captureProviderFills(ctx context.Context, purpose, accountID, s
 	}
 	observation, err := s.store.RecordBrokerObservation(store.BrokerObservationInput{
 		AccountID: accountID, Source: source, Purpose: purpose, StartedAt: started,
-		CompletedAt: completed, Families: []store.BrokerObservationFamilyInput{family},
+		CompletedAt: completed, LocalStateGeneration: localStateGeneration,
+		Families: []store.BrokerObservationFamilyInput{family},
 	})
 	if err != nil {
 		return nil, nil, nil, err
