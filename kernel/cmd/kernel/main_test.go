@@ -60,6 +60,7 @@ type memoryStore struct {
 	verdicts             map[string]json.RawMessage
 	journals             []journalEntry
 	events               []string
+	eventPayloads        map[string][]any
 	blackboards          map[string]json.RawMessage
 	journalErr           error
 	halted               bool
@@ -76,9 +77,12 @@ type memoryStore struct {
 	consecutiveLossDays  map[string]int
 	liveActiveAttemptID  string
 	liveUnknownAttemptID string
+	liveCanary           *store.LiveCanaryRevision
+	liveCanaryErr        error
 }
 
 func newMemoryStore() *memoryStore {
+	now := time.Now().UTC()
 	return &memoryStore{
 		statuses:         map[string]string{},
 		classes:          map[string]string{},
@@ -101,6 +105,7 @@ func newMemoryStore() *memoryStore {
 		fills:           map[string]memoryFill{},
 		verdicts:        map[string]json.RawMessage{},
 		blackboards:     map[string]json.RawMessage{},
+		eventPayloads:   map[string][]any{},
 		dayOpenEquity:   map[string]units.Micros{},
 		realizedPnL:     map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
@@ -108,6 +113,12 @@ func newMemoryStore() *memoryStore {
 		},
 		breakerOverrides:    map[string]bool{},
 		consecutiveLossDays: map[string]int{},
+		liveCanary: &store.LiveCanaryRevision{
+			ID: 1, Generation: 1, AuthorityVersion: 1,
+			DailyAuthorizedRiskCapUSD: units.MustMicros("1000000"), CleanDaysBeforeRaise: 1,
+			EffectiveMarketDay: now.AddDate(-1, 0, 0), RecordedAt: now.Add(-time.Hour),
+			RecordedBy: "test", Reason: "test authority", ChangeClass: "initial", ObservedAt: now,
+		},
 	}
 }
 
@@ -246,14 +257,15 @@ func (g *memoryGate) release() {
 	}
 }
 
-func (m *memoryStore) Event(kind string, _ any) {
-	_ = m.InsertEvent(kind, nil)
+func (m *memoryStore) Event(kind string, payload any) {
+	_ = m.InsertEvent(kind, payload)
 }
 
 func (m *memoryStore) InsertEvent(kind string, payload any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, kind)
+	m.eventPayloads[kind] = append(m.eventPayloads[kind], payload)
 	if kind == globalHaltEvent {
 		if fields, ok := payload.(map[string]any); ok {
 			m.halted, _ = fields["halted"].(bool)
@@ -423,8 +435,29 @@ func (m *memoryStore) TradeGrantUsage(ledger string, marketDay time.Time, exclud
 		} else {
 			usage.AuthorizedRisk += grant.AuthorizedRisk
 		}
+		if ledger == "live" && grant.LiveCanaryRevisionID <= 0 {
+			usage.HasUnboundCanary = true
+		}
 	}
 	return usage, nil
+}
+
+func (m *memoryStore) LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.liveCanaryErr != nil {
+		return nil, m.liveCanaryErr
+	}
+	if m.liveCanary == nil {
+		return nil, store.ErrLiveCanaryAuthorityMissing
+	}
+	copy := *m.liveCanary
+	copy.ObservedAt = time.Now().UTC()
+	return &copy, nil
+}
+
+func (g *memoryGate) LiveCanaryAuthority(_ time.Time) (*store.LiveCanaryRevision, error) {
+	return g.LoadLiveCanaryAuthority()
 }
 
 func sameDate(left, right time.Time) bool {
@@ -1582,8 +1615,6 @@ func dualLedgerLimits() config.Limits {
 	limits.ProposalTTLSec = 1800
 	limits.ExecutionPolicy.StartAt = "mid"
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
-	limits.LiveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros("1000000")
-	limits.LiveCanary.CleanDaysBeforeRaise = 1
 	return limits
 }
 

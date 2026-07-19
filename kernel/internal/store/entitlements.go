@@ -16,16 +16,18 @@ import (
 )
 
 type TradeGrant struct {
-	OperationID    string
-	Ledger         string
-	MarketDay      time.Time
-	AuthorizedRisk units.Micros
-	RiskSource     string
+	OperationID          string
+	Ledger               string
+	MarketDay            time.Time
+	AuthorizedRisk       units.Micros
+	RiskSource           string
+	LiveCanaryRevisionID int64
 }
 
 type TradeGrantUsage struct {
 	AuthorizedRisk   units.Micros
 	HasLegacyUnknown bool
+	HasUnboundCanary bool
 	GrantCount       int
 }
 
@@ -117,13 +119,18 @@ func (t *ledgerTx) HeldCloseQuantity(ledger, symbol string) (units.Qty, error) {
 
 func (t *ledgerTx) InsertTradeGrant(grant TradeGrant) error {
 	var authorizedRisk any
+	var liveCanaryRevisionID any
 	if grant.RiskSource == "computed" {
 		authorizedRisk = int64(grant.AuthorizedRisk)
 	}
+	if grant.LiveCanaryRevisionID > 0 {
+		liveCanaryRevisionID = grant.LiveCanaryRevisionID
+	}
 	_, err := t.tx.ExecContext(t.ctx, `INSERT INTO trade_grant
-		(operation_id,ledger,market_day,authorized_risk_micros,risk_source)
-		VALUES ($1,$2,$3,$4,$5)`,
-		grant.OperationID, grant.Ledger, grant.MarketDay, authorizedRisk, grant.RiskSource)
+		(operation_id,ledger,market_day,authorized_risk_micros,risk_source,live_canary_revision_id)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		grant.OperationID, grant.Ledger, grant.MarketDay, authorizedRisk, grant.RiskSource,
+		liveCanaryRevisionID)
 	return normalizeDBError(err)
 }
 
@@ -133,11 +140,13 @@ func (t *ledgerTx) TradeGrantUsage(ledger string, marketDay time.Time, excludeOp
 	err := t.tx.QueryRowContext(t.ctx, `SELECT
 		COALESCE(sum(authorized_risk_micros) FILTER (WHERE risk_source='computed'),0),
 		COALESCE(bool_or(risk_source='legacy_unknown'),false),
+		COALESCE(bool_or(live_canary_revision_id IS NULL),false),
 		count(*)
 		FROM trade_grant
 		WHERE ledger=$1 AND market_day=$2::date
 		  AND (NULLIF($3,'') IS NULL OR operation_id <> NULLIF($3,'')::uuid)`,
-		ledger, marketDay, excludeOperationID).Scan(&authorizedRisk, &usage.HasLegacyUnknown, &usage.GrantCount)
+		ledger, marketDay, excludeOperationID).Scan(&authorizedRisk, &usage.HasLegacyUnknown,
+		&usage.HasUnboundCanary, &usage.GrantCount)
 	usage.AuthorizedRisk = units.Micros(authorizedRisk)
 	return usage, normalizeDBError(err)
 }

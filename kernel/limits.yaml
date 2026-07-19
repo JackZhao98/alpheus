@@ -1,8 +1,8 @@
 # ============================================================
-# THE CONSTITUTION — aggressive profile.
-# 账户全权交给 agent。这里剩下的不是策略约束，是软件故障熔断。
-# Enforced by code in risk.py, never by prompts.
-# Changing this file is a Class-D operation: human only.
+# TEMPORARY BUILD-PINNED KERNEL LIMITS — aggressive profile.
+# K0 removed Live canary authority from this file. Remaining mutable human
+# policy moves to typed database revisions in K1; code still enforces these
+# build-pinned ceilings until each reader is migrated.
 # ============================================================
 profile: aggressive
 
@@ -38,12 +38,6 @@ execution_policy:
   max_reprices: 3                  # 然后撤单，永不追价
   fee_per_contract: 0
   fee_per_share: 0
-
-# Fail-closed M11 placeholders. Live startup refuses zero; a human must set a
-# positive one-position canary cap and clean-day threshold before live exists.
-live_canary:
-  daily_authorized_risk_cap_usd: 50
-  clean_days_before_raise: 5
 
 risk_declaration_tolerance: 0.01
 pnl_reconciliation_tolerance_usd: 0.01 # local/provider difference before fail-closed halt

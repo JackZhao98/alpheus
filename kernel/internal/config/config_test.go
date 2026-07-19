@@ -92,20 +92,20 @@ pnl_reconciliation_tolerance_usd: 0.01
 	}
 }
 
-func TestLiveCanaryLimitsHaveNoPermissiveDefault(t *testing.T) {
+func TestLimitsDoNotExposeLiveCanaryAsRuntimeAuthority(t *testing.T) {
 	var limits Limits
-	if err := limits.ValidateForMode(ModeSim); err != nil {
-		t.Fatalf("sim should not require live canary: %v", err)
+	if err := yaml.Unmarshal([]byte(`live_canary:
+  daily_authorized_risk_cap_usd: 999999
+  clean_days_before_raise: 1
+profile: test
+`), &limits); err != nil {
+		t.Fatal(err)
 	}
-	if err := limits.ValidateForMode(ModeLive); err == nil || !strings.Contains(err.Error(), "daily_authorized_risk_cap_usd") {
-		t.Fatalf("zero live canary cap accepted: %v", err)
+	encoded, err := json.Marshal(limits)
+	if err != nil {
+		t.Fatal(err)
 	}
-	limits.LiveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros("35")
-	if err := limits.ValidateForMode(ModeLive); err == nil || !strings.Contains(err.Error(), "clean_days_before_raise") {
-		t.Fatalf("zero clean-day threshold accepted: %v", err)
-	}
-	limits.LiveCanary.CleanDaysBeforeRaise = 3
-	if err := limits.ValidateForMode(ModeLive); err != nil {
-		t.Fatalf("positive live canary rejected: %v", err)
+	if strings.Contains(string(encoded), "live_canary") || strings.Contains(string(encoded), "999999") {
+		t.Fatalf("legacy YAML canary leaked into runtime limits: %s", encoded)
 	}
 }

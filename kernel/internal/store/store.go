@@ -68,6 +68,7 @@ type OperationGate interface {
 	HeldCloseQuantity(ledger, symbol string) (units.Qty, error)
 	InsertTradeGrant(grant TradeGrant) error
 	TradeGrantUsage(ledger string, marketDay time.Time, excludeOperationID string) (TradeGrantUsage, error)
+	LiveCanaryAuthority(marketDay time.Time) (*LiveCanaryRevision, error)
 	InsertCloseReservation(reservation CloseReservation) error
 	InsertExecutionAttempt(attempt ExecutionAttempt) error
 	InsertOrder(order Order) error

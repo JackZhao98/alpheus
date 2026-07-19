@@ -108,13 +108,13 @@ func m11Server(cap string) (*server, *memoryStore, *broker.Fake) {
 	setQuote(venue, "SPY", "0.34", "0.35", 45_000)
 	limits := dualLedgerLimits()
 	limits.HardLimits.MaxNewTradesPerDay = 100
-	limits.LiveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros(cap)
-	limits.LiveCanary.CleanDaysBeforeRaise = 3
 	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
 	if err != nil {
 		panic(err)
 	}
 	st := newMemoryStore()
+	st.liveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros(cap)
+	st.liveCanary.CleanDaysBeforeRaise = 3
 	return &server{
 		mode: protectedMode(config.ModeLive), limits: limits,
 		broker: venue, store: st, proposalTTL: proposalTTL,
@@ -159,9 +159,16 @@ func TestLiveCanaryBarrierGrantsExactlyOneRemainingAllowance(t *testing.T) {
 	}
 	st.mu.Lock()
 	grantCount := len(st.grants)
+	var boundRevisionID int64
+	for _, grant := range st.grants {
+		boundRevisionID = grant.LiveCanaryRevisionID
+	}
 	st.mu.Unlock()
 	if grantCount != 1 {
 		t.Fatalf("grants=%d", grantCount)
+	}
+	if boundRevisionID != st.liveCanary.ID {
+		t.Fatalf("grant revision=%d, want %d", boundRevisionID, st.liveCanary.ID)
 	}
 	if _, err := venue.GetOrder(context.Background(), "fake-1"); err != nil {
 		t.Fatalf("one order missing: %v", err)
@@ -725,7 +732,7 @@ func m11StagePendingEquityOpen(t *testing.T) (*server, *memoryStore, *candidateE
 	}
 	if err := st.WithLedgerLock(false, func(gate store.OperationGate) error {
 		var stageErr error
-		attempt, stageErr = s.stageApprovedOpen(gate, operationID, op, window.day)
+		attempt, stageErr = s.stageApprovedOpen(gate, operationID, op, window.day, st.liveCanary)
 		return stageErr
 	}); err != nil {
 		t.Fatal(err)
@@ -961,6 +968,45 @@ func TestLegacyUnknownGrantFailsCanaryClosed(t *testing.T) {
 	}
 }
 
+func TestUnboundComputedGrantFailsCanaryClosed(t *testing.T) {
+	s, st, _ := m11Server("1000")
+	window, err := marketDayWindow(time.Now().UTC(), "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.grants["unbound"] = store.TradeGrant{
+		OperationID: "unbound", Ledger: "live", MarketDay: window.day,
+		AuthorizedRisk: units.MustMicros("1"), RiskSource: "computed",
+	}
+	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", m11OpenPayload("SPY", "35"), "runtime-secret", "m11-unbound")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), canaryUnboundReason) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestUnavailableCanaryAuthorityFailsBeforeAnyLiveEntitlement(t *testing.T) {
+	for _, authorityErr := range []error{
+		store.ErrLiveCanaryAuthorityMissing,
+		store.ErrLiveCanaryAuthorityInvalid,
+	} {
+		s, st, venue := m11Server("1000")
+		st.liveCanaryErr = authorityErr
+		response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations",
+			m11OpenPayload("SPY", "35"), "runtime-secret", "m11-authority-unavailable")
+		if response.Code != http.StatusServiceUnavailable ||
+			!strings.Contains(response.Body.String(), "live canary authority unavailable") {
+			t.Fatalf("err=%v status=%d body=%s", authorityErr, response.Code, response.Body.String())
+		}
+		if counts := m11Counts(st); counts.grants != 0 || counts.openReservations != 0 ||
+			counts.attempts != 0 || counts.orders != 0 {
+			t.Fatalf("err=%v created entitlements: %+v", authorityErr, counts)
+		}
+		if _, err := venue.GetOrder(context.Background(), "fake-1"); err == nil {
+			t.Fatalf("err=%v reached broker", authorityErr)
+		}
+	}
+}
+
 func TestLiveCanaryDoesNotConsumeOrBlockShadowLedger(t *testing.T) {
 	s, st, _ := m11Server("35")
 	window, err := marketDayWindow(time.Now().UTC(), "America/New_York")
@@ -970,6 +1016,7 @@ func TestLiveCanaryDoesNotConsumeOrBlockShadowLedger(t *testing.T) {
 	st.grants["live-full"] = store.TradeGrant{
 		OperationID: "live-full", Ledger: "live", MarketDay: window.day,
 		AuthorizedRisk: units.MustMicros("35"), RiskSource: "computed",
+		LiveCanaryRevisionID: st.liveCanary.ID,
 	}
 	payload := strings.Replace(m11OpenPayload("SPY", "35"), `"plan":`, `"shadow":true,"plan":`, 1)
 	response := routeRequestWithKey(s.routes(), http.MethodPost, "/operations", payload, "runtime-secret", "m11-shadow")
@@ -1047,6 +1094,7 @@ func TestClassCApprovalRechecksCanaryAndStaysPending(t *testing.T) {
 	st.grants["existing"] = store.TradeGrant{
 		OperationID: "existing", Ledger: "live", MarketDay: window.day,
 		AuthorizedRisk: units.MustMicros("35"), RiskSource: "computed",
+		LiveCanaryRevisionID: st.liveCanary.ID,
 	}
 	st.mu.Unlock()
 
@@ -1064,6 +1112,43 @@ func TestClassCApprovalRechecksCanaryAndStaysPending(t *testing.T) {
 	}
 	if !containsString(st.events, "live_canary_refused") {
 		t.Fatalf("canary refusal event missing: %v", st.events)
+	}
+	st.mu.Lock()
+	payloads := append([]any(nil), st.eventPayloads["live_canary_refused"]...)
+	st.mu.Unlock()
+	if len(payloads) == 0 {
+		t.Fatal("canary refusal payload missing")
+	}
+	payload, ok := payloads[len(payloads)-1].(map[string]any)
+	if !ok || payload["revision_id"] != st.liveCanary.ID || payload["generation"] != st.liveCanary.Generation ||
+		payload["risk_cap"] != st.liveCanary.DailyAuthorizedRiskCapUSD {
+		t.Fatalf("canary refusal payload=%v", payloads[len(payloads)-1])
+	}
+}
+
+func TestClassCApprovalBindsActiveCanaryRevision(t *testing.T) {
+	s, st, venue := m11Server("1000")
+	setQuote(venue, "SPY", "1.99", "2.00", 45_000)
+	handler := s.routes()
+	proposal := routeRequestWithKey(handler, http.MethodPost, "/operations", m11OpenPayload("SPY", "200"), "runtime-secret", "m11-class-c-bound")
+	if proposal.Code != http.StatusOK || !strings.Contains(proposal.Body.String(), `"status":"pending_review"`) {
+		t.Fatalf("proposal status=%d body=%s", proposal.Code, proposal.Body.String())
+	}
+	var proposalBody map[string]any
+	if err := json.Unmarshal(proposal.Body.Bytes(), &proposalBody); err != nil {
+		t.Fatal(err)
+	}
+	operationID, _ := proposalBody["operation_id"].(string)
+	review := routeRequest(handler, http.MethodPost, "/operations/"+operationID+"/review",
+		`{"verdict":"approved","rationale":"bounded canary review"}`, "admin-secret")
+	if review.Code != http.StatusOK {
+		t.Fatalf("review status=%d body=%s", review.Code, review.Body.String())
+	}
+	st.mu.Lock()
+	grant, exists := st.grants[operationID]
+	st.mu.Unlock()
+	if !exists || grant.LiveCanaryRevisionID != st.liveCanary.ID {
+		t.Fatalf("grant=%+v exists=%v, want revision %d", grant, exists, st.liveCanary.ID)
 	}
 }
 

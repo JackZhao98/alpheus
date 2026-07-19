@@ -295,7 +295,7 @@ func TestM4CommittedApprovalRecoversAfterOriginalProposalTTL(t *testing.T) {
 	var attempt *store.ExecutionAttempt
 	if err := st.WithProposalLock(nil, false, false, func(gate store.OperationGate) error {
 		var err error
-		attempt, err = s.stageApprovedOpen(gate, operationID, op, time.Now().UTC())
+		attempt, err = s.stageApprovedOpen(gate, operationID, op, time.Now().UTC(), nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

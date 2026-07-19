@@ -5,36 +5,70 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"alpheus/kernel/internal/units"
 )
 
-const liveCanaryConfigLockKey int64 = 0x414c504843414e59 // "ALPHCANY"
+const liveCanaryAuthorityVersion = 1
 
-var ErrLiveCanaryRaiseUnsafe = errors.New("live canary raise lacks clean-day evidence")
+var (
+	ErrLiveCanaryAuthorityMissing = errors.New("live canary authority is missing")
+	ErrLiveCanaryAuthorityInvalid = errors.New("live canary authority is invalid")
+	ErrLiveCanaryRevisionConflict = errors.New("live canary revision conflict")
+	ErrLiveCanaryWideningUnsafe   = errors.New("live canary widening lacks completed-day attestation")
+	// ErrLiveCanaryRaiseUnsafe is retained as a source-compatible alias for
+	// callers that predate the two-dimensional widening rule.
+	ErrLiveCanaryRaiseUnsafe = ErrLiveCanaryWideningUnsafe
+)
 
 type LiveCanaryRevision struct {
-	ID                        int64
-	DailyAuthorizedRiskCapUSD units.Micros
-	CleanDaysBeforeRaise      int
-	EffectiveMarketDay        time.Time
-	RecordedAt                time.Time
+	ID                        int64        `json:"revision_id"`
+	Generation                int64        `json:"generation"`
+	AuthorityVersion          int          `json:"authority_version"`
+	DailyAuthorizedRiskCapUSD units.Micros `json:"daily_authorized_risk_cap_usd"`
+	CleanDaysBeforeRaise      int          `json:"clean_days_before_raise"`
+	EffectiveMarketDay        time.Time    `json:"effective_market_day"`
+	RecordedAt                time.Time    `json:"recorded_at"`
+	RecordedBy                string       `json:"recorded_by"`
+	Reason                    string       `json:"reason"`
+	ChangeClass               string       `json:"change_class"`
+	ObservedAt                time.Time    `json:"observed_at"`
+	auditEventPresent         bool
 }
 
-// RecordLiveCanaryRevision is the startup-only gate for versioned live limit
-// changes. There is intentionally no HTTP/runtime wrapper around it. Initial
-// configuration and tightening are recorded immediately; widening requires
-// completed live-ledger days with no divergence and no unresolved unknown.
-func (s *Store) RecordLiveCanaryRevision(cap units.Micros, cleanDays int, marketDay time.Time) error {
-	if cap <= 0 || cleanDays <= 0 || marketDay.IsZero() {
-		return fmt.Errorf("invalid live canary revision")
+type RecordLiveCanaryRevisionInput struct {
+	DailyAuthorizedRiskCapUSD units.Micros
+	CleanDaysBeforeRaise      int
+	ExpectedRevisionID        int64
+	RecordedBy                string
+	Reason                    string
+}
+
+// RecordLiveCanaryRevision is the deployment-only governance path. The latest
+// authoritative immutable row is the active revision and its ID is the
+// generation; there is deliberately no generic settings table or head service.
+//
+// K0 permits initial bootstrap and tightening only. A widening is classified
+// fail-closed until a later milestone owns durable completed-day attestations;
+// day_open alone proves that a day started, not that its final reconciliation
+// completed. Every change serializes with Live grant admission on the stable
+// Live ledger lock.
+func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*LiveCanaryRevision, error) {
+	input.RecordedBy = strings.TrimSpace(input.RecordedBy)
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.DailyAuthorizedRiskCapUSD <= 0 || input.CleanDaysBeforeRaise <= 0 ||
+		input.ExpectedRevisionID < 0 || input.RecordedBy == "" || len(input.RecordedBy) > 200 ||
+		input.Reason == "" || len(input.Reason) > 1000 {
+		return nil, fmt.Errorf("invalid live canary revision")
 	}
+
 	ctx, cancel := s.deadline()
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return normalizeDBError(err)
+		return nil, normalizeDBError(err)
 	}
 	committed := false
 	defer func() {
@@ -42,51 +76,79 @@ func (s *Store) RecordLiveCanaryRevision(cap units.Micros, cleanDays int, market
 			_ = tx.Rollback()
 		}
 	}()
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, liveCanaryConfigLockKey); err != nil {
-		return normalizeDBError(err)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(false)); err != nil {
+		return nil, normalizeDBError(err)
 	}
 
+	observedAt, marketDay, err := liveCanaryDatabaseTime(ctx, tx, s.marketTZ)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
 	previous, err := latestLiveCanaryRevision(ctx, tx)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return normalizeDBError(err)
+		return nil, normalizeDBError(err)
 	}
-	if err == nil && previous.DailyAuthorizedRiskCapUSD == cap && previous.CleanDaysBeforeRaise == cleanDays {
-		if err := tx.Commit(); err != nil {
-			return normalizeDBError(err)
-		}
-		committed = true
-		return nil
-	}
-
-	change := "initial"
 	if err == nil {
-		switch {
-		case cap > previous.DailyAuthorizedRiskCapUSD:
-			change = "raise"
-			requiredClean := cleanDays
-			if previous.CleanDaysBeforeRaise > requiredClean {
-				requiredClean = previous.CleanDaysBeforeRaise
+		previous.ObservedAt = observedAt
+		if validationErr := validateLiveCanaryAuthority(previous, marketDay); validationErr != nil {
+			return nil, validationErr
+		}
+		if previous.DailyAuthorizedRiskCapUSD == input.DailyAuthorizedRiskCapUSD &&
+			previous.CleanDaysBeforeRaise == input.CleanDaysBeforeRaise {
+			if err := tx.Commit(); err != nil {
+				return nil, normalizeDBError(err)
 			}
-			if err := verifyLiveCanaryRaise(ctx, tx, marketDay, requiredClean); err != nil {
-				return err
-			}
-		case cap < previous.DailyAuthorizedRiskCapUSD:
-			change = "tighten"
-		default:
-			change = "policy"
+			committed = true
+			return previous, nil
+		}
+		if input.ExpectedRevisionID != previous.ID {
+			return nil, fmt.Errorf("%w: expected %d, active %d", ErrLiveCanaryRevisionConflict,
+				input.ExpectedRevisionID, previous.ID)
+		}
+	} else if input.ExpectedRevisionID != 0 {
+		return nil, fmt.Errorf("%w: expected %d, active revision is missing",
+			ErrLiveCanaryRevisionConflict, input.ExpectedRevisionID)
+	}
+
+	changeClass := "initial"
+	if previous != nil {
+		changeClass = classifyLiveCanaryChange(previous.DailyAuthorizedRiskCapUSD,
+			previous.CleanDaysBeforeRaise, input.DailyAuthorizedRiskCapUSD,
+			input.CleanDaysBeforeRaise)
+		if changeClass == "widen" {
+			return nil, ErrLiveCanaryWideningUnsafe
 		}
 	}
 
-	var revisionID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO live_canary_revision
-		(daily_authorized_risk_micros,clean_days_before_raise,effective_market_day)
-		VALUES ($1,$2,$3) RETURNING id`, int64(cap), cleanDays, marketDay).Scan(&revisionID)
-	if err != nil {
-		return normalizeDBError(err)
+	revision := &LiveCanaryRevision{
+		AuthorityVersion:          liveCanaryAuthorityVersion,
+		DailyAuthorizedRiskCapUSD: input.DailyAuthorizedRiskCapUSD,
+		CleanDaysBeforeRaise:      input.CleanDaysBeforeRaise,
+		EffectiveMarketDay:        marketDay,
+		RecordedBy:                input.RecordedBy,
+		Reason:                    input.Reason,
+		ChangeClass:               changeClass,
+		ObservedAt:                observedAt,
 	}
+	err = tx.QueryRowContext(ctx, `INSERT INTO live_canary_revision
+		(daily_authorized_risk_micros,clean_days_before_raise,effective_market_day,
+		 authority_version,recorded_by,reason,change_class,recorded_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,clock_timestamp())
+		RETURNING id,recorded_at`, int64(input.DailyAuthorizedRiskCapUSD),
+		input.CleanDaysBeforeRaise, marketDay, liveCanaryAuthorityVersion,
+		input.RecordedBy, input.Reason, changeClass).Scan(&revision.ID, &revision.RecordedAt)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.Generation = revision.ID
+	revision.ObservedAt = revision.RecordedAt
 	payload := map[string]any{
-		"revision_id": revisionID, "change": change, "daily_authorized_risk_cap": cap,
-		"clean_days_before_raise": cleanDays, "effective_market_day": marketDay,
+		"revision_id": revision.ID, "generation": revision.Generation,
+		"authority_version": liveCanaryAuthorityVersion, "change": changeClass,
+		"daily_authorized_risk_cap": input.DailyAuthorizedRiskCapUSD,
+		"clean_days_before_raise":   input.CleanDaysBeforeRaise,
+		"effective_market_day":      marketDay, "recorded_by": input.RecordedBy,
+		"reason": input.Reason,
 	}
 	if previous != nil {
 		payload["previous_revision_id"] = previous.ID
@@ -94,69 +156,167 @@ func (s *Store) RecordLiveCanaryRevision(cap units.Micros, cleanDays int, market
 		payload["previous_clean_days_before_raise"] = previous.CleanDaysBeforeRaise
 	}
 	if err := insertEvent(ctx, tx, "live_canary_revision_recorded", payload); err != nil {
-		return normalizeDBError(err)
+		return nil, normalizeDBError(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return normalizeDBError(err)
+		return nil, normalizeDBError(err)
 	}
 	committed = true
-	return nil
+	revision.auditEventPresent = true
+	return revision, nil
+}
+
+// LoadLiveCanaryAuthority reads the only runtime source for the Live canary.
+// Legacy pre-K0 rows have no authority_version and are intentionally ignored.
+func (s *Store) LoadLiveCanaryAuthority() (*LiveCanaryRevision, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	revision, err := latestLiveCanaryRevision(ctx, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLiveCanaryAuthorityMissing
+	}
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	// Read the observation clock after the revision. Under READ COMMITTED a
+	// concurrent activation may commit between statements; returning the older
+	// immutable row for one read is safe, while reading the clock first could
+	// falsely label a newly committed row as future-dated.
+	observedAt, marketDay, err := liveCanaryDatabaseTime(ctx, tx, s.marketTZ)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.ObservedAt = observedAt
+	if err := validateLiveCanaryAuthority(revision, marketDay); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	return revision, nil
+}
+
+// LiveCanaryAuthority is called inside Live admission transactions. It
+// re-acquires the stable Live ledger lock (transaction advisory locks are
+// re-entrant) so the revision it returns cannot change before the grant and
+// its audit event commit.
+func (t *ledgerTx) LiveCanaryAuthority(marketDay time.Time) (*LiveCanaryRevision, error) {
+	if marketDay.IsZero() {
+		return nil, fmt.Errorf("%w: market day is missing", ErrLiveCanaryAuthorityInvalid)
+	}
+	if _, err := t.tx.ExecContext(t.ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(false)); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	observedAt, currentMarketDay, err := liveCanaryDatabaseTime(t.ctx, t.tx, t.marketTZ)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if !sameMarketDate(marketDay, currentMarketDay) {
+		return nil, fmt.Errorf("%w: admission market day is stale", ErrLiveCanaryAuthorityInvalid)
+	}
+	revision, err := latestLiveCanaryRevision(t.ctx, t.tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLiveCanaryAuthorityMissing
+	}
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.ObservedAt = observedAt
+	if err := validateLiveCanaryAuthority(revision, marketDay); err != nil {
+		return nil, err
+	}
+	return revision, nil
+}
+
+func classifyLiveCanaryChange(oldCap units.Micros, oldCleanDays int, newCap units.Micros, newCleanDays int) string {
+	if oldCap == newCap && oldCleanDays == newCleanDays {
+		return "noop"
+	}
+	if newCap > oldCap || newCleanDays < oldCleanDays {
+		return "widen"
+	}
+	return "tighten"
 }
 
 func latestLiveCanaryRevision(ctx context.Context, tx *sql.Tx) (*LiveCanaryRevision, error) {
 	var revision LiveCanaryRevision
 	var risk int64
-	err := tx.QueryRowContext(ctx, `SELECT id,daily_authorized_risk_micros,
-		clean_days_before_raise,effective_market_day,recorded_at
-		FROM live_canary_revision ORDER BY id DESC LIMIT 1`).Scan(
+	var authorityVersion sql.NullInt64
+	var recordedBy, reason, changeClass sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT r.id,r.daily_authorized_risk_micros,
+		r.clean_days_before_raise,r.effective_market_day,r.recorded_at,
+		r.authority_version,r.recorded_by,r.reason,r.change_class,
+		EXISTS (SELECT 1 FROM events e
+			WHERE e.kind='live_canary_revision_recorded'
+			  AND e.payload->>'revision_id'=r.id::text)
+		FROM live_canary_revision r
+		WHERE r.authority_version IS NOT NULL
+		ORDER BY r.id DESC LIMIT 1`).Scan(
 		&revision.ID, &risk, &revision.CleanDaysBeforeRaise,
-		&revision.EffectiveMarketDay, &revision.RecordedAt,
+		&revision.EffectiveMarketDay, &revision.RecordedAt, &authorityVersion,
+		&recordedBy, &reason, &changeClass, &revision.auditEventPresent,
 	)
-	revision.DailyAuthorizedRiskCapUSD = units.Micros(risk)
 	if err != nil {
 		return nil, err
 	}
+	revision.Generation = revision.ID
+	revision.AuthorityVersion = int(authorityVersion.Int64)
+	revision.DailyAuthorizedRiskCapUSD = units.Micros(risk)
+	revision.RecordedBy = recordedBy.String
+	revision.Reason = reason.String
+	revision.ChangeClass = changeClass.String
 	return &revision, nil
 }
 
-func verifyLiveCanaryRaise(ctx context.Context, tx *sql.Tx, marketDay time.Time, requiredClean int) error {
-	var unresolved int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM execution_attempt WHERE state='unknown'`).Scan(&unresolved); err != nil {
-		return normalizeDBError(err)
+func validateLiveCanaryAuthority(revision *LiveCanaryRevision, marketDay time.Time) error {
+	if revision == nil || revision.ID <= 0 || revision.Generation != revision.ID ||
+		revision.AuthorityVersion != liveCanaryAuthorityVersion ||
+		revision.DailyAuthorizedRiskCapUSD <= 0 || revision.CleanDaysBeforeRaise <= 0 ||
+		revision.EffectiveMarketDay.IsZero() || revision.RecordedAt.IsZero() ||
+		strings.TrimSpace(revision.RecordedBy) == "" || strings.TrimSpace(revision.Reason) == "" ||
+		(revision.ChangeClass != "initial" && revision.ChangeClass != "tighten") ||
+		!revision.auditEventPresent {
+		return ErrLiveCanaryAuthorityInvalid
 	}
-	if unresolved != 0 {
-		return ErrLiveCanaryRaiseUnsafe
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT d.market_day,
-		EXISTS (SELECT 1 FROM events e
-			WHERE e.kind='pnl_divergence'
-			  AND e.payload->>'ledger'='live'
-			  AND left(e.payload->>'market_day',10)=d.market_day::text)
-		FROM (SELECT market_day FROM day_open
-			WHERE ledger='live' AND market_day < $1::date
-			ORDER BY market_day DESC LIMIT $2) d
-		ORDER BY d.market_day DESC`, marketDay, requiredClean)
-	if err != nil {
-		return normalizeDBError(err)
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var day time.Time
-		var diverged bool
-		if err := rows.Scan(&day, &diverged); err != nil {
-			return normalizeDBError(err)
-		}
-		if diverged {
-			return ErrLiveCanaryRaiseUnsafe
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return normalizeDBError(err)
-	}
-	if count != requiredClean {
-		return ErrLiveCanaryRaiseUnsafe
+	if revision.ObservedAt.IsZero() || revision.RecordedAt.After(revision.ObservedAt) ||
+		marketDateAfter(revision.EffectiveMarketDay, marketDay) {
+		return fmt.Errorf("%w: authority is future-dated", ErrLiveCanaryAuthorityInvalid)
 	}
 	return nil
+}
+
+func liveCanaryDatabaseTime(ctx context.Context, tx *sql.Tx, marketTZ string) (time.Time, time.Time, error) {
+	var observedAt time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&observedAt); err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	location, err := time.LoadLocation(marketTZ)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	year, month, day := observedAt.In(location).Date()
+	return observedAt, time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
+}
+
+func sameMarketDate(left, right time.Time) bool {
+	ly, lm, ld := left.Date()
+	ry, rm, rd := right.Date()
+	return ly == ry && lm == rm && ld == rd
+}
+
+func marketDateAfter(left, right time.Time) bool {
+	ly, lm, ld := left.Date()
+	ry, rm, rd := right.Date()
+	if ly != ry {
+		return ly > ry
+	}
+	if lm != rm {
+		return lm > rm
+	}
+	return ld > rd
 }

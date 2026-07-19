@@ -104,6 +104,7 @@ type storeAPI interface {
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
 	FeatureActive(name string) (bool, error)
+	LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error)
 }
 
 type dayStateReader interface {
@@ -115,6 +116,13 @@ type dayStateReader interface {
 }
 
 func main() {
+	handled, err := dispatchKernelCommand(os.Args[1:], os.Stdout)
+	if err != nil {
+		log.Fatalf("command: %v", err)
+	}
+	if handled {
+		return
+	}
 	mode, err := config.LoadModeConfig()
 	if err != nil {
 		log.Fatalf("mode config: %v", err)
@@ -128,9 +136,6 @@ func main() {
 	}
 	limits, err := config.LoadLimits()
 	if err != nil {
-		log.Fatalf("limits: %v", err)
-	}
-	if err := limits.ValidateForMode(mode.TradingMode); err != nil {
 		log.Fatalf("limits: %v", err)
 	}
 	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
@@ -221,6 +226,9 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("store: %v", err)
+	}
+	if _, err := requireLiveCanaryAuthority(mode.TradingMode, st); err != nil {
+		log.Fatalf("live canary authority: %v", err)
 	}
 	if brokerName == "robinhood" {
 		bindingCtx, cancel := context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
@@ -419,6 +427,12 @@ func writeStoreError(w http.ResponseWriter, context string, err error) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "database unavailable"})
 		return
 	}
+	if errors.Is(err, store.ErrLiveCanaryAuthorityMissing) ||
+		errors.Is(err, store.ErrLiveCanaryAuthorityInvalid) {
+		log.Printf("%s: %v", context, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live canary authority unavailable"})
+		return
+	}
 	writeInternalError(w, context, err)
 }
 
@@ -570,7 +584,17 @@ func (s *server) providerRealizedPnL(ctx context.Context, shadow bool, marketDay
 	return &value, nil
 }
 
-func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, s.limits) }
+func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) {
+	canary, err := s.liveCanaryAuthorityView()
+	if err != nil {
+		writeStoreError(w, "get live canary authority", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"build_pinned_kernel_limits": s.limits,
+		"db_live_canary":             canary,
+	})
+}
 
 func (s *server) accountProvider() broker.AccountProvider {
 	if s.account != nil {
@@ -599,6 +623,11 @@ func (s *server) marketProvider() marketdata.Provider {
 func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	if err := s.refreshGlobalHalt(); err != nil {
 		writeStoreError(w, "refresh global halt", err)
+		return
+	}
+	canary, err := s.liveCanaryAuthorityView()
+	if err != nil {
+		writeStoreError(w, "get live canary authority", err)
 		return
 	}
 	account := s.accountProvider()
@@ -692,6 +721,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		"recent_fills":        fills,
 		"day":                 map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
 		"live_execution_gate": liveExecutionGate,
+		"db_live_canary":      canary,
 		"mode":                s.tradingMode(),
 		"source":              "kernel",
 		"as_of":               window.asOf,
@@ -921,14 +951,16 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if op.Action == "close" && !op.Shadow && (quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC())) {
 			v = risk.Verdict{Class: "REJECT", Reasons: []string{"market_data_unavailable"}}
 		}
+		var canaryAuthority *store.LiveCanaryRevision
 		if v.Class == "B" && op.Action == "open" && !op.Shadow {
-			reason, usage, err := s.liveCanaryRefusal(gate, opID, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement)
+			reason, usage, authority, err := s.liveCanaryRefusal(gate, opID, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement)
 			if err != nil {
 				return err
 			}
+			canaryAuthority = authority
 			if reason != "" {
 				v = risk.Verdict{Class: "REJECT", Reasons: []string{reason}}
-				if err := s.insertCanaryRefusalEvent(gate, opID, reason, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement, usage); err != nil {
+				if err := s.insertCanaryRefusalEvent(gate, opID, reason, window.day, op.DerivedMaxRisk, op.Qty, op.QtyIncrement, usage, authority); err != nil {
 					return err
 				}
 			}
@@ -957,15 +989,24 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if v.Class == "B" && op.Action == "open" {
+			var canaryRevisionID int64
+			if canaryAuthority != nil {
+				canaryRevisionID = canaryAuthority.ID
+			}
 			if err := gate.InsertTradeGrant(store.TradeGrant{
 				OperationID: opID, Ledger: ledgerName(op.Shadow), MarketDay: window.day,
 				AuthorizedRisk: op.DerivedMaxRisk, RiskSource: "computed",
+				LiveCanaryRevisionID: canaryRevisionID,
 			}); err != nil {
 				return err
 			}
-			if err := gate.InsertEvent("trade_grant_created", map[string]any{
+			grantEvent := map[string]any{
 				"operation_id": opID, "ledger": ledgerName(op.Shadow),
-			}); err != nil {
+			}
+			if binding := liveCanaryEventBinding(canaryAuthority); binding != nil {
+				grantEvent["live_canary"] = binding
+			}
+			if err := gate.InsertEvent("trade_grant_created", grantEvent); err != nil {
 				return err
 			}
 		}
@@ -2173,21 +2214,23 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			}
 			return errReviewGateRejected
 		}
+		var canaryAuthority *store.LiveCanaryRevision
 		if !prepared.Shadow {
-			canaryReason, usage, err := s.liveCanaryRefusal(gate, id, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement)
+			canaryReason, usage, authority, err := s.liveCanaryRefusal(gate, id, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement)
 			if err != nil {
 				return err
 			}
+			canaryAuthority = authority
 			if canaryReason != "" {
 				conflictReason = canaryReason
-				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement, usage)
+				return s.insertCanaryRefusalEvent(gate, id, canaryReason, window.day, prepared.DerivedMaxRisk, prepared.Qty, prepared.QtyIncrement, usage, authority)
 			}
 			if err := gate.RequireLiveExecutionIdle(true); err != nil {
 				return err
 			}
 		}
 		approvedOp = prepared
-		staged, err := s.stageApprovedOpen(gate, id, prepared, window.day)
+		staged, err := s.stageApprovedOpen(gate, id, prepared, window.day, canaryAuthority)
 		if err != nil {
 			return err
 		}
@@ -2323,17 +2366,29 @@ func (s *server) prepareApprovedOpen(ctx context.Context, persisted risk.Operati
 	return prepared
 }
 
-func (s *server) stageApprovedOpen(gate store.OperationGate, operationID string, op risk.Operation, marketDay time.Time) (*store.ExecutionAttempt, error) {
+func (s *server) stageApprovedOpen(gate store.OperationGate, operationID string, op risk.Operation, marketDay time.Time, canaryAuthority *store.LiveCanaryRevision) (*store.ExecutionAttempt, error) {
 	ledger := ledgerName(op.Shadow)
+	var canaryRevisionID int64
+	if canaryAuthority != nil {
+		canaryRevisionID = canaryAuthority.ID
+	}
+	if s.tradingMode() == config.ModeLive && !op.Shadow && canaryRevisionID <= 0 {
+		return nil, store.ErrLiveCanaryAuthorityInvalid
+	}
 	if err := gate.InsertTradeGrant(store.TradeGrant{
 		OperationID: operationID, Ledger: ledger, MarketDay: marketDay,
 		AuthorizedRisk: op.DerivedMaxRisk, RiskSource: "computed",
+		LiveCanaryRevisionID: canaryRevisionID,
 	}); err != nil {
 		return nil, err
 	}
-	if err := gate.InsertEvent("trade_grant_created", map[string]any{
+	grantEvent := map[string]any{
 		"operation_id": operationID, "ledger": ledger,
-	}); err != nil {
+	}
+	if binding := liveCanaryEventBinding(canaryAuthority); binding != nil {
+		grantEvent["live_canary"] = binding
+	}
+	if err := gate.InsertEvent("trade_grant_created", grantEvent); err != nil {
 		return nil, err
 	}
 	reservation := store.OpenReservation{

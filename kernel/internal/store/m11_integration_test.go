@@ -897,15 +897,17 @@ func TestTradeGrantUsagePostgres(t *testing.T) {
 	seedM11Grant(t, s, "shadow", marketDay, "computed", units.MustMicros("99"))
 	seedM11Grant(t, s, "live", marketDay.AddDate(0, 0, 1), "computed", units.MustMicros("88"))
 
-	assertUsage := func(exclude string, wantRisk units.Micros, wantLegacy bool, wantCount int) {
+	assertUsage := func(exclude string, wantRisk units.Micros, wantLegacy, wantUnbound bool, wantCount int) {
 		t.Helper()
 		err := s.WithLedgerLock(false, func(gate OperationGate) error {
 			usage, err := gate.TradeGrantUsage("live", marketDay, exclude)
 			if err != nil {
 				return err
 			}
-			if usage.AuthorizedRisk != wantRisk || usage.HasLegacyUnknown != wantLegacy || usage.GrantCount != wantCount {
-				t.Fatalf("usage=%+v, want risk=%s legacy=%v count=%d", usage, wantRisk, wantLegacy, wantCount)
+			if usage.AuthorizedRisk != wantRisk || usage.HasLegacyUnknown != wantLegacy ||
+				usage.HasUnboundCanary != wantUnbound || usage.GrantCount != wantCount {
+				t.Fatalf("usage=%+v, want risk=%s legacy=%v unbound=%v count=%d",
+					usage, wantRisk, wantLegacy, wantUnbound, wantCount)
 			}
 			return nil
 		})
@@ -914,11 +916,11 @@ func TestTradeGrantUsagePostgres(t *testing.T) {
 		}
 	}
 
-	assertUsage("", units.MustMicros("35"), false, 2)
-	assertUsage(computedOne, units.MustMicros("25"), false, 1)
+	assertUsage("", units.MustMicros("35"), false, true, 2)
+	assertUsage(computedOne, units.MustMicros("25"), false, true, 1)
 	legacy := seedM11Grant(t, s, "live", marketDay, "legacy_unknown", 0)
-	assertUsage("", units.MustMicros("35"), true, 3)
-	assertUsage(legacy, units.MustMicros("35"), false, 2)
+	assertUsage("", units.MustMicros("35"), true, true, 3)
+	assertUsage(legacy, units.MustMicros("35"), false, true, 2)
 }
 
 func openM11IntegrationStore(t *testing.T) *Store {
