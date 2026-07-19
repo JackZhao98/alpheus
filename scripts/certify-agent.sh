@@ -47,6 +47,7 @@ if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2
 	exit 1
 fi
 
-printf '{"stage":"%s","status":"PASS","seed":"%s","effect_ceiling":"none"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="%s" tests="3" failures="0"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="go-test-race"/></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-echo "PASS stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR effect_ceiling=none"
+printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+printf '<testsuite name="%s" tests="4" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=mandatory-ap0-probes-not-implemented" >&2
+exit 1
