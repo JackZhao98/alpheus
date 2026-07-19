@@ -6,9 +6,10 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **B0 6/7 external/manual-change reconciliation:
-> update tracked exposure without fictional fills, record control episodes,
-> and invalidate stale proposals. M11 is
+> Current implementation target: **B0 7/7 read-model/Cockpit and final replay
+> acceptance: display system-owned, external, ambiguous and mixed-control facts
+> distinctly, expose reconciliation/stale-work evidence, and close the complete
+> B0 acceptance matrix. M11 is
 > `CANARY DEFERRED`, production remains read-only, and the real canary is a hard
 > gate before AP13 rather than before non-money development**
 
@@ -90,7 +91,7 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `DEFERRED`,
 | **M10** | **LANDED** | M9 | official Anthropic Go SDK v1.42.0; role-card-order prompt rendering; forced single-tool handwritten contract schemas; strict local decode/Validate and one retry; exact token-count budget plus per-slot caps; untrusted-context boundary; authenticated bounded telemetry event; mocked transport/startup/injection suites; race/vet, isolated Compose certification and missing-key process probe green | Phase 4 |
 | **M11** | **DEFERRED** | Non-money code and target read-only deployment complete; exact one-share Alpheus-routed Canary plus stop/recovery acceptance remains; hard gate before AP13; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority; target database migrated v7→v10 with 92 operations preserved and authority revision/generation `1/1` at $50/five days; current image healthy in `read_only`, Live disabled, account $401.16 with no positions/open orders and zero attempt/order/fill/current-day grant/open-risk/unknown effect | Phase 4 / Z |
 | **K1** | **IN PROGRESS** | M11 non-money gate; before AP0; real Canary not required; zero production broker mutation | K1A `229a77b`: typed strict policy schema, canonical digest, immutable revisions/CAS head and explicit CLI. K1B-1 `be90658`: operation binding, DB-time expiry, policy activation barrier, bound/current review and runtime YAML removal. K1B-2 `bb07274`: immutable downstream execution envelopes, exact order price authority, database-time leases, no-widen/current-tighten recovery and reprice behavior; fresh PostgreSQL/race/vet/Compose and full M9 certification green. K1C completed-day attestation/guarded widening remains | Phase X |
-| **B0** | **IN PROGRESS (5/7 LANDED)** | M11 non-money gate; K1 policy binding where applicable; before AP0; real Canary not required | `ac07550` immutable shared-account observations and evidence-backed origin; `4b30971` fresh action-specific pre-effect manifests bound before Live sends; `5d81818` current-policy/aggregate Provider-risk authority with stale-proposal rejection; `f4a36db` audited external opening-order cancel plus canonical external/mixed position close, no-reversal capacity, typed control episodes, split fill allocation, and non-fictional local PnL. Full PostgreSQL/race/fault/Provider-fixture certification green. Manual broker-change reconciliation, stale-work invalidation, read-model/Cockpit completion and final B0 replay acceptance remain | Phase Y |
+| **B0** | **IN PROGRESS (6/7 LANDED)** | M11 non-money gate; K1 policy binding where applicable; before AP0; real Canary not required | `ac07550` immutable shared-account observations and evidence-backed origin; `4b30971` fresh action-specific pre-effect manifests bound before Live sends; `5d81818` current-policy/aggregate Provider-risk authority with stale-proposal rejection; `f4a36db` audited external opening-order cancel plus canonical external/mixed position close, no-reversal capacity, typed control episodes, split fill allocation, and non-fictional local PnL; `1622a6a` fresh automatic manual-change reconciliation with a local-state generation fence, conservative FIFO exposure adjustment, immutable uncertain-attribution episodes, stale-work invalidation, no fictional fill/PnL, signed-exposure classification, and restart/replay idempotence. Full PostgreSQL/race/fault/Provider-fixture certification green, including exact live/shadow 20-way caps, paused-DB zero-effect 503, and PostgreSQL replacement with `unknown=0`. Read-model/Cockpit completion and final B0 replay acceptance remain | Phase Y |
 
 Ordering constraints: M8A/M8B land after M2.6 so production reads inherit
 fixed-point types, authentication and account binding, while all production
