@@ -60,6 +60,31 @@ func TestParseCanaryPolicyArgsRejectsAmbiguousOrIncompleteInput(t *testing.T) {
 	}
 }
 
+func TestParseKernelPolicyArgsRequiresExplicitCASAndAuditIdentity(t *testing.T) {
+	input, err := parseKernelPolicyArgs([]string{
+		"--file=/limits.yaml", "--expected-generation=7",
+		"--recorded-by=deploy:jack", "--reason=tighten proposal TTL",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.File != "/limits.yaml" || input.ExpectedGeneration != 7 ||
+		input.RecordedBy != "deploy:jack" || input.Reason != "tighten proposal TTL" {
+		t.Fatalf("input=%+v", input)
+	}
+	for index, args := range [][]string{
+		{"--expected-generation=0", "--recorded-by=x", "--reason=x"},
+		{"--file=x", "--recorded-by=x", "--reason=x"},
+		{"--file=x", "--expected-generation=0", "--reason=x"},
+		{"--file=x", "--expected-generation=0", "--recorded-by=x"},
+		{"--file=x", "--expected-generation=0", "--recorded-by=x", "--reason=x", "extra"},
+	} {
+		if _, err := parseKernelPolicyArgs(args); err == nil {
+			t.Fatalf("case %d accepted: %v", index, args)
+		}
+	}
+}
+
 func TestLiveStartupRequiresDatabaseCanaryAuthorityOnlyInLive(t *testing.T) {
 	st := newMemoryStore()
 	active, err := requireLiveCanaryAuthority(config.ModeLive, st)

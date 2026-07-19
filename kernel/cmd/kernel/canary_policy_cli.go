@@ -26,10 +26,14 @@ func dispatchKernelCommand(args []string, output io.Writer) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
 	}
-	if args[0] != "canary-policy" {
+	switch args[0] {
+	case "canary-policy":
+		return true, runCanaryPolicyCommand(args[1:], output)
+	case "kernel-policy":
+		return true, runKernelPolicyCommand(args[1:], output)
+	default:
 		return true, fmt.Errorf("unknown command %q", args[0])
 	}
-	return true, runCanaryPolicyCommand(args[1:], output)
 }
 
 func runCanaryPolicyCommand(args []string, output io.Writer) error {
