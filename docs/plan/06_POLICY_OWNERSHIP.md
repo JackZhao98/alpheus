@@ -313,6 +313,24 @@ added. See [`../k0_certification.md`](../k0_certification.md).
 - Secret scans prove no policy snapshot, event, prompt, Web/API response or
   fixture contains credentials.
 
+### K1 implementation status
+
+**IN PROGRESS. K1A LANDED** in `229a77b`. Migration 0011 adds the typed
+immutable revision table and single CAS head. The new policy package strictly
+imports the current YAML only through the explicit `kernel-policy` CLI,
+removes dead fields from canonical authority, rejects unknown fields, validates
+structural ranges, and verifies a schema-bound digest on read. Exact retries
+are idempotent; concurrent activations produce one winner and a durable
+`kernel_policy_activation_conflict` event for the loser. Isolated PostgreSQL,
+CLI, race and vet acceptance passed. This foundation is not deployed and does
+not yet replace runtime YAML reads.
+
+K1B must bind operations and downstream execution records to the database
+revision, persist proposal expiry and claim lease expiry using database time,
+switch all enforcement readers, and remove runtime YAML fallback. K1C retains
+the completed-day attestation and guarded Live-canary widening work. K1 is not
+`LANDED` until both are complete.
+
 ## Explicit non-goals
 
 - no Config Service, feature-flag platform or generic settings UI;
