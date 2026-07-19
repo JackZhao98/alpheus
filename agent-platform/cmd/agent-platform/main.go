@@ -69,14 +69,15 @@ func verifyRelease(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("verify-release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	file := flags.String("file", "", "release manifest JSON file")
+	root := flags.String("root", "", "absolute trusted checkout root")
 	expectedStage := flags.String("expect-stage", "", "exact AP stage")
 	expectedDigest := flags.String("expect-digest", "", "exact manifest SHA-256")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || strings.TrimSpace(*file) == "" || strings.TrimSpace(*expectedStage) == "" ||
+	if flags.NArg() != 0 || strings.TrimSpace(*file) == "" || strings.TrimSpace(*root) == "" || strings.TrimSpace(*expectedStage) == "" ||
 		strings.TrimSpace(*expectedDigest) == "" {
-		return fmt.Errorf("--file, --expect-stage, and --expect-digest are required; positional arguments are forbidden")
+		return fmt.Errorf("--file, --root, --expect-stage, and --expect-digest are required; positional arguments are forbidden")
 	}
 	raw, err := os.ReadFile(*file)
 	if err != nil {
@@ -88,6 +89,9 @@ func verifyRelease(args []string, output io.Writer) error {
 	}
 	if manifest.Decision != release.DecisionAuthorized {
 		return errors.New("release manifest decision is not authorized")
+	}
+	if err := release.VerifyFiles(strings.TrimSpace(*root), *manifest); err != nil {
+		return err
 	}
 	return json.NewEncoder(output).Encode(map[string]any{
 		"status": "verified", "stage": manifest.Stage, "manifest_digest": digest,

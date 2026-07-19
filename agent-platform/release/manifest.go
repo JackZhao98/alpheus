@@ -5,12 +5,15 @@ package release
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -21,13 +24,30 @@ import (
 )
 
 const (
-	SchemaRevisionV1 uint16 = 1
-	CanonicalProfile        = canonical.Profile
-	digestDomain            = "agent-platform.release-manifest.v1"
-	maxManifestBytes        = 1 << 20
+	SchemaRevisionV1    uint16 = 1
+	CanonicalProfile           = canonical.Profile
+	digestDomain               = "agent-platform.release-manifest.v1"
+	maxManifestBytes           = 1 << 20
+	maxEvidenceBytes           = 1 << 20
+	maxReleaseFileBytes        = 16 << 20
 )
 
 var ErrInvalidManifest = errors.New("invalid release manifest")
+
+var ap0RequiredChecks = []string{
+	"blob_store",
+	"clean_worktree",
+	"compose_config",
+	"contract_schema",
+	"db_delivery",
+	"go_test_race",
+	"go_vet",
+	"gofmt",
+	"governance",
+	"migration_compatibility",
+	"nonmoney_boundary",
+	"secret_leaks",
+}
 
 type Stage string
 
@@ -66,6 +86,20 @@ type Check struct {
 	Name           string `json:"name"`
 	Status         string `json:"status"`
 	EvidenceDigest string `json:"evidence_digest"`
+}
+
+// CheckEvidence is the stable, source-controlled definition/result summary for
+// one mandatory stage check. Raw logs remain certification artifacts; this
+// compact record is what the release manifest digest binds.
+type CheckEvidence struct {
+	SchemaRevision uint16   `json:"schema_revision"`
+	Stage          Stage    `json:"stage"`
+	SourceCommit   string   `json:"source_commit"`
+	Seed           string   `json:"seed"`
+	Name           string   `json:"name"`
+	Status         string   `json:"status"`
+	Command        string   `json:"command"`
+	Assertions     []string `json:"assertions"`
 }
 
 type Manifest struct {
@@ -124,6 +158,9 @@ func (value Manifest) Validate() error {
 	if value.Stage == StageAP0 && value.EffectCeiling != contracts.EffectNone {
 		return fmt.Errorf("%w: AP0 effect ceiling must be none", ErrInvalidManifest)
 	}
+	if value.Stage == StageAP0 && !hasExactChecks(value.Checks, ap0RequiredChecks) {
+		return fmt.Errorf("%w: incomplete AP0 check set", ErrInvalidManifest)
+	}
 	if contracts.ValidateEffectClass(value.EffectCeiling) != nil {
 		return fmt.Errorf("%w: invalid effect ceiling", ErrInvalidManifest)
 	}
@@ -142,6 +179,13 @@ func (value Manifest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func RequiredChecks(stage Stage) []string {
+	if stage != StageAP0 {
+		return nil
+	}
+	return append([]string(nil), ap0RequiredChecks...)
 }
 
 func (value Manifest) Digest() (string, error) {
@@ -175,6 +219,113 @@ func Verify(raw []byte, expectedStage Stage, expectedDigest string) (*Manifest, 
 	return manifest, digest, nil
 }
 
+// VerifyFiles binds every manifest document and mandatory check-evidence file
+// to actual regular, non-symlink files beneath one trusted checkout root.
+func VerifyFiles(root string, manifest Manifest) error {
+	if err := manifest.Validate(); err != nil || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return ErrInvalidManifest
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("%w: resolve release root", ErrInvalidManifest)
+	}
+	rootInfo, err := os.Stat(resolvedRoot)
+	if err != nil || !rootInfo.IsDir() {
+		return fmt.Errorf("%w: release root is not a directory", ErrInvalidManifest)
+	}
+	for _, document := range manifest.Documents {
+		digest, _, err := releaseFile(root, resolvedRoot, document.Path)
+		if err != nil || digest != document.Digest {
+			return fmt.Errorf("%w: document mismatch %s", ErrInvalidManifest, document.Path)
+		}
+	}
+	for _, check := range manifest.Checks {
+		relative := path.Join("audit", "agent", strings.ToLower(string(manifest.Stage)), "checks", check.Name+".json")
+		digest, raw, err := releaseFile(root, resolvedRoot, relative)
+		if err != nil || digest != check.EvidenceDigest {
+			return fmt.Errorf("%w: check evidence mismatch %s", ErrInvalidManifest, check.Name)
+		}
+		evidence, err := decodeCheckEvidence(raw)
+		if err != nil || evidence.Validate(manifest, check) != nil {
+			return fmt.Errorf("%w: invalid check evidence %s", ErrInvalidManifest, check.Name)
+		}
+	}
+	return nil
+}
+
+func (value CheckEvidence) Validate(manifest Manifest, check Check) error {
+	if value.SchemaRevision != SchemaRevisionV1 || value.Stage != manifest.Stage || value.SourceCommit != manifest.SourceCommit ||
+		!validID(value.Seed) || value.Name != check.Name || value.Status != check.Status ||
+		(value.Status != "pass" && value.Status != "fail") || strings.TrimSpace(value.Command) == "" || len(value.Command) > 1000 ||
+		len(value.Assertions) == 0 || len(value.Assertions) > 64 ||
+		!sort.StringsAreSorted(value.Assertions) || !uniqueStrings(len(value.Assertions), func(index int) string { return value.Assertions[index] }) {
+		return ErrInvalidManifest
+	}
+	for _, assertion := range value.Assertions {
+		if !validName(assertion) {
+			return ErrInvalidManifest
+		}
+	}
+	return nil
+}
+
+func decodeCheckEvidence(raw []byte) (*CheckEvidence, error) {
+	if len(raw) == 0 || len(raw) > maxEvidenceBytes {
+		return nil, ErrInvalidManifest
+	}
+	strict, err := canonical.JSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(strict))
+	decoder.DisallowUnknownFields()
+	var evidence CheckEvidence
+	if err := decoder.Decode(&evidence); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, ErrInvalidManifest
+	}
+	return &evidence, nil
+}
+
+func releaseFile(root, resolvedRoot, relative string) (string, []byte, error) {
+	if !validRelativePath(relative) {
+		return "", nil, ErrInvalidManifest
+	}
+	current := root
+	for _, component := range strings.Split(filepath.FromSlash(relative), string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return "", nil, ErrInvalidManifest
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(relative)))
+	if err != nil {
+		return "", nil, err
+	}
+	contained, err := filepath.Rel(resolvedRoot, resolved)
+	if err != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
+		return "", nil, ErrInvalidManifest
+	}
+	file, err := os.Open(resolved)
+	if err != nil {
+		return "", nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > maxReleaseFileBytes {
+		return "", nil, ErrInvalidManifest
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxReleaseFileBytes+1))
+	if err != nil || len(raw) > maxReleaseFileBytes {
+		return "", nil, ErrInvalidManifest
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:]), raw, nil
+}
+
 func strictlySortedDocuments(values []Document) bool {
 	return sort.SliceIsSorted(values, func(left, right int) bool {
 		return values[left].Path < values[right].Path
@@ -185,6 +336,18 @@ func strictlySortedChecks(values []Check) bool {
 	return sort.SliceIsSorted(values, func(left, right int) bool {
 		return values[left].Name < values[right].Name
 	}) && uniqueStrings(len(values), func(index int) string { return values[index].Name })
+}
+
+func hasExactChecks(values []Check, required []string) bool {
+	if len(values) != len(required) {
+		return false
+	}
+	for index := range values {
+		if values[index].Name != required[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func uniqueStrings(length int, at func(int) string) bool {

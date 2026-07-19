@@ -2,6 +2,26 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://alpheus.local/contracts/common/v1/schema/release.schema.json",
   "title": "Alpheus Agent Platform Release Manifest v1",
+  "$defs": {
+    "CheckEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "stage", "source_commit", "seed", "name", "status", "command", "assertions"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "stage": {"enum": ["AP0", "AP1", "AP2", "AP3", "AP4", "AP5", "AP6", "AP7", "AP8", "AP9", "AP10", "AP11", "AP12", "AP13", "AP14", "AP15"]},
+        "source_commit": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+        "seed": {"$ref": "common.schema.json#/$defs/OpaqueID"},
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"},
+        "status": {"enum": ["fail", "pass"]},
+        "command": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "assertions": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}
+        }
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_revision", "canonical_profile", "release_id", "stage", "decision", "source_commit", "created_at", "authorized_by", "effect_ceiling", "documents", "checks"],

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Non-money Agent Platform certification entrypoint. This command never loads
+# Permanently non-money Agent Platform certification. This command never loads
 # production credentials and never invokes Kernel or Provider mutation paths.
 set -eu
 
@@ -22,70 +22,87 @@ case "$STAGE" in
 		;;
 esac
 
-mkdir -p "$ARTIFACT_DIR"
 cd "$ROOT"
+dirty=$(git status --porcelain --untracked-files=all)
+mkdir -p "$ARTIFACT_DIR"
 
-find agent-platform -type f -name '*.go' -exec gofmt -l {} + >"$ARTIFACT_DIR/gofmt.txt"
+fail() {
+	reason=$1
+	label=$2
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"%s"}\n' \
+		"$STAGE" "$SEED" "$reason" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="%s"><failure>%s</failure></testcase></testsuite>\n' \
+		"$STAGE" "$label" "$reason" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=$reason" >&2
+	exit 1
+}
+
+if [ -n "$dirty" ]; then
+	printf '%s\n' "$dirty" >"$ARTIFACT_DIR/dirty-worktree.txt"
+	fail clean-worktree clean-worktree
+fi
+printf '{"status":"PASS","probe":"clean-worktree"}\n' >"$ARTIFACT_DIR/clean-worktree.json"
+
+find agent-platform agent-runtime kernel -type f -name '*.go' -exec gofmt -l {} + >"$ARTIFACT_DIR/gofmt.txt"
 if [ -s "$ARTIFACT_DIR/gofmt.txt" ]; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"gofmt"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="gofmt"><failure>dirty formatting</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=gofmt" >&2
-	exit 1
+	fail gofmt gofmt
 fi
 
-if ! go -C agent-platform vet ./... >"$ARTIFACT_DIR/go-vet.txt" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-vet"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-vet"><failure>go vet failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=go-vet" >&2
-	exit 1
+if ! go -C agent-platform vet ./... >"$ARTIFACT_DIR/go-vet-agent-platform.txt" 2>&1 ||
+	! go -C agent-runtime vet ./... >"$ARTIFACT_DIR/go-vet-agent-runtime.txt" 2>&1 ||
+	! go -C kernel vet ./... >"$ARTIFACT_DIR/go-vet-kernel.txt" 2>&1; then
+	fail go-vet go-vet
 fi
 
-if ! go -C agent-platform test -json ./contractvalidate >"$ARTIFACT_DIR/contract-pack.json" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"contract-pack"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="contract-pack"><failure>Schema Freeze Pack validation failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=contract-pack" >&2
-	exit 1
+if ! go -C agent-platform test -json ./contractvalidate >"$ARTIFACT_DIR/contract-pack.json" 2>&1 ||
+	! "$ROOT/scripts/validate-agent-contracts.sh" >"$ARTIFACT_DIR/contract-schema.json" 2>&1; then
+	fail contract-schema contract-schema
 fi
 
 if ! "$ROOT/scripts/check-agent-secret-leaks.sh" >"$ARTIFACT_DIR/secret-leaks.txt" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"secret-leaks"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="secret-leaks"><failure>secret leak probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=secret-leaks" >&2
-	exit 1
+	fail secret-leaks secret-leaks
 fi
 
 if ! AGENT_DB_PROBE_ARTIFACT_DIR="$ARTIFACT_DIR/db-role-probe" \
 	"$ROOT/scripts/test-agent-db-roles.sh" >"$ARTIFACT_DIR/db-role-probe.txt" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"db-role-probe"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="db-role-probe"><failure>database role/delivery probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=db-role-probe" >&2
-	exit 1
+	fail db-delivery db-delivery
 fi
 
 if ! AGENT_BLOB_PROBE_ARTIFACT_DIR="$ARTIFACT_DIR/blob-probe" \
 	"$ROOT/scripts/test-agent-blob.sh" >"$ARTIFACT_DIR/blob-probe.txt" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"blob-probe"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="blob-probe"><failure>Blob contract/storage probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=blob-probe" >&2
-	exit 1
+	fail blob-store blob-store
 fi
 
 if ! AGENT_GOVERNANCE_PROBE_ARTIFACT_DIR="$ARTIFACT_DIR/governance-probe" \
 	"$ROOT/scripts/test-agent-governance.sh" >"$ARTIFACT_DIR/governance-probe.txt" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"governance-probe"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="governance-probe"><failure>Governance contract/role/CAS probe failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=governance-probe" >&2
-	exit 1
+	fail governance governance
 fi
 
-if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2>&1; then
-	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-test-race"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-test-race"><failure>tests failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=go-test-race" >&2
-	exit 1
+if ! AGENT_MIGRATION_PROBE_ARTIFACT_DIR="$ARTIFACT_DIR/migration-probe" \
+	"$ROOT/scripts/test-agent-migrations.sh" >"$ARTIFACT_DIR/migration-probe.txt" 2>&1; then
+	fail migration-compatibility migration-compatibility
 fi
 
-printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","contract-pack","secret-leaks","db-role-probe","blob-probe","governance-probe","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="%s" tests="9" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="contract-pack"/><testcase name="secret-leaks"/><testcase name="db-role-probe"/><testcase name="blob-probe"/><testcase name="governance-probe"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
-echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=mandatory-ap0-probes-not-implemented" >&2
-exit 1
+if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test-agent-platform.json" 2>&1 ||
+	! go -C agent-runtime test -race -json ./... >"$ARTIFACT_DIR/go-test-agent-runtime.json" 2>&1 ||
+	! go -C kernel test -race -json ./... >"$ARTIFACT_DIR/go-test-kernel.json" 2>&1; then
+	fail go-test-race go-test-race
+fi
+
+if ! docker compose --env-file .env.example config --quiet >"$ARTIFACT_DIR/compose-config.txt" 2>&1; then
+	fail compose-config compose-config
+fi
+
+if ! "$ROOT/scripts/check-agent-nonmoney-boundary.sh" >"$ARTIFACT_DIR/nonmoney-boundary.json" 2>&1; then
+	fail nonmoney-boundary nonmoney-boundary
+fi
+
+if ! "$ROOT/scripts/verify-agent-release.sh" ap0 >"$ARTIFACT_DIR/release-verification.json" 2>&1; then
+	fail release-verification release-verification
+fi
+
+printf '{"stage":"%s","status":"PASS","seed":"%s","effect_ceiling":"none","completed_checks":["blob_store","clean_worktree","compose_config","contract_schema","db_delivery","go_test_race","go_vet","gofmt","governance","migration_compatibility","nonmoney_boundary","secret_leaks","release_verification"]}\n' \
+	"$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+printf '<testsuite name="%s" tests="13" failures="0"><testcase name="blob-store"/><testcase name="clean-worktree"/><testcase name="compose-config"/><testcase name="contract-schema"/><testcase name="db-delivery"/><testcase name="go-test-race"/><testcase name="go-vet"/><testcase name="gofmt"/><testcase name="governance"/><testcase name="migration-compatibility"/><testcase name="nonmoney-boundary"/><testcase name="secret-leaks"/><testcase name="release-verification"/></testsuite>\n' \
+	"$STAGE" >"$ARTIFACT_DIR/junit.xml"
+echo "PASS stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR effect_ceiling=none"

@@ -17,7 +17,7 @@ const (
 )
 
 func validManifest() Manifest {
-	return Manifest{
+	manifest := Manifest{
 		SchemaRevision: SchemaRevisionV1, CanonicalProfile: CanonicalProfile,
 		ReleaseID: "release-ap0-1", Stage: StageAP0, Decision: DecisionAuthorized,
 		SourceCommit: testCommit, CreatedAt: time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
@@ -29,11 +29,11 @@ func validManifest() Manifest {
 			{Path: "docs/agent-plan/BUILD_ROADMAP.md", Digest: testDigest},
 			{Path: "docs/agent-plan/INDEX.md", Digest: testDigest},
 		},
-		Checks: []Check{
-			{Name: "contracts", Status: "pass", EvidenceDigest: testDigest},
-			{Name: "tests", Status: "pass", EvidenceDigest: testDigest},
-		},
 	}
+	for _, name := range RequiredChecks(StageAP0) {
+		manifest.Checks = append(manifest.Checks, Check{Name: name, Status: "pass", EvidenceDigest: testDigest})
+	}
+	return manifest
 }
 
 func mustJSON(t *testing.T, value any) []byte {
@@ -101,6 +101,7 @@ func TestManifestValidationFailsClosed(t *testing.T) {
 		"unknown stage":    func(value *Manifest) { value.Stage = "AP99" },
 		"wrong actor":      func(value *Manifest) { value.AuthorizedBy.Kind = contracts.PrincipalWorkload },
 		"failed check":     func(value *Manifest) { value.Checks[0].Status = "fail" },
+		"missing check":    func(value *Manifest) { value.Checks = value.Checks[1:] },
 		"unsorted docs":    func(value *Manifest) { value.Documents[0], value.Documents[1] = value.Documents[1], value.Documents[0] },
 		"duplicate checks": func(value *Manifest) { value.Checks[1].Name = value.Checks[0].Name },
 		"absolute path":    func(value *Manifest) { value.Documents[0].Path = "/etc/passwd" },

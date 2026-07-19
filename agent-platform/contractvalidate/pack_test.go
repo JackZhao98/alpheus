@@ -130,6 +130,7 @@ func TestGoContractFieldsMatchSchemas(t *testing.T) {
 
 	releaseSchema := readSchema(t, filepath.Join(root, "schema", "release.schema.json"))
 	assertFieldParity(t, reflect.TypeOf(release.Manifest{}), releaseSchema)
+	assertFieldParity(t, reflect.TypeOf(release.CheckEvidence{}), schemaDefinition(t, releaseSchema, "CheckEvidence"))
 }
 
 func TestGoEnumsMatchSchema(t *testing.T) {
