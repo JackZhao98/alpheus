@@ -9,9 +9,9 @@
 - Only non-money AP0 implementation is authorized.
 - AP1 and later stages remain closed.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
-  Live mode, and UI were not changed by AP0-1 through AP0-4.
+  Live mode, and UI were not changed by AP0-1 through AP0-5.
 - `./scripts/certify-agent.sh ap0` intentionally exits non-zero until every AP0
-  mandatory probe exists. Green AP0-1 through AP0-4 package tests are not AP0
+  mandatory probe exists. Green AP0-1 through AP0-5 package tests are not AP0
   acceptance.
 
 ## AP0 work packets
@@ -22,8 +22,8 @@
 | AP0-2 common Schema Freeze Pack | Complete at `3175afd` | Machine-readable manifest, JSON Schema, canonicalization profile, valid/invalid goldens and digest vectors, compatibility declaration, contract validation command, and automated Go/Schema field and enum drift detection |
 | AP0-3 service security and durable delivery scaffold | Complete at `83bce82` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
 | AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
-| AP0-5 platform/effect governance registry | Next | Immutable mode/effect/kill-switch revisions and heads, activation receipts, compare-and-swap and fail-closed resolution |
-| AP0-6 integration and AP0 acceptance | Pending | Migration compatibility proof, complete threat probes, machine-readable certification artifacts, reviewed AP0 release manifest and exact digest verification |
+| AP0-5 platform/effect governance registry | Complete at `f8f2e74` | Frozen governance Schema Pack, immutable typed mode/effect/kill-switch revisions, fenced heads and append-only events, single-use bounded ActivationReceipts, separate owner/Activator/emergency-halt roles, stable-subject CAS, exact current-head projection, deterministic fail-closed Go resolver, and role/stale/malformed/concurrency probes |
+| AP0-6 integration and AP0 acceptance | Next | Migration compatibility proof, complete threat probes, machine-readable certification artifacts, reviewed AP0 release manifest and exact digest verification |
 
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
 criteria. These packets are implementation-sized units, not new architecture
@@ -57,7 +57,7 @@ activation record, never from the same untrusted manifest being checked.
 
 ## Verification
 
-The implemented AP0-1 through AP0-4 checks currently pass:
+The implemented AP0-1 through AP0-5 checks currently pass:
 
 ```text
 gofmt
@@ -67,6 +67,7 @@ JSON Schema 2020-12 meta-validation and valid/invalid golden validation
 secret-leak probe
 disposable PostgreSQL role/delivery probe
 disposable PostgreSQL Blob role/ACL/retention/GC probe
+disposable PostgreSQL governance role/receipt/CAS probe
 ```
 
 The PostgreSQL probe exercises exact retry and conflicting identity behavior,
@@ -74,9 +75,16 @@ stale lease rejection, inbox deduplication, quarantine/replay, dynamic-policy
 compare-and-swap and audit history, capacity limits, role isolation, and 20
 events claimed concurrently by eight dispatchers with no duplicate lease.
 
+The governance probe exercises all three typed head families, immutable
+revision/receipt/event records, owner-versus-Activator role isolation,
+least-privilege emergency halt, stale receipt rejection, single-use receipt
+consumption, and 20 concurrent activations against both an existing head and an
+absent bootstrap head. Each subject produces exactly one generation, one event,
+and one receipt consumption.
+
 The partial stage command runs the implemented checks and retains JSON/JUnit
 artifacts, then returns `FAIL mandatory-ap0-probes-not-implemented` by design.
-It may return AP0 `PASS` only after AP0-5 and AP0-6 land and all mandatory
+It may return AP0 `PASS` only after AP0-6 lands and all mandatory
 probes execute.
 
 ## AP0-2 Schema Freeze Pack
@@ -168,3 +176,36 @@ and 20 simultaneous metadata commits of one shared content digest. Local race
 tests additionally cover concurrent physical deduplication, oversize and digest
 mismatch, unsafe roots, authorization callbacks, corruption, missing bytes, and
 verified deletion.
+
+## AP0-5 platform and effect governance
+
+The governance v1 Schema Pack freezes five global platform-ceiling values:
+`disabled`, `read_only`, `shadow`, `live_confirmed`, and `live_autonomous`.
+A canary remains a scoped rollout and is deliberately not a global mode. This
+aligns the roadmap prose with the already frozen AP0-2 machine enum; it does
+not authorize Live or change the deferred M11 gate.
+
+PostgreSQL owns separate immutable revision tables and fenced mutable heads for
+the platform mode, every governed effect class, and each fixed kill switch.
+ActivationReceipt bodies bind the exact target revision/digest, expected head
+generation, transition direction, deployment mode/effect ceilings, owner,
+reason, request digest, and a database-enforced maximum one-hour validity
+window. Receipt consumption and governance events are separate append-only
+records; replay of the exact current receipt is idempotent, while stale,
+expired, reused-for-another-head, no-op, or direction-incompatible transitions
+are rejected.
+
+Candidate authoring, CAS activation, and emergency halt use three non-overlapping
+database roles. The emergency role may only create `disabled`/`halted`
+successors. A stable per-subject transaction advisory lock protects both
+existing heads and the otherwise rowless bootstrap race, without serializing
+unrelated subjects. Runtime profiles receive a read-only exact-current-head
+projection, never base-table mutation privileges.
+
+The Go resolver recomputes each immutable revision digest and intersects the
+fresh snapshot, deployment ceilings, global mode, exact effect head, fixed
+route requirements, and every applicable kill switch. Missing, stale,
+malformed, halted, unknown, or incompatible state denies the effect. Broker
+mutation routes automatically require operation-emission plus exact-confirmed
+or autonomous/Delegation switches; external reads automatically require the
+external-capability switch. AP0 release effect ceiling remains `none`.

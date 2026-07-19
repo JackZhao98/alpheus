@@ -1217,10 +1217,9 @@ Use one fenced global platform **ceiling**:
 
 ```text
 disabled
-research_only
+read_only
 shadow
-live_exact_confirmation
-live_autonomous_canary
+live_confirmed
 live_autonomous
 ```
 
@@ -1229,6 +1228,12 @@ every scope. Each operation still resolves one explicit route and its scoped
 rollout/policy/grant records. Activating one canary cannot grant another scope
 autonomy or remove an exact-confirmation fallback from an otherwise eligible
 scope.
+
+These names are the frozen common v1 machine enum. `read_only` is the former
+prose label `research_only`, and `live_confirmed` is the former prose label
+`live_exact_confirmation`. A Live canary is a scoped rollout record under this
+ceiling, never a sixth global `PlatformMode`; this corrects naming drift without
+changing or widening behavior.
 
 Transitions are explicit, fenced, audited, and reversible toward a less
 permissive mode. Environment configuration alone cannot advance the ceiling.
