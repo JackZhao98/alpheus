@@ -6,9 +6,9 @@
 >
 > Frozen on: 2026-07-16
 >
-> Current implementation target: **explicit target-database bootstrap plus the
-> separately confirmed one-share M11 canary; K0 code is landed. B0 follows M11
-> and is required before AP0**
+> Current implementation target: **the separately confirmed one-share M11
+> canary; target database K0 bootstrap/read-only deployment is certified. B0
+> follows M11 and is required before AP0**
 
 This is the canonical entrypoint for implementation progress and plan-file
 routing. `docs/PLAN.md` exists only as a compatibility pointer.
@@ -82,7 +82,7 @@ Status vocabulary: `LANDED`, `IN PROGRESS`, `NEXT`, `PENDING`, `BLOCKED`, `LAST`
 | **M7** | **LANDED** | M6 | exact-origin Admin controls; pending-review risk/cap/quote/check display; two-step Halt and constrained breaker Resume; non-actionable uncertainty warnings; event/operation audit ids; phone-width and inert-XSS browser probes; approval/rejection concurrency state machine; Halt open-block/full-close proof; PostgreSQL race suite and isolated Compose smoke green | Phase 3 |
 | **M9** | **LANDED** | M7; full pre-live certification | 96.6% risk coverage; deterministic claimed/accepted/crash/reprice fault seams; live/shadow daily, open-risk, buying-power and close-reservation barriers plus PostgreSQL advisory-lock proof; six-operation full-day idempotent replay; paused DB 503 in 3.005701s with zero effects; PostgreSQL process replacement recovery; final unknown=0 and unsafe-orphan=0; isolated race/vet/smoke green | Phase 4 |
 | **M10** | **LANDED** | M9 | official Anthropic Go SDK v1.42.0; role-card-order prompt rendering; forced single-tool handwritten contract schemas; strict local decode/Validate and one retry; exact token-count budget plus per-slot caps; untrusted-context boundary; authenticated bounded telemetry event; mocked transport/startup/injection suites; race/vet, isolated Compose certification and missing-key process probe green | Phase 4 |
-| **M11** | **IN PROGRESS** | M10; v1.6 Provider wiring, v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority complete; separately confirmed one-share canary remains; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority, single deployment CLI, startup/admission fail-closed reads, grant revision FK, YAML removal, legacy upgrade and PostgreSQL/race acceptance; $50/five-day initial policy remains human-owned; all widening is denied until K1 adds durable completed-day attestation; deployed stack remains read-only and K0 made no production/Robinhood Provider calls | Phase 4 |
+| **M11** | **IN PROGRESS** | M10; v1.6 Provider wiring, v1.7.1 recovery/Halt, v1.8.1 K0 database canary authority and target read-only deployment complete; separately confirmed one-share canary remains; option mutations blocked | `319f657` Provider wiring; `0913010` recovery/Halt cut; `d24b8b9` typed immutable database canary authority; target database migrated v7→v10 with 92 operations preserved and authority revision/generation `1/1` at $50/five days; current image healthy in `read_only`, Live disabled, account $401.16 with no positions/open orders and zero attempt/order/fill/current-day grant/open-risk/unknown effect; all widening remains denied until K1 attestation | Phase 4 |
 | **B0** | **PENDING** | M11 LANDED; before AP0 and autonomous Agent Live; may proceed independently of K1 after M11 | external/manual broker facts, origin separation, aggregate-risk reconciliation, external cancel/close through Kernel, action-specific pre-effect refresh, stale-proposal invalidation, PostgreSQL/race/fault/Provider-fixture acceptance | Phase Y |
 
 Ordering constraints: M8A/M8B land after M2.6 so production reads inherit

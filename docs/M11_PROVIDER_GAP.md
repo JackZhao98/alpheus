@@ -276,6 +276,19 @@ final-day evidence, so K0 classifies but denies every widening. K1 must add a
 durable completed-day reconciliation attestation before any cap increase or
 clean-days decrease can be enabled.
 
+### Exact target K0 bootstrap and read-only deployment — complete
+
+Under explicit owner authorization on 2026-07-18, the target database was
+backed up, migrated from version 7 through 10, and bootstrapped with exact
+authority revision/generation `1/1`, `$50` daily authorized risk, and five clean
+days. All 92 operations were preserved. The current Kernel image is healthy
+with `TRADING_MODE=read_only`, `LIVE_TRADING_ENABLED=false`, and the Robinhood
+Provider. Authenticated state showed `$401.16` buying power/equity, no positions
+or open orders, and zero current-day risk/trades. Database verification showed
+zero attempts, orders, fills, reservations, Live exposure, current-day Live
+grants, authoritative-bound Live grants, and unknown attempts. No broker
+mutation or proposal occurred.
+
 ### v1.7 recovery hardening found by cross-module review — landed
 
 The verified upstream `ref_id` behavior was sufficient for duplicate-effect
@@ -354,11 +367,9 @@ commit `d24b8b9` satisfies K0 database authority. Only the separately confirmed
 canary remains before M11 can be marked landed:
 
 1. The first Alpheus-routed live canary remains a separate human-confirmed
-   action. The confirmed sequence first bootstraps/verifies the $50/five-day
-   revision on the exact target database; K0 did not mutate production. Its
-   trade ticket must then be exactly one share and remain within that immutable
-   daily canary risk cap. Direct MCP evidence is not silently treated as the
-   acceptance order.
+   action. Its trade ticket must be exactly one share and remain within the
+   active immutable $50/five-day authority. Direct MCP evidence is not silently
+   treated as the acceptance order.
 2. The currently running Robinhood deployment remains `read_only`; do not
    change its mode or restart it as part of documentation work.
 3. Option placement produced only unknown/zero-order negative evidence. The

@@ -1413,8 +1413,9 @@ recertified at `d2605b9` with the complete isolated M9 gate green. Current
 release blockers are:
 
 1. retain landed M11 v1.7.1 recovery/Halt commit `0913010` and v1.8.1 K0
-   database-authority commit `d24b8b9`, execute only the separately confirmed
-   target-database bootstrap plus one-share canary, and mark M11 `LANDED`;
+   database-authority commit `d24b8b9` plus the completed target K0/read-only
+   deployment certification, execute only the separately confirmed one-share
+   canary, and mark M11 `LANDED`;
 2. land K1 and B0, then owner-review/freeze Lean v1;
 3. land the reviewed post-M11 Charter amendment in the pre-AP0 governance
    closeout; and

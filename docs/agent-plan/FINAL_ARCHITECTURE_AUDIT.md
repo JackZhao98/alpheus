@@ -241,14 +241,18 @@ authoritative canary policy. Recovery/Halt and its non-money acceptance landed
 in `0913010`; K0 database canary authority and its non-money acceptance landed
 in `d24b8b9` without a production Provider call.
 
-Next, under a fresh confirmation, bootstrap and verify the $50/five-day policy
-on the exact target database, then execute only the already specified one-share
-equity canary. Halt new risk, preserve the Live recovery adapter,
+The target database bootstrap and read-only deployment were subsequently
+completed under separate explicit owner authorization: version 10, authority
+revision/generation `1/1`, `$50`/five days, no broker mutation, and zero
+attempt/order/fill/current-day grant/open-risk/unknown effect. Next, under a
+fresh confirmation, execute only the already specified one-share equity
+canary. Halt new risk, preserve the Live recovery adapter,
 reconcile/adopt/cancel or ingest every real order/fill/position/PnL fact, prove
 the gate/accounting clean, and only then return deployment to `read_only`. A
 real fill is never rolled back; any reduction is a new Kernel-verified effect.
-Mark M11 `LANDED` only if every frozen acceptance item passes. This audit
-authorizes neither the target-database mutation nor a real-money order.
+Mark M11 `LANDED` only if every frozen acceptance item passes. This audit did
+not authorize the target-database mutation; the later owner instruction did.
+It still authorizes no real-money order.
 
 ### R-03 — Post-M11 Charter amendment is not landed
 
@@ -324,7 +328,7 @@ AP0_RELEASE_STATUS: WITHHELD
 
 No Agent Platform implementation should begin from this audit alone. M11
 v1.7.1 recovery/Halt and v1.8.1 K0 database canary authority are committed and
-pushed. The separately confirmed target-database bootstrap, one-share canary
-and M11 landing are next; neither this audit nor the Lean amendment authorizes
-the database mutation or that order. K1, B0, Lean v1 freeze, Charter closeout
-and a refreshed audit/release record precede AP0.
+pushed, and the target K0/read-only deployment is separately certified. The
+one-share canary and M11 landing are next; neither this audit nor the Lean
+amendment authorizes that order. K1, B0, Lean v1 freeze, Charter closeout and a
+refreshed audit/release record precede AP0.

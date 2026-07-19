@@ -87,9 +87,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 ## Next planning work
 
 1. Treat M11 v1.7.1 recovery/Halt commit `0913010` and v1.8.1 K0 database
-   canary authority commit `d24b8b9` as landed non-money evidence; complete only
-   the separately confirmed target-database bootstrap plus one-share canary and
-   its stop/recovery acceptance before marking M11 `LANDED`.
+   canary authority commit `d24b8b9` as landed non-money evidence. The target
+   K0 bootstrap/read-only deployment is certified; complete only the separately
+   confirmed one-share canary and its stop/recovery acceptance before marking
+   M11 `LANDED`.
 2. Implement K1 Kernel policy ownership and B0 broker coexistence, then
    owner-review/freeze Lean v1. They are separate modules and may proceed
    independently after M11, but both precede AP0.
