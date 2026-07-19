@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "stage": "AP0",
+  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
+  "seed": "ap0-contract-v1",
+  "name": "contract_schema",
+  "status": "pass",
+  "command": "go -C agent-platform test ./contractvalidate && ./scripts/validate-agent-contracts.sh",
+  "assertions": ["cross_language_digests_21", "json_schema_2020_12", "semantic_invalid_goldens_rejected", "valid_goldens_21"]
+}

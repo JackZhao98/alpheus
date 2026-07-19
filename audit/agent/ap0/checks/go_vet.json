@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "stage": "AP0",
+  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
+  "seed": "ap0-contract-v1",
+  "name": "go_vet",
+  "status": "pass",
+  "command": "go -C agent-platform vet ./... && go -C agent-runtime vet ./... && go -C kernel vet ./...",
+  "assertions": ["agent_platform_vet_pass", "agent_runtime_vet_pass", "kernel_vet_pass"]
+}

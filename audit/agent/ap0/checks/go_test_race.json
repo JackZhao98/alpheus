@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "stage": "AP0",
+  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
+  "seed": "ap0-contract-v1",
+  "name": "go_test_race",
+  "status": "pass",
+  "command": "go -C agent-platform test -race ./... && go -C agent-runtime test -race ./... && go -C kernel test -race ./...",
+  "assertions": ["agent_platform_race_pass", "agent_runtime_race_pass", "kernel_race_pass"]
+}

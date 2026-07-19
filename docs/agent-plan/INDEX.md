@@ -1,6 +1,6 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **LEAN V1 FROZEN — AP0 NON-MONEY IMPLEMENTATION AUTHORIZED; M11
+> Status: **LEAN V1 FROZEN — AP0 NON-MONEY ACCEPTED; AP1 CLOSED; M11
 > CANARY DEFERRED; AP13+ withheld pending M11 landing**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
@@ -52,7 +52,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-5 complete; AP0 remains incomplete and fail-closed; AP0-6 integration/acceptance is next | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 complete; AP0 non-money release accepted at source `b026b87`, digest `cdf451e5...c385df1`; AP1 remains closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -68,7 +68,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
-| Agent Platform Build Roadmap | Frozen Lean v1 baseline through AP15; AP0 is the only authorized implementation stage | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
+| Agent Platform Build Roadmap | Frozen Lean v1 baseline through AP15; AP0 accepted with effect ceiling `none`; AP1 entry review is next | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | Final cross-module architecture audit | Current for AP0; no unresolved authority, identity, ordering or fail-open finding; later gates remain closed | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
@@ -93,11 +93,11 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 1. Keep M11 `CANARY DEFERRED`, production read-only, and AP13+ closed under
    plan amendment v1.9.1. The real Canary will run later against the final
    applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
-2. K1, B0, Lean v1, the Charter closeout and refreshed AP0 audit are complete.
-   AP0-1 through AP0-5 have landed, but AP0 remains incomplete. Implement
-   AP0-6 from
-   [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); complete AP0 and
-   accept its digest-bound release verification before AP1.
+2. K1, B0, Lean v1, the Charter closeout, refreshed AP0 audit, and AP0-1
+   through AP0-6 are complete. The accepted AP0 release is bound to source
+   `b026b87447d054717e6277ee925b126a17515bef` and manifest digest
+   `cdf451e5fe002dc7297a2e1c7aa05e6f0eb1b071a66cc9971edbda923c385df1`.
+   Review and freeze AP1's detailed entry packet before implementing it.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference

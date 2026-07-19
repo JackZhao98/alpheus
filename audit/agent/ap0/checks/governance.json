@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "stage": "AP0",
+  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
+  "seed": "ap0-contract-v1",
+  "name": "governance",
+  "status": "pass",
+  "command": "./scripts/test-agent-governance.sh",
+  "assertions": ["concurrent_activations_per_subject_20", "least_privilege_emergency_halt", "single_use_receipts", "typed_fenced_heads"]
+}

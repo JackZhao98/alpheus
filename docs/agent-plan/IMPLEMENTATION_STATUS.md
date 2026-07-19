@@ -6,13 +6,12 @@
 ## Current boundary
 
 - The frozen Lean v1 architecture remains authoritative.
-- Only non-money AP0 implementation is authorized.
+- Non-money AP0 is implemented and accepted with effect ceiling `none`.
 - AP1 and later stages remain closed.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
-  Live mode, and UI were not changed by AP0-1 through AP0-5.
-- `./scripts/certify-agent.sh ap0` intentionally exits non-zero until every AP0
-  mandatory probe exists. Green AP0-1 through AP0-5 package tests are not AP0
-  acceptance.
+  Live mode, and UI were not changed by AP0-1 through AP0-6.
+- `./scripts/certify-agent.sh ap0` is the permanent non-money acceptance entrypoint.
+  It requires a clean worktree and the exact protected AP0 release digest.
 
 ## AP0 work packets
 
@@ -23,7 +22,7 @@
 | AP0-3 service security and durable delivery scaffold | Complete at `83bce82` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
 | AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
 | AP0-5 platform/effect governance registry | Complete at `f8f2e74` | Frozen governance Schema Pack, immutable typed mode/effect/kill-switch revisions, fenced heads and append-only events, single-use bounded ActivationReceipts, separate owner/Activator/emergency-halt roles, stable-subject CAS, exact current-head projection, deterministic fail-closed Go resolver, and role/stale/malformed/concurrency probes |
-| AP0-6 integration and AP0 acceptance | Next | Migration compatibility proof, complete threat probes, machine-readable certification artifacts, reviewed AP0 release manifest and exact digest verification |
+| AP0-6 integration and AP0 acceptance | Complete; source `b026b87`; release digest `cdf451e5...c385df1` | Full Kernel/Agent migration compatibility, complete common and AP0 threat probes, cross-language canonical digest validation, machine-readable certification evidence, bound release files, and exact owner-approved digest verification |
 
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
 criteria. These packets are implementation-sized units, not new architecture
@@ -57,17 +56,22 @@ activation record, never from the same untrusted manifest being checked.
 
 ## Verification
 
-The implemented AP0-1 through AP0-5 checks currently pass:
+The implemented AP0-1 through AP0-6 checks pass:
 
 ```text
 gofmt
 go vet ./...
 go test -race ./...
 JSON Schema 2020-12 meta-validation and valid/invalid golden validation
+independent Python validation of all 21 canonical golden digests
 secret-leak probe
 disposable PostgreSQL role/delivery probe
 disposable PostgreSQL Blob role/ACL/retention/GC probe
 disposable PostgreSQL governance role/receipt/CAS probe
+full Kernel plus Agent migration compatibility and transactional rollback probe
+Docker Compose configuration validation
+static non-money boundary probe
+exact release-manifest document and evidence verification
 ```
 
 The PostgreSQL probe exercises exact retry and conflicting identity behavior,
@@ -82,10 +86,9 @@ consumption, and 20 concurrent activations against both an existing head and an
 absent bootstrap head. Each subject produces exactly one generation, one event,
 and one receipt consumption.
 
-The partial stage command runs the implemented checks and retains JSON/JUnit
-artifacts, then returns `FAIL mandatory-ap0-probes-not-implemented` by design.
-It may return AP0 `PASS` only after AP0-6 lands and all mandatory
-probes execute.
+The stage command runs every mandatory probe, retains JSON/JUnit artifacts, and
+fails on a dirty worktree, skipped or unavailable infrastructure, leaked secret,
+changed bound file, missing evidence, wrong source commit, or digest mismatch.
 
 ## AP0-2 Schema Freeze Pack
 
@@ -106,9 +109,8 @@ without adding an early supply-chain dependency. The pack includes:
 
 Tests compare every top-level Go JSON field, required/optional field, supported
 contract type, and common enum with the Schema Pack. Unlisted or missing golden
-files fail the pack test. AP0 certification now retains separate
-`contract-pack.json` evidence, but still returns overall FAIL until the
-remaining AP0 probes exist.
+files fail the pack test. AP0 certification retains separate Go semantic and
+independent JSON Schema/cross-language digest evidence.
 
 ## AP0-3 security and durable delivery scaffold
 
