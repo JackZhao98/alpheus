@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -81,6 +82,23 @@ func TestExternalPositionReductionReconcilesWithoutFictionalFillPostgres(t *test
 	if pnlErr != nil || pnl != 0 {
 		t.Fatalf("local pnl=%s err=%v", pnl, pnlErr)
 	}
+	view, err := s.LoadBrokerCoexistenceView("account-reconcile", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Reconciliation.State != "current" ||
+		view.Reconciliation.ObservedGeneration != changed.Generation ||
+		view.Reconciliation.ReconciledGeneration != changed.Generation ||
+		len(view.Positions) != 1 || view.Positions[0].ExposureOrigin != "alpheus" ||
+		view.Positions[0].ObservedOrigin != "ambiguous" ||
+		view.Positions[0].ProviderQty != units.MustQty("1") ||
+		view.Positions[0].TrackedQty != units.MustQty("1") || view.Positions[0].ExternalQty != 0 ||
+		len(view.ExternalChanges) != 1 || len(view.ExternalChanges[0].Allocations) != 1 ||
+		len(view.InvalidatedOperations) != 1 ||
+		view.InvalidatedOperations[0].OperationID != staleOperationID ||
+		view.InvalidatedOperations[0].Reason != "external_broker_state_changed" {
+		t.Fatalf("coexistence view=%+v", view)
+	}
 
 	// Same immutable observation and a reconstructed Store both replay as no-ops.
 	restarted := &Store{DB: s.DB, timeout: s.timeout, marketTZ: s.marketTZ}
@@ -98,6 +116,10 @@ func TestExternalPositionReductionReconcilesWithoutFictionalFillPostgres(t *test
 	}
 	if stillClosed != int64(units.MustQty("1")) || stillEpisodes != 1 {
 		t.Fatalf("replay closed=%s episodes=%d", units.Qty(stillClosed), stillEpisodes)
+	}
+	restartedView, err := restarted.LoadBrokerCoexistenceView("account-reconcile", 50)
+	if err != nil || !reflect.DeepEqual(view, restartedView) {
+		t.Fatalf("restarted view=%+v err=%v, want %+v", restartedView, err, view)
 	}
 }
 
@@ -156,6 +178,11 @@ func TestExternalAddAndInternalDeltaAreSeparatedPostgres(t *testing.T) {
 	}
 	if episodes != 1 {
 		t.Fatalf("episodes=%d want=1", episodes)
+	}
+	view, err := s.LoadBrokerCoexistenceView("account-attribution", 50)
+	if err != nil || len(view.Positions) != 1 || view.Positions[0].ExposureOrigin != "external" ||
+		view.Positions[0].TrackedQty != 0 || view.Positions[0].ExternalQty != units.MustQty("1") {
+		t.Fatalf("coexistence view=%+v err=%v", view, err)
 	}
 }
 
@@ -232,6 +259,28 @@ func TestExternalPositionChangeKindUsesExposureMagnitude(t *testing.T) {
 			got := externalPositionChangeKind(test.hasPrior, test.before, test.after, test.adjusted)
 			if got != test.want {
 				t.Fatalf("kind=%s want=%s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestBrokerExposureOriginDoesNotAdoptMixedOrAmbiguousPositions(t *testing.T) {
+	tests := []struct {
+		name              string
+		tracked, external units.Qty
+		positionKeys      int
+		want              string
+	}{
+		{name: "fully tracked", tracked: 1, positionKeys: 1, want: "alpheus"},
+		{name: "external", external: 1, positionKeys: 1, want: "external"},
+		{name: "external short", external: -1, positionKeys: 1, want: "external"},
+		{name: "mixed", tracked: 1, external: 1, positionKeys: 1, want: "mixed"},
+		{name: "ambiguous provider identities", tracked: 1, external: 1, positionKeys: 2, want: "ambiguous"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := brokerExposureOrigin(test.tracked, test.external, test.positionKeys); got != test.want {
+				t.Fatalf("origin=%s want=%s", got, test.want)
 			}
 		})
 	}

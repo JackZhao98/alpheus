@@ -59,30 +59,79 @@ function renderLedger(prefix, ledger, asOf) {
 function renderList(containerId, emptyId, countId, items, formatter) {
   const container = byId(containerId);
   const nodes = (items || []).map((item) => {
+    const formatted = formatter(item);
     const row = document.createElement("div"); row.className = "list-item";
-    const title = document.createElement("strong"); title.textContent = formatter(item).title;
-    const detail = document.createElement("span"); detail.textContent = formatter(item).detail;
-    row.append(title, detail); return row;
+    const title = document.createElement("strong"); title.textContent = formatted.title;
+    const detail = document.createElement("span"); detail.textContent = formatted.detail;
+    row.append(title);
+    if (formatted.origin) row.append(originBadge(formatted.origin));
+    row.append(detail); return row;
   });
   container.replaceChildren(...nodes);
   setText(countId, nodes.length);
   byId(emptyId).classList.toggle("hidden", nodes.length > 0);
 }
 
-async function renderPositions(positions, origins = {}) {
+function originBadge(origin, label = origin) {
+  const known = new Set(["alpheus", "external", "ambiguous", "mixed"]);
+  const normalized = known.has(origin) ? origin : "ambiguous";
+  const badge = document.createElement("span");
+  badge.className = `origin-badge origin-${normalized}`;
+  badge.textContent = String(label || normalized).toUpperCase();
+  return badge;
+}
+
+function brokerOriginKey(family, objectKey) { return `${family}\u0000${objectKey}`; }
+function exposureKey(kind, symbol) { return `${kind}\u0000${symbol}`; }
+
+async function renderPositions(positions, origins = {}, coexistencePositions = []) {
   const body = byId("positions-body");
+  const exposure = {};
+  coexistencePositions.forEach((position) => { exposure[exposureKey(position.kind, position.symbol)] = position; });
   const rows = await Promise.all((positions || []).map(async (position) => {
     let quote = null;
     try { quote = await api(`/market/quote/${encodeURIComponent(position.symbol)}`); } catch (_) {}
     const row = document.createElement("tr");
-    const origin = origins[position.position_id] || {origin:"ambiguous", evidence:"unavailable"};
-    const values = [position.symbol, `${position.kind} · ${origin.origin}`, position.qty, position.multiplier, money(position.avg_price), quote ? `${money(quote.bid)} / ${money(quote.ask)}` : "Unavailable", quote ? `FRESH · ${quote.source} · ${when(quote.as_of)} · ${origin.evidence}` : `STALE/ERROR · fail closed · ${origin.evidence}`];
+    const allocation = exposure[exposureKey(position.kind, position.symbol)];
+    const origin = origins[brokerOriginKey("positions", position.position_id)] || {origin:allocation?.observed_origin || "ambiguous", evidence:allocation?.origin_evidence || "unavailable"};
+    const values = [position.symbol, position.kind];
     values.forEach((value) => { const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell); });
+    const exposureCell = document.createElement("td");
+    exposureCell.append(originBadge(allocation?.exposure_origin || "ambiguous", allocation?.exposure_origin || "pending"));
+    const exposureDetail = document.createElement("small");
+    exposureDetail.textContent = allocation ? `tracked ${allocation.tracked_qty} · external ${allocation.external_qty}` : "awaiting reconciliation";
+    exposureCell.append(exposureDetail); row.append(exposureCell);
+    const originCell = document.createElement("td"); originCell.append(originBadge(origin.origin)); row.append(originCell);
+    [position.qty, position.multiplier, money(position.avg_price), quote ? `${money(quote.bid)} / ${money(quote.ask)}` : "Unavailable", quote ? `FRESH · ${quote.source} · ${when(quote.as_of)} · ${origin.evidence}` : `STALE/ERROR · fail closed · ${origin.evidence}`].forEach((value) => {
+      const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell);
+    });
     return row;
   }));
   body.replaceChildren(...rows);
   setText("position-count", rows.length);
   byId("positions-empty").classList.toggle("hidden", rows.length > 0);
+}
+
+function renderBrokerCoexistence(view = {}) {
+  const reconciliation = view.reconciliation || {};
+  const state = reconciliation.state || "uninitialized";
+  const stateBadge = byId("reconciliation-state");
+  stateBadge.className = `badge reconciliation-${state}`;
+  setText("reconciliation-state", state);
+  setText("broker-observed-generation", reconciliation.observed_generation || "—");
+  setText("broker-reconciled-generation", reconciliation.reconciled_generation || "—");
+  setText("broker-observed-at", when(reconciliation.observed_at));
+  renderList("external-change-list", "external-change-empty", "external-change-count", view.external_changes || [], (change) => ({
+    title:`${change.change_kind} · ${change.symbol} / ${change.kind}`,
+    origin:change.origin || "ambiguous",
+    detail:`provider ${change.provider_qty_before ?? "—"} → ${change.provider_qty_after} · tracked ${change.tracked_qty_before} → ${change.tracked_qty_after} · adjusted ${change.adjusted_tracked_qty} · attribution ${change.attribution_status} · observation ${change.observation_generation} · ${when(change.created_at)}`
+  }));
+  renderList("invalidation-list", "invalidation-empty", "invalidation-count", view.invalidated_operations || [], (invalidation) => ({
+    title:`${invalidation.operation_status} · operation ${invalidation.operation_id}`,
+    origin:"ambiguous",
+    detail:`${invalidation.reason} · observation ${invalidation.observation_generation} · ${when(invalidation.created_at)}`
+  }));
+  setPanelError("coexistence-error", "");
 }
 
 function operationIntent(operation) {
@@ -326,10 +375,11 @@ async function renderState(state) {
   setText("mutation-gate", gate.unknown_attempt_id ? `LATCHED · ${gate.unknown_attempt_id}` : gate.active_attempt_id ? `ACTIVE · ${gate.active_attempt_id}` : "READY");
   renderLedger("live", state.day.live, state.as_of); renderLedger("shadow", state.day.shadow, state.as_of);
   const origins = {};
-  (state.broker_objects || []).forEach((object) => { origins[object.object_key] = {origin:object.origin || "ambiguous", evidence:object.origin_evidence || "unavailable"}; });
-  await renderPositions(state.positions, origins);
-  renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => { const origin = origins[o.broker_order_id] || {origin:"ambiguous", evidence:"unavailable"}; return {title:`${o.side} ${o.symbol} · ${o.state} · ${origin.origin}`, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${origin.evidence} · ${when(o.as_of)}`}; });
-  renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => { const origin = origins[f.fill_id] || {origin:"ambiguous", evidence:"separate fill observation"}; return {title:`${f.side} ${f.symbol} · ${f.qty} · ${origin.origin}`, detail:`${money(f.price)} · ${f.source} · ${origin.evidence} · ${when(f.as_of)}`}; });
+  (state.broker_objects || []).forEach((object) => { origins[brokerOriginKey(object.family, object.object_key)] = {origin:object.origin || "ambiguous", evidence:object.origin_evidence || "unavailable"}; });
+  renderBrokerCoexistence(state.broker_coexistence);
+  await renderPositions(state.positions, origins, state.broker_coexistence?.positions || []);
+  renderList("orders-list", "orders-empty", "order-count", state.open_orders, (o) => { const origin = origins[brokerOriginKey("orders", o.broker_order_id)] || {origin:"ambiguous", evidence:"unavailable"}; return {title:`${o.side} ${o.symbol} · ${o.state}`, origin:origin.origin, detail:`${o.qty} @ ${money(o.limit_price)} · ${o.source} · ${origin.evidence} · ${when(o.as_of)}`}; });
+  renderList("fills-list", "fills-empty", "fill-count", state.recent_fills, (f) => { const origin = origins[brokerOriginKey("fills", f.fill_id)] || {origin:"ambiguous", evidence:"separate fill observation"}; return {title:`${f.side} ${f.symbol} · ${f.qty}`, origin:origin.origin, detail:`${money(f.price)} · ${f.source} · ${origin.evidence} · ${when(f.as_of)}`}; });
   renderBreakerActions();
   ["account-error", "positions-error", "orders-error", "fills-error"].forEach((id) => setPanelError(id, ""));
 }

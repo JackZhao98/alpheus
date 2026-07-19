@@ -113,6 +113,7 @@ type storeAPI interface {
 	LoadBrokerAccountView(accountID string) (*store.BrokerAccountView, error)
 	LoadBrokerObservation(id string) (*store.BrokerAccountView, error)
 	ReconcileBrokerObservation(observationID string) (*store.BrokerReconciliationResult, error)
+	LoadBrokerCoexistenceView(accountID string, historyLimit int) (*store.BrokerCoexistenceView, error)
 }
 
 type dayStateReader interface {
@@ -730,6 +731,11 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "get live execution gate", err)
 		return
 	}
+	coexistence, err := s.store.LoadBrokerCoexistenceView(snapshot.Observation.AccountID, 50)
+	if err != nil {
+		writeStoreError(w, "get broker coexistence view", err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"account":                 acct,
 		"positions":               pos,
@@ -742,6 +748,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		"broker_observation":      snapshot.Observation,
 		"broker_fill_observation": fillObservation,
 		"broker_objects":          brokerObjects,
+		"broker_coexistence":      coexistence,
 		"mode":                    s.tradingMode(),
 		"source":                  "kernel",
 		"as_of":                   window.asOf,

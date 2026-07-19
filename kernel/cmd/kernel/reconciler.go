@@ -788,8 +788,9 @@ func (s *server) recoveredUnsentPlaceRefusal(attempt *store.ExecutionAttempt) (s
 		return "", err
 	}
 	if change == policy.ChangeTighten || change == policy.ChangeMixed {
-		// A full account/quote pre-effect refresh belongs to B0. Until then an
-		// unsent recovered open cannot guess which tightened field is harmless.
+		// The B0 pre-effect barrier rechecks the recovered send later. Refuse the
+		// unsent recovery here as well so tightened policy never reaches that
+		// barrier as presumed authority.
 		return "current policy tightened before unsent recovery", nil
 	}
 	return "", nil

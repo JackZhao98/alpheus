@@ -134,10 +134,36 @@
       <p id="warnings-error" class="panel-error hidden" role="status"></p>
     </section>
 
+    <section class="panel coexistence-panel" aria-labelledby="coexistence-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">SHARED BROKER REALITY</p><h2 id="coexistence-title">Broker coexistence</h2></div>
+        <span id="reconciliation-state" class="badge">UNINITIALIZED</span>
+      </div>
+      <p class="query-intro">Broker-object origin and economic exposure composition are separate. External or ambiguous facts remain visible and are never adopted into a fictional Alpheus lifecycle.</p>
+      <dl class="coexistence-facts">
+        <div><dt>Observed generation</dt><dd id="broker-observed-generation">—</dd></div>
+        <div><dt>Reconciled generation</dt><dd id="broker-reconciled-generation">—</dd></div>
+        <div><dt>Observation freshness</dt><dd id="broker-observed-at">—</dd></div>
+      </dl>
+      <div class="split-grid coexistence-grid">
+        <article>
+          <div class="subhead"><strong>External change episodes</strong><span id="external-change-count" class="badge">0</span></div>
+          <div id="external-change-list" class="list"></div>
+          <p id="external-change-empty" class="empty">No external position change recorded.</p>
+        </article>
+        <article>
+          <div class="subhead"><strong>Invalidated stale work</strong><span id="invalidation-count" class="badge">0</span></div>
+          <div id="invalidation-list" class="list"></div>
+          <p id="invalidation-empty" class="empty">No operation invalidated by broker reconciliation.</p>
+        </article>
+      </div>
+      <p id="coexistence-error" class="panel-error hidden" role="status"></p>
+    </section>
+
     <section class="panel table-panel">
       <div class="panel-head"><div><p class="eyebrow">NORMALIZED INVENTORY</p><h2>Positions</h2></div><span id="position-count" class="badge">0</span></div>
       <div class="table-wrap">
-        <table><thead><tr><th>Symbol</th><th>Kind</th><th>Quantity</th><th>Multiplier</th><th>Avg price</th><th>Current quote</th><th>Freshness</th></tr></thead><tbody id="positions-body"></tbody></table>
+        <table><thead><tr><th>Symbol</th><th>Kind</th><th>Exposure</th><th>Broker origin</th><th>Quantity</th><th>Multiplier</th><th>Avg price</th><th>Current quote</th><th>Freshness</th></tr></thead><tbody id="positions-body"></tbody></table>
       </div>
       <p id="positions-empty" class="empty">No open positions.</p>
       <p id="positions-error" class="panel-error hidden" role="status"></p>

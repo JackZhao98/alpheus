@@ -847,6 +847,72 @@ func (m *memoryStore) ReconcileBrokerObservation(observationID string) (*store.B
 	return result, nil
 }
 
+func (m *memoryStore) LoadBrokerCoexistenceView(accountID string, historyLimit int) (*store.BrokerCoexistenceView, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.brokerAccountView == nil || m.brokerAccountView.Observation.AccountID != accountID {
+		return nil, sql.ErrNoRows
+	}
+	observation := m.brokerAccountView.Observation
+	view := &store.BrokerCoexistenceView{
+		AccountID: accountID, Positions: []store.BrokerPositionExposure{},
+		ExternalChanges:       []store.BrokerExternalChangeRecord{},
+		InvalidatedOperations: []store.BrokerOperationInvalidation{},
+		Reconciliation: store.BrokerReconciliationStatus{
+			State: "uninitialized", ObservedObservationID: observation.ID,
+			ObservedGeneration: observation.Generation, ObservedAt: observation.CompletedAt,
+		},
+	}
+	if m.brokerReconciliationGen > 0 {
+		view.Reconciliation.ReconciledGeneration = m.brokerReconciliationGen
+		view.Reconciliation.ReconciledObservationID = observation.ID
+		view.Reconciliation.State = "pending"
+		if m.brokerReconciliationGen == observation.Generation {
+			view.Reconciliation.State = "current"
+		}
+	}
+	keys := make([]string, 0, len(m.brokerPositionProjection))
+	for key := range m.brokerPositionProjection {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		projection := m.brokerPositionProjection[key]
+		if projection.provider == 0 && projection.tracked == 0 {
+			continue
+		}
+		parts := strings.SplitN(key, "\x00", 2)
+		external := projection.provider - projection.tracked
+		exposureOrigin, observedOrigin := "external", "external"
+		if projection.tracked > 0 && external != 0 {
+			exposureOrigin, observedOrigin = "mixed", "ambiguous"
+		} else if projection.tracked > 0 {
+			exposureOrigin, observedOrigin = "alpheus", "ambiguous"
+		}
+		view.Positions = append(view.Positions, store.BrokerPositionExposure{
+			Symbol: parts[1], Kind: parts[0], ObservationID: observation.ID,
+			ObservationGeneration: m.brokerReconciliationGen,
+			ProviderQty:           projection.provider, TrackedQty: projection.tracked,
+			ExternalQty: external, ExposureOrigin: exposureOrigin,
+			ObservedOrigin: observedOrigin, OriginEvidence: "memory_fixture",
+		})
+	}
+	for i := len(m.externalChangeEpisodes) - 1; i >= 0 && len(view.ExternalChanges) < historyLimit; i-- {
+		view.ExternalChanges = append(view.ExternalChanges, store.BrokerExternalChangeRecord{
+			BrokerExternalChangeEpisode: m.externalChangeEpisodes[i],
+		})
+	}
+	for i := len(m.brokerInvalidations) - 1; i >= 0 && len(view.InvalidatedOperations) < historyLimit; i-- {
+		operationID := m.brokerInvalidations[i]
+		view.InvalidatedOperations = append(view.InvalidatedOperations, store.BrokerOperationInvalidation{
+			OperationID: operationID, OperationStatus: m.statuses[operationID],
+			BrokerObservationID: observation.ID, ObservationGeneration: m.brokerReconciliationGen,
+			Reason: "external_broker_state_changed",
+		})
+	}
+	return view, nil
+}
+
 func memoryAbsoluteQty(qty units.Qty) units.Qty {
 	if qty < 0 {
 		return -qty
@@ -2251,6 +2317,20 @@ func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {
 	shadow, shadowOK := day["shadow"].(map[string]any)
 	if !liveOK || !shadowOK || live["trades_today"] != float64(1) || shadow["trades_today"] != float64(6) {
 		t.Fatalf("day=%v, want live=1 shadow=6", day)
+	}
+	coexistence, ok := body["broker_coexistence"].(map[string]any)
+	if !ok || coexistence["account_id"] != "fake-account" {
+		t.Fatalf("broker_coexistence=%v", body["broker_coexistence"])
+	}
+	reconciliation, ok := coexistence["reconciliation"].(map[string]any)
+	if !ok || reconciliation["state"] != "uninitialized" ||
+		reconciliation["observed_generation"] == nil || reconciliation["observed_observation_id"] == "" {
+		t.Fatalf("broker reconciliation=%v", coexistence["reconciliation"])
+	}
+	for _, forbidden := range []string{"credential", "api_key", "access_token", "refresh_token"} {
+		if strings.Contains(strings.ToLower(w.Body.String()), forbidden) {
+			t.Fatalf("state exposed provider secret field %q", forbidden)
+		}
 	}
 }
 
