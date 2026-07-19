@@ -305,7 +305,7 @@ func TestExpiredPendingAttemptsNeverReachBroker(t *testing.T) {
 		b := newFake("300")
 		s := &server{
 			limits: dualLedgerLimits(), broker: b, store: st,
-			proposalTTL: 30 * time.Minute, attemptStale: time.Millisecond,
+			attemptStale: time.Millisecond,
 		}
 		quote, err := b.GetQuote("SPY")
 		if err != nil {
@@ -338,6 +338,7 @@ func TestExpiredPendingAttemptsNeverReachBroker(t *testing.T) {
 		st.mu.Lock()
 		row := st.operationRows[opID]
 		row.TS = time.Now().Add(-time.Hour)
+		row.ExpiresAt = time.Now().Add(-time.Minute)
 		st.operationRows[opID] = row
 		st.mu.Unlock()
 
@@ -369,7 +370,7 @@ func TestExpiredPendingAttemptsNeverReachBroker(t *testing.T) {
 		}
 		s := &server{
 			limits: dualLedgerLimits(), broker: b, store: st,
-			proposalTTL: 30 * time.Minute, attemptStale: time.Millisecond,
+			attemptStale: time.Millisecond,
 		}
 		opID, reservationID, attemptID := store.NewID(), store.NewID(), store.NewID()
 		op := risk.Operation{
@@ -395,6 +396,7 @@ func TestExpiredPendingAttemptsNeverReachBroker(t *testing.T) {
 		st.mu.Lock()
 		row := st.operationRows[opID]
 		row.TS = time.Now().Add(-time.Hour)
+		row.ExpiresAt = time.Now().Add(-time.Minute)
 		st.operationRows[opID] = row
 		st.mu.Unlock()
 

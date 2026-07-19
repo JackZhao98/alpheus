@@ -108,16 +108,13 @@ func m11Server(cap string) (*server, *memoryStore, *broker.Fake) {
 	setQuote(venue, "SPY", "0.34", "0.35", 45_000)
 	limits := dualLedgerLimits()
 	limits.HardLimits.MaxNewTradesPerDay = 100
-	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
-	if err != nil {
-		panic(err)
-	}
 	st := newMemoryStore()
+	setMemoryKernelPolicy(st, limits)
 	st.liveCanary.DailyAuthorizedRiskCapUSD = units.MustMicros(cap)
 	st.liveCanary.CleanDaysBeforeRaise = 3
 	return &server{
 		mode: protectedMode(config.ModeLive), limits: limits,
-		broker: venue, store: st, proposalTTL: proposalTTL,
+		broker: venue, store: st,
 	}, st, venue
 }
 

@@ -177,7 +177,7 @@ func (s *Store) RecordKernelPolicyRevision(input RecordKernelPolicyRevisionInput
 		payload["previous_generation"] = active.Generation
 		payload["previous_digest"] = active.Digest
 	}
-	if err := insertEvent(ctx, tx, "kernel_policy_activated", payload); err != nil {
+	if err := insertEventAt(ctx, tx, "kernel_policy_activated", payload, revision.ActivatedAt); err != nil {
 		return nil, normalizeDBError(err)
 	}
 	observedAt, err := databaseClock(ctx, tx)
@@ -224,6 +224,81 @@ func (s *Store) LoadKernelPolicyAuthority() (*KernelPolicyRevision, error) {
 		return nil, normalizeDBError(err)
 	}
 	return revision, nil
+}
+
+// KernelPolicyAuthority binds a new operation while holding the stable policy
+// lock until the surrounding proposal/review transaction commits.
+func (t *ledgerTx) KernelPolicyAuthority() (*KernelPolicyRevision, error) {
+	if _, err := t.tx.ExecContext(t.ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision, err := activeKernelPolicyRevision(t.ctx, t.tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrKernelPolicyAuthorityMissing
+	}
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.ObservedAt, err = databaseClock(t.ctx, t.tx)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := validateKernelPolicyAuthority(revision); err != nil {
+		return nil, err
+	}
+	return revision, nil
+}
+
+// BoundKernelPolicy loads immutable historical authority for review and
+// recovery. It validates the operation's three-part binding and the original
+// activation event, but does not require that revision to remain the head.
+func (t *ledgerTx) BoundKernelPolicy(operation *OperationRow) (*KernelPolicyRevision, error) {
+	if operation == nil || operation.KernelPolicyRevisionID <= 0 ||
+		operation.KernelPolicyGeneration <= 0 || len(operation.KernelPolicyDigest) != 64 {
+		return nil, ErrKernelPolicyAuthorityInvalid
+	}
+	var revision KernelPolicyRevision
+	var rawPolicy, digest []byte
+	var changeClass string
+	err := t.tx.QueryRowContext(t.ctx, `SELECT r.id,r.schema_version,r.policy,r.digest,
+		r.recorded_at,r.recorded_by,r.reason,r.change_class,a.activated_at,a.activated_by
+		FROM kernel_policy_revision r
+		JOIN LATERAL (
+		  SELECT e.ts AS activated_at,e.payload->>'recorded_by' AS activated_by
+		  FROM events e
+		  WHERE e.kind='kernel_policy_activated'
+		    AND e.payload->>'revision_id'=r.id::text
+		    AND e.payload->>'generation'=$2::text
+		  ORDER BY e.id LIMIT 1
+		) a ON true
+		WHERE r.id=$1 AND encode(r.digest,'hex')=$3`, operation.KernelPolicyRevisionID,
+		operation.KernelPolicyGeneration, operation.KernelPolicyDigest).Scan(
+		&revision.ID, &revision.SchemaVersion, &rawPolicy, &digest,
+		&revision.RecordedAt, &revision.RecordedBy, &revision.Reason, &changeClass,
+		&revision.ActivatedAt, &revision.ActivatedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrKernelPolicyAuthorityInvalid
+	}
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.Generation = operation.KernelPolicyGeneration
+	revision.ChangeClass = policy.ChangeClass(changeClass)
+	revision.Digest = hex.EncodeToString(digest)
+	revision.digestBytes = append([]byte(nil), digest...)
+	revision.auditPresent = true
+	revision.ObservedAt, err = databaseClock(t.ctx, t.tx)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	revision.Policy, err = policy.DecodeCanonical(revision.SchemaVersion, rawPolicy, digest)
+	if err != nil {
+		return nil, ErrKernelPolicyAuthorityInvalid
+	}
+	if err := validateKernelPolicyAuthority(&revision); err != nil {
+		return nil, err
+	}
+	return &revision, nil
 }
 
 func activeKernelPolicyRevision(ctx context.Context, tx *sql.Tx) (*KernelPolicyRevision, error) {

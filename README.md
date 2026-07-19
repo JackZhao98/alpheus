@@ -4,7 +4,7 @@
 > 虾虎鱼是它的眼睛。这里 kernel 是那只枪虾——不看行情、不做判断、
 > 只保证家不被炸；LLM 是虾虎鱼。枪虾极少出手，出手是海里最响的一击。
 
-架构先行，prompt 全留白。`docker compose up` 之后整条流水线
+架构先行，prompt 全留白。显式初始化数据库策略后，整条流水线
 （调度 → 认知 → 风控分级 → 执行/影子 → journal）在零 prompt、零真实券商
 的状态下就能端到端跑通。全部 Go，方便从 tofi 平移 session/inbox/heartbeat
 等已验证的机制。
@@ -17,8 +17,9 @@
 
 ## 三条不变量（违反任何一条 = 架构被破坏）
 
-1. **数字规则永远在 kernel，不在 prompt。** `kernel/limits.yaml` 是宪法，
-   由 `internal/risk` 的 if 语句强制执行。改它是 Class-D 操作：只有人能改。
+1. **数字规则永远在 kernel，不在 prompt。** 人类策略由数据库中的不可变
+   revision/head 授权，`internal/risk` 的 if 语句强制执行；`limits.yaml` 只
+   是 fresh database 的显式导入材料，不是运行时兜底。
 2. **agent 永远见不到券商。** 券商凭证只存在于 kernel 的 broker adapter 层；
    agent 只能调 kernel 的 HTTP API。
 3. **合同在代码里，措辞在配置里。** 每个角色的输出 schema 定义在
@@ -29,10 +30,19 @@
 
 ```bash
 cp .env.example .env
+docker compose up -d db
+docker compose build kernel
+docker compose run --rm kernel /kernel kernel-policy \
+  --file=/limits.yaml --expected-generation=0 \
+  --recorded-by=dev:local --reason='initial local policy'
 docker compose up --build
 ./scripts/smoke.sh        # 手动过一遍四条审批路径
 docker compose logs -f agent-runtime   # 看 stub 的影子提案被 Class-B 放行
 ```
+
+`kernel-policy` 是 fresh database 的一次性显式 bootstrap。正常 Kernel
+启动不会读取 `limits.yaml`，已有 head 时也不会用文件兜底；后续修改策略
+必须携带当前 `--expected-generation`，并留下操作者和原因。
 
 默认 `BROKER=fake` + `COGNITION=stub`：stub 认知会周期性提交一笔影子
 SPY 期权提案，日志里能看到它被清单自动放行并写入 journal——

@@ -17,6 +17,7 @@ import (
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/policy"
 	"alpheus/kernel/internal/risk"
 	orderstate "alpheus/kernel/internal/state"
 	"alpheus/kernel/internal/store"
@@ -79,10 +80,25 @@ type memoryStore struct {
 	liveUnknownAttemptID string
 	liveCanary           *store.LiveCanaryRevision
 	liveCanaryErr        error
+	kernelPolicy         *store.KernelPolicyRevision
+	kernelPolicyErr      error
+	kernelPolicyHistory  map[int64]*store.KernelPolicyRevision
 }
 
 func newMemoryStore() *memoryStore {
 	now := time.Now().UTC()
+	testPolicy := dualLedgerLimits()
+	_, _, policyDigest, err := policy.Canonical(testPolicy)
+	if err != nil {
+		panic(err)
+	}
+	kernelAuthority := &store.KernelPolicyRevision{
+		ID: 1, Generation: 1, SchemaVersion: policy.SchemaVersion,
+		Digest: fmt.Sprintf("%x", policyDigest[:]), Policy: testPolicy,
+		RecordedAt: now.Add(-time.Hour), RecordedBy: "test", Reason: "test authority",
+		ChangeClass: policy.ChangeInitial, ActivatedAt: now.Add(-time.Hour),
+		ActivatedBy: "test", ObservedAt: now,
+	}
 	return &memoryStore{
 		statuses:         map[string]string{},
 		classes:          map[string]string{},
@@ -119,6 +135,8 @@ func newMemoryStore() *memoryStore {
 			EffectiveMarketDay: now.AddDate(-1, 0, 0), RecordedAt: now.Add(-time.Hour),
 			RecordedBy: "test", Reason: "test authority", ChangeClass: "initial", ObservedAt: now,
 		},
+		kernelPolicy:        kernelAuthority,
+		kernelPolicyHistory: map[int64]*store.KernelPolicyRevision{1: kernelAuthority},
 	}
 }
 
@@ -380,6 +398,12 @@ func (m *memoryStore) InsertOperation(id, proposer, class, status string, payloa
 		ID: id, TS: time.Now().UTC(), Proposer: proposer, Class: class,
 		Status: status, Payload: payloadJSON, Verdict: verdictJSON,
 	}
+	if m.kernelPolicy != nil {
+		row.KernelPolicyRevisionID = m.kernelPolicy.ID
+		row.KernelPolicyGeneration = m.kernelPolicy.Generation
+		row.KernelPolicyDigest = m.kernelPolicy.Digest
+		row.ExpiresAt = row.TS.Add(time.Duration(m.kernelPolicy.Policy.ProposalTTLSec) * time.Second)
+	}
 	if identity != nil {
 		row.AuthenticatedSubject = identity.Subject
 		row.IdempotencyKey = identity.Key
@@ -387,6 +411,23 @@ func (m *memoryStore) InsertOperation(id, proposer, class, status string, payloa
 	}
 	m.operationRows[id] = row
 	return nil
+}
+
+func (m *memoryStore) InsertOperationBound(id, proposer, class, status string, payload, verdict any, identity *store.IdempotencyIdentity, authority *store.KernelPolicyRevision) (store.OperationPolicyBinding, error) {
+	if authority == nil || m.kernelPolicy == nil || authority.ID != m.kernelPolicy.ID ||
+		authority.Generation != m.kernelPolicy.Generation || authority.Digest != m.kernelPolicy.Digest {
+		return store.OperationPolicyBinding{}, store.ErrKernelPolicyAuthorityInvalid
+	}
+	if err := m.InsertOperation(id, proposer, class, status, payload, verdict, identity); err != nil {
+		return store.OperationPolicyBinding{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.operationRows[id]
+	return store.OperationPolicyBinding{
+		RevisionID: row.KernelPolicyRevisionID, Generation: row.KernelPolicyGeneration,
+		Digest: row.KernelPolicyDigest, ExpiresAt: row.ExpiresAt,
+	}, nil
 }
 
 func (m *memoryStore) FindOperationByIdempotency(subject, key string) (*store.OperationRow, error) {
@@ -453,6 +494,39 @@ func (m *memoryStore) LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, erro
 	}
 	copy := *m.liveCanary
 	copy.ObservedAt = time.Now().UTC()
+	return &copy, nil
+}
+
+func (m *memoryStore) LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.kernelPolicyErr != nil {
+		return nil, m.kernelPolicyErr
+	}
+	if m.kernelPolicy == nil {
+		return nil, store.ErrKernelPolicyAuthorityMissing
+	}
+	copy := *m.kernelPolicy
+	copy.ObservedAt = time.Now().UTC()
+	return &copy, nil
+}
+
+func (m *memoryStore) KernelPolicyAuthority() (*store.KernelPolicyRevision, error) {
+	return m.LoadKernelPolicyAuthority()
+}
+
+func (m *memoryStore) BoundKernelPolicy(operation *store.OperationRow) (*store.KernelPolicyRevision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if operation == nil {
+		return nil, store.ErrKernelPolicyAuthorityInvalid
+	}
+	authority := m.kernelPolicyHistory[operation.KernelPolicyRevisionID]
+	if authority == nil || operation.KernelPolicyGeneration != authority.Generation ||
+		operation.KernelPolicyDigest != authority.Digest {
+		return nil, store.ErrKernelPolicyAuthorityInvalid
+	}
+	copy := *authority
 	return &copy, nil
 }
 
@@ -1612,10 +1686,44 @@ func dualLedgerLimits() config.Limits {
 	limits.InstrumentRules.MaxRelativeSpread = units.MustRatio("0.15")
 	limits.RiskDeclarationTolerance = units.MustMicros("0.01")
 	limits.PnLReconciliationTolerance = units.MustMicros("0.01")
+	limits.QuoteMaxAgeSec = 15
 	limits.ProposalTTLSec = 1800
 	limits.ExecutionPolicy.StartAt = "mid"
+	limits.ExecutionPolicy.RepriceIntervalSec = 20
+	limits.ExecutionPolicy.MaxReprices = 3
 	limits.PlanRequirements = []string{"stop", "invalidation", "time_stop", "target"}
 	return limits
+}
+
+func setMemoryKernelPolicy(st *memoryStore, limits config.Limits) {
+	_, _, digest, err := policy.Canonical(limits)
+	if err != nil {
+		panic(err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.kernelPolicy.Policy = limits
+	st.kernelPolicy.Digest = fmt.Sprintf("%x", digest[:])
+	copy := *st.kernelPolicy
+	st.kernelPolicyHistory[copy.ID] = &copy
+}
+
+func activateMemoryKernelPolicy(st *memoryStore, limits config.Limits) {
+	_, _, digest, err := policy.Canonical(limits)
+	if err != nil {
+		panic(err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := time.Now().UTC()
+	next := &store.KernelPolicyRevision{
+		ID: st.kernelPolicy.ID + 1, Generation: st.kernelPolicy.Generation + 1,
+		SchemaVersion: policy.SchemaVersion, Digest: fmt.Sprintf("%x", digest[:]), Policy: limits,
+		RecordedAt: now, RecordedBy: "test", Reason: "test activation",
+		ChangeClass: policy.ChangeMixed, ActivatedAt: now, ActivatedBy: "test", ObservedAt: now,
+	}
+	st.kernelPolicy = next
+	st.kernelPolicyHistory[next.ID] = next
 }
 
 func TestProposeUsesIndependentLiveAndShadowLedgers(t *testing.T) {

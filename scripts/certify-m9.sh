@@ -42,11 +42,16 @@ wait_healthy() {
 
 start_sim_stack() {
   compose down -v --remove-orphans >/dev/null 2>&1 || true
+  compose up -d db
+  wait_healthy db
+  compose build kernel agent-runtime
+  compose run --rm kernel /kernel kernel-policy \
+    --file=/limits.yaml --expected-generation=0 \
+    --recorded-by=certify:m9 --reason=fresh-isolated-certification
   BROKER=fake TRADING_MODE=sim LIVE_TRADING_ENABLED=false \
     RUNTIME_TOKEN=m9-runtime-secret ADMIN_TOKEN=m9-admin-secret KERNEL_TOKEN=m9-kernel-secret \
     CONSOLE_ORIGIN="$BASE_URL" TICK_SECONDS=0 \
-    compose up -d --build
-  wait_healthy db
+    compose up -d
   wait_healthy kernel
   wait_healthy agent-runtime
 }

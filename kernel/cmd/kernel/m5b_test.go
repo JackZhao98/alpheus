@@ -323,7 +323,6 @@ func TestM5BRecoveryFinishesConfirmedCancelWithoutDuplicateSlot(t *testing.T) {
 
 func TestM5BPendingCancelRecoveryBypassesOriginalProposalTTL(t *testing.T) {
 	s, st, execution, source, _ := newRepriceTestServer(t, "1", 3)
-	s.proposalTTL = time.Second
 	row := st.operationRows[source.OperationID]
 	row.TS = time.Now().UTC().Add(-time.Hour)
 	st.operationRows[source.OperationID] = row
@@ -344,7 +343,6 @@ func TestM5BPendingCancelRecoveryBypassesOriginalProposalTTL(t *testing.T) {
 
 func TestM5BPendingReplacementRecoveryUsesDurableIntent(t *testing.T) {
 	s, st, execution, source, _ := newRepriceTestServer(t, "1", 3)
-	s.proposalTTL = time.Second
 	cancelAttempt, err := st.StageRepriceCancel(source.ID)
 	if err != nil || cancelAttempt == nil {
 		t.Fatalf("stage cancel: attempt=%+v err=%v", cancelAttempt, err)

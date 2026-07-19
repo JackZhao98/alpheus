@@ -93,14 +93,6 @@ func (s *server) attemptStaleAfter() time.Duration {
 	return 3 * time.Second
 }
 
-func (s *server) proposalLifetime() time.Duration {
-	if s.proposalTTL > 0 {
-		return s.proposalTTL
-	}
-	lifetime, _ := proposalLifetime(s.limits.ProposalTTLSec)
-	return lifetime
-}
-
 func startAttemptReconciler(s *server) error {
 	// Complete the first scan before the HTTP listener opens. New proposals must
 	// not race startup recovery of reservations left by the previous process.
@@ -258,8 +250,11 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 		return s.reconcilePendingReplacement(ctx, attempt, op)
 	}
 	reviewApproved := row.Class == "C" && row.Status == "approved"
-	if lifetime := s.proposalLifetime(); !reviewApproved &&
-		(lifetime <= 0 || !time.Now().UTC().Before(row.TS.Add(lifetime))) {
+	databaseNow, clockErr := s.store.DatabaseNow()
+	if clockErr != nil {
+		return clockErr
+	}
+	if !reviewApproved && (row.ExpiresAt.IsZero() || !databaseNow.Before(row.ExpiresAt)) {
 		_, failErr := s.store.FailPendingAttempt(attempt.ID, "proposal expired before recovery")
 		return failErr
 	}

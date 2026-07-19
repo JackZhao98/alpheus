@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -103,7 +104,7 @@ func TestLiveStartupRequiresDatabaseCanaryAuthorityOnlyInLive(t *testing.T) {
 	}
 }
 
-func TestLimitsAndStateExposeOnlyDatabaseCanaryAuthority(t *testing.T) {
+func TestLimitsAndStateExposeDatabasePolicyAuthorities(t *testing.T) {
 	s, st, _ := m11Server("37")
 	st.liveCanary.ID = 9
 	st.liveCanary.Generation = 9
@@ -120,16 +121,18 @@ func TestLimitsAndStateExposeOnlyDatabaseCanaryAuthority(t *testing.T) {
 	if _, exists := limitsBody["live_canary"]; exists {
 		t.Fatalf("flat/YAML canary leaked: %v", limitsBody)
 	}
+	if _, exists := limitsBody["build_pinned_kernel_limits"]; exists {
+		t.Fatalf("runtime YAML limits leaked: %v", limitsBody)
+	}
+	dbKernel := limitsBody["db_kernel_policy"].(map[string]any)
+	if dbKernel["revision_id"] != float64(1) || dbKernel["generation"] != float64(1) || dbKernel["digest"] == "" {
+		t.Fatalf("kernel policy authority=%v", dbKernel)
+	}
 	dbCanary := limitsBody["db_live_canary"].(map[string]any)
 	authority := dbCanary["authority"].(map[string]any)
 	if authority["revision_id"] != float64(9) || authority["daily_authorized_risk_cap_usd"] != float64(37) {
 		t.Fatalf("limits authority=%v", authority)
 	}
-	buildJSON, _ := json.Marshal(limitsBody["build_pinned_kernel_limits"])
-	if strings.Contains(string(buildJSON), "live_canary") || strings.Contains(string(buildJSON), `"37"`) {
-		t.Fatalf("build limits pretended to own canary: %s", buildJSON)
-	}
-
 	stateResponse := httptest.NewRecorder()
 	s.getState(stateResponse, httptest.NewRequest("GET", "/state", nil))
 	if stateResponse.Code != 200 {
@@ -144,6 +147,10 @@ func TestLimitsAndStateExposeOnlyDatabaseCanaryAuthority(t *testing.T) {
 	if stateAuthority["generation"] != float64(9) || stateAuthority["daily_authorized_risk_cap_usd"] != float64(37) {
 		t.Fatalf("state authority=%v", stateAuthority)
 	}
+	stateKernel := stateBody["db_kernel_policy"].(map[string]any)
+	if stateKernel["revision_id"] != float64(1) || stateKernel["digest"] == "" {
+		t.Fatalf("state kernel authority=%v", stateKernel)
+	}
 }
 
 func TestNonLiveLimitsReportInvalidCanaryWithoutBlockingHealth(t *testing.T) {
@@ -153,6 +160,17 @@ func TestNonLiveLimitsReportInvalidCanaryWithoutBlockingHealth(t *testing.T) {
 	response := httptest.NewRecorder()
 	s.getLimits(response, httptest.NewRequest("GET", "/limits", nil))
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"status":"invalid"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestInvalidKernelPolicyFailsLimitsClosed(t *testing.T) {
+	st := newMemoryStore()
+	st.kernelPolicyErr = store.ErrKernelPolicyAuthorityInvalid
+	s := &server{mode: config.ModeConfig{TradingMode: config.ModeSim}, limits: dualLedgerLimits(), store: st}
+	response := httptest.NewRecorder()
+	s.getLimits(response, httptest.NewRequest("GET", "/limits", nil))
+	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

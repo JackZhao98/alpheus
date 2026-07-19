@@ -156,6 +156,138 @@ func TestKernelPolicyMissingOrCorruptAuthorityFailsClosedPostgres(t *testing.T) 
 	}
 }
 
+func TestOperationBindsPolicyAndDatabaseExpiryWithoutRuntimeFallbackPostgres(t *testing.T) {
+	s := openKernelPolicyIntegrationStore(t)
+	defer s.DB.Close()
+	base := testKernelPolicy(t)
+	initial, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+		Policy: base, ExpectedGeneration: 0, RecordedBy: "deploy:test", Reason: "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := NewID()
+	var binding OperationPolicyBinding
+	if err := s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
+		authority, err := gate.KernelPolicyAuthority()
+		if err != nil {
+			return err
+		}
+		binding, err = gate.InsertOperationBound(operationID, "k1-test", "C", "pending_review",
+			map[string]any{"action": "open", "shadow": false}, map[string]any{"class": "C"}, nil, authority)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetOperation(operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.KernelPolicyRevisionID != initial.ID || row.KernelPolicyGeneration != initial.Generation ||
+		row.KernelPolicyDigest != initial.Digest || binding.Digest != initial.Digest ||
+		!row.ExpiresAt.Equal(binding.ExpiresAt) {
+		t.Fatalf("row=%+v binding=%+v initial=%+v", row, binding, initial)
+	}
+	lifetime := row.ExpiresAt.Sub(row.TS)
+	if lifetime < 1800*time.Second || lifetime > 1801*time.Second {
+		t.Fatalf("database proposal lifetime=%s", lifetime)
+	}
+
+	wide := base
+	wide.ProposalTTLSec = 3600
+	newAuthority, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+		Policy: wide, ExpectedGeneration: initial.Generation,
+		RecordedBy: "deploy:test", Reason: "widen new proposal TTL",
+	})
+	if err != nil || newAuthority.Generation != 2 {
+		t.Fatalf("new authority=%+v err=%v", newAuthority, err)
+	}
+	unchanged, err := s.GetOperation(operationID)
+	if err != nil || !unchanged.ExpiresAt.Equal(row.ExpiresAt) || unchanged.KernelPolicyGeneration != 1 {
+		t.Fatalf("old proposal expanded after policy change: row=%+v err=%v", unchanged, err)
+	}
+	if err := s.WithReviewLock(operationID, func(gate OperationGate, locked *OperationRow) error {
+		bound, err := gate.BoundKernelPolicy(locked)
+		if err != nil {
+			return err
+		}
+		if bound.Generation != 1 || bound.Policy.ProposalTTLSec != 1800 {
+			t.Fatalf("bound authority=%+v", bound)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.InsertOperation(NewID(), "bypass", "B", "auto_approved",
+		map[string]any{"action": "open"}, map[string]any{"class": "B"}, nil); err == nil {
+		t.Fatal("unbound operation bypassed an active Kernel policy")
+	}
+}
+
+func TestPolicyActivationSerializesWithNewOperationBindingPostgres(t *testing.T) {
+	s := openKernelPolicyIntegrationStore(t)
+	defer s.DB.Close()
+	base := testKernelPolicy(t)
+	initial, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+		Policy: base, ExpectedGeneration: 0, RecordedBy: "deploy:test", Reason: "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := NewID()
+	bound := make(chan struct{})
+	release := make(chan struct{})
+	proposalResult := make(chan error, 1)
+	go func() {
+		proposalResult <- s.WithProposalLock(nil, false, false, func(gate OperationGate) error {
+			authority, err := gate.KernelPolicyAuthority()
+			if err != nil {
+				return err
+			}
+			close(bound)
+			<-release
+			_, err = gate.InsertOperationBound(operationID, "barrier", "B", "auto_approved",
+				map[string]any{"action": "open"}, map[string]any{"class": "B"}, nil, authority)
+			return err
+		})
+	}()
+	<-bound
+	wide := base
+	wide.ProposalTTLSec = 3600
+	activationStarted := make(chan struct{})
+	activationResult := make(chan error, 1)
+	go func() {
+		close(activationStarted)
+		_, err := s.RecordKernelPolicyRevision(RecordKernelPolicyRevisionInput{
+			Policy: wide, ExpectedGeneration: initial.Generation,
+			RecordedBy: "deploy:test", Reason: "concurrent activation",
+		})
+		activationResult <- err
+	}()
+	<-activationStarted
+	select {
+	case err := <-activationResult:
+		t.Fatalf("activation crossed a shared operation binding lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-proposalResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-activationResult; err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetOperation(operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.KernelPolicyRevisionID != initial.ID || row.KernelPolicyGeneration != 1 ||
+		row.KernelPolicyDigest != initial.Digest {
+		t.Fatalf("operation tore across policy generations: %+v", row)
+	}
+}
+
 func openKernelPolicyIntegrationStore(t *testing.T) *Store {
 	t.Helper()
 	databaseURL := os.Getenv("ALPHEUS_TEST_M3A_DATABASE_URL")

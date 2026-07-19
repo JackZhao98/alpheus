@@ -190,7 +190,6 @@ func TestShadowCloseRecoveryUsesOnlyPaperBook(t *testing.T) {
 
 	s := &server{
 		limits: config.Limits{}, account: account, broker: venue, store: st,
-		proposalTTL: time.Hour,
 	}
 	if err := s.reconcilePendingAttempt(context.Background(), &attempt); err != nil {
 		t.Fatal(err)
@@ -469,6 +468,7 @@ func TestRestingOpenReservationBlocksRiskAndBuyingPowerReuse(t *testing.T) {
 		limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("100")
 		limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("15")
 		st := newMemoryStore()
+		setMemoryKernelPolicy(st, limits)
 		s := &server{limits: limits, broker: venue, store: st}
 
 		first, firstBody := postOperation(t, s,
@@ -506,6 +506,7 @@ func TestRestingOpenReservationBlocksRiskAndBuyingPowerReuse(t *testing.T) {
 		limits.HardLimits.MaxRiskPerTradePct = units.MustPercent("100")
 		limits.HardLimits.MaxTotalOpenRiskPct = units.MustPercent("100")
 		st := newMemoryStore()
+		setMemoryKernelPolicy(st, limits)
 		s := &server{limits: limits, broker: venue, store: st}
 
 		first, firstBody := postOperation(t, s,

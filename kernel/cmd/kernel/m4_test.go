@@ -24,7 +24,6 @@ func newM4Server() (*server, *memoryStore, *broker.Fake) {
 	venue := newFake("300")
 	return &server{
 		limits: dualLedgerLimits(), broker: venue, store: st,
-		proposalTTL: 30 * time.Minute,
 	}, st, venue
 }
 
@@ -151,6 +150,7 @@ func TestM4ExpiredApprovalIsTerminalWithoutEntitlement(t *testing.T) {
 	st.mu.Lock()
 	row := st.operationRows[id]
 	row.TS = time.Now().UTC().Add(-time.Hour)
+	row.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 	st.operationRows[id] = row
 	st.mu.Unlock()
 
@@ -162,6 +162,35 @@ func TestM4ExpiredApprovalIsTerminalWithoutEntitlement(t *testing.T) {
 	defer st.mu.Unlock()
 	if st.statuses[id] != "expired" || len(st.grants) != 0 || len(st.attempts) != 0 {
 		t.Fatalf("status=%s grants=%d attempts=%d", st.statuses[id], len(st.grants), len(st.attempts))
+	}
+}
+
+func TestM4ReviewKeepsBoundPolicyAndAbsoluteExpiryAcrossWidening(t *testing.T) {
+	s, st, venue := newM4Server()
+	id := proposeM4ClassC(t, s, venue, "M4-POLICY-BIND")
+	before, err := st.GetOperation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide := dualLedgerLimits()
+	wide.HardLimits.MaxRiskPerTradePct = units.MustPercent("100")
+	wide.ProposalTTLSec = 3600
+	activateMemoryKernelPolicy(st, wide)
+
+	response, body := reviewM4(s, id, "approved")
+	if response.Code != http.StatusOK || body["status"] != "approved" {
+		t.Fatalf("approval status=%d body=%v", response.Code, body)
+	}
+	after, err := st.GetOperation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.KernelPolicyGeneration != 1 || after.KernelPolicyRevisionID != 1 ||
+		after.KernelPolicyDigest != before.KernelPolicyDigest || !after.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatalf("old proposal authority expanded: before=%+v after=%+v", before, after)
+	}
+	if st.kernelPolicy.Generation != 2 || st.kernelPolicy.Policy.ProposalTTLSec != 3600 {
+		t.Fatalf("current authority=%+v", st.kernelPolicy)
 	}
 }
 

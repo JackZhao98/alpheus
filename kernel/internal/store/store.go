@@ -16,6 +16,7 @@ import (
 	"net"
 	"time"
 
+	"alpheus/kernel/internal/policy"
 	"alpheus/kernel/internal/units"
 
 	"github.com/lib/pq"
@@ -61,8 +62,11 @@ type OperationGate interface {
 	CountTradesForDayExcluding(shadow bool, start, end time.Time, operationID string) (int, error)
 	InsertEvent(kind string, payload any) error
 	InsertOperation(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity) error
+	InsertOperationBound(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity, authority *KernelPolicyRevision) (OperationPolicyBinding, error)
 	SetOperationStatus(id, status string, verdict any) error
 	FindOperationByIdempotency(subject, key string) (*OperationRow, error)
+	KernelPolicyAuthority() (*KernelPolicyRevision, error)
+	BoundKernelPolicy(operation *OperationRow) (*KernelPolicyRevision, error)
 	LockLedger(shadow bool) error
 	LockLedgerSymbol(ledger, symbol string) error
 	HeldCloseQuantity(ledger, symbol string) (units.Qty, error)
@@ -97,6 +101,14 @@ func (t *ledgerTx) DatabaseNow() (time.Time, error) {
 	// keeps a proposal that waited on the ledger gate across market midnight
 	// from consuming the previous day's entitlement.
 	err := t.tx.QueryRowContext(t.ctx, `SELECT clock_timestamp()`).Scan(&now)
+	return now, normalizeDBError(err)
+}
+
+func (s *Store) DatabaseNow() (time.Time, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	var now time.Time
+	err := s.DB.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now)
 	return now, normalizeDBError(err)
 }
 
@@ -331,6 +343,11 @@ func (t *ledgerTx) InsertOperation(id, proposer, class, status string, payload, 
 	return normalizeDBError(insertOperation(t.ctx, t.tx, id, proposer, class, status, payload, verdict, identity))
 }
 
+func (t *ledgerTx) InsertOperationBound(id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity, authority *KernelPolicyRevision) (OperationPolicyBinding, error) {
+	binding, err := insertOperationBound(t.ctx, t.tx, id, proposer, class, status, payload, verdict, identity, authority)
+	return binding, normalizeDBError(err)
+}
+
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
@@ -348,6 +365,42 @@ func insertOperation(ctx context.Context, db execer, id, proposer, class, status
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		id, proposer, class, status, jstr(payload), jstr(verdict), subject, key, requestHash)
 	return err
+}
+
+func insertOperationBound(ctx context.Context, db rowQueryer, id, proposer, class, status string, payload, verdict any, identity *IdempotencyIdentity, authority *KernelPolicyRevision) (OperationPolicyBinding, error) {
+	var binding OperationPolicyBinding
+	if authority == nil || authority.ID <= 0 || authority.Generation <= 0 || authority.Policy.ProposalTTLSec <= 0 {
+		return binding, ErrKernelPolicyAuthorityInvalid
+	}
+	_, _, digest, err := policy.Canonical(authority.Policy)
+	if err != nil {
+		return binding, ErrKernelPolicyAuthorityInvalid
+	}
+	digestText := hex.EncodeToString(digest[:])
+	if authority.Digest != "" && authority.Digest != digestText {
+		return binding, ErrKernelPolicyAuthorityInvalid
+	}
+	var subject, key any
+	var requestHash any
+	if identity != nil {
+		subject, key, requestHash = identity.Subject, identity.Key, identity.RequestHash[:]
+	}
+	err = db.QueryRowContext(ctx, `INSERT INTO operations (
+			id,ts,proposer,class,status,payload,verdict,
+			authenticated_subject,idempotency_key,request_hash,
+			kernel_policy_revision_id,kernel_policy_generation,kernel_policy_digest,expires_at
+		) VALUES ($1,clock_timestamp(),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+			clock_timestamp()+($13 * interval '1 second'))
+		RETURNING expires_at`, id, proposer, class, status, jstr(payload), jstr(verdict),
+		subject, key, requestHash, authority.ID, authority.Generation, digest[:],
+		authority.Policy.ProposalTTLSec).Scan(&binding.ExpiresAt)
+	if err != nil {
+		return OperationPolicyBinding{}, err
+	}
+	binding.RevisionID = authority.ID
+	binding.Generation = authority.Generation
+	binding.Digest = digestText
+	return binding, nil
 }
 
 func (s *Store) SetOperationStatus(id, status string, verdict any) error {
@@ -370,16 +423,27 @@ func setOperationStatus(ctx context.Context, db execer, id, status string, verdi
 }
 
 type OperationRow struct {
-	ID                   string          `json:"id"`
-	TS                   time.Time       `json:"ts"`
-	Proposer             string          `json:"proposer"`
-	Class                string          `json:"class"`
-	Status               string          `json:"status"`
-	Payload              json.RawMessage `json:"payload"`
-	Verdict              json.RawMessage `json:"verdict"`
-	AuthenticatedSubject string          `json:"-"`
-	IdempotencyKey       string          `json:"-"`
-	RequestHash          []byte          `json:"-"`
+	ID                     string          `json:"id"`
+	TS                     time.Time       `json:"ts"`
+	Proposer               string          `json:"proposer"`
+	Class                  string          `json:"class"`
+	Status                 string          `json:"status"`
+	Payload                json.RawMessage `json:"payload"`
+	Verdict                json.RawMessage `json:"verdict"`
+	AuthenticatedSubject   string          `json:"-"`
+	IdempotencyKey         string          `json:"-"`
+	RequestHash            []byte          `json:"-"`
+	KernelPolicyRevisionID int64           `json:"kernel_policy_revision_id,omitempty"`
+	KernelPolicyGeneration int64           `json:"kernel_policy_generation,omitempty"`
+	KernelPolicyDigest     string          `json:"kernel_policy_digest,omitempty"`
+	ExpiresAt              time.Time       `json:"expires_at,omitempty"`
+}
+
+type OperationPolicyBinding struct {
+	RevisionID int64     `json:"revision_id"`
+	Generation int64     `json:"generation"`
+	Digest     string    `json:"digest"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // OperationCursor is the stable key for descending operation pagination.
@@ -416,12 +480,19 @@ type rowQueryer interface {
 func getOperation(ctx context.Context, db rowQueryer, where string, args ...any) (*OperationRow, error) {
 	var r OperationRow
 	var verdict, subject, key sql.NullString
+	var policyRevision, policyGeneration sql.NullInt64
+	var policyDigest sql.NullString
+	var expiresAt sql.NullTime
 	var requestHash []byte
 	err := db.QueryRowContext(ctx,
 		`SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,''),
-			authenticated_subject, idempotency_key, request_hash
+			authenticated_subject, idempotency_key, request_hash,
+			kernel_policy_revision_id,kernel_policy_generation,
+			CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END,
+			expires_at
 		 FROM operations `+where, args...).
-		Scan(&r.ID, &r.TS, &r.Proposer, &r.Class, &r.Status, &r.Payload, &verdict, &subject, &key, &requestHash)
+		Scan(&r.ID, &r.TS, &r.Proposer, &r.Class, &r.Status, &r.Payload, &verdict, &subject, &key,
+			&requestHash, &policyRevision, &policyGeneration, &policyDigest, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -438,6 +509,18 @@ func getOperation(ctx context.Context, db rowQueryer, where string, args ...any)
 		r.IdempotencyKey = key.String
 	}
 	r.RequestHash = append([]byte(nil), requestHash...)
+	if policyRevision.Valid {
+		r.KernelPolicyRevisionID = policyRevision.Int64
+	}
+	if policyGeneration.Valid {
+		r.KernelPolicyGeneration = policyGeneration.Int64
+	}
+	if policyDigest.Valid {
+		r.KernelPolicyDigest = policyDigest.String
+	}
+	if expiresAt.Valid {
+		r.ExpiresAt = expiresAt.Time
+	}
 	return &r, nil
 }
 
@@ -445,7 +528,10 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 	if limit < 1 {
 		return nil, fmt.Errorf("operation list limit must be positive")
 	}
-	query := `SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,'')
+	query := `SELECT id, ts, proposer, class, status, payload, COALESCE(verdict::text,''),
+		kernel_policy_revision_id,kernel_policy_generation,
+		CASE WHEN kernel_policy_digest IS NULL THEN NULL ELSE encode(kernel_policy_digest,'hex') END,
+		expires_at
 		FROM operations WHERE ($1 = '' OR status = $1)`
 	args := []any{status}
 	if cursor != nil {
@@ -467,11 +553,27 @@ func (s *Store) ListOperations(status string, limit int, cursor *OperationCursor
 	for rows.Next() {
 		var row OperationRow
 		var verdict sql.NullString
-		if err := rows.Scan(&row.ID, &row.TS, &row.Proposer, &row.Class, &row.Status, &row.Payload, &verdict); err != nil {
+		var policyRevision, policyGeneration sql.NullInt64
+		var policyDigest sql.NullString
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&row.ID, &row.TS, &row.Proposer, &row.Class, &row.Status, &row.Payload,
+			&verdict, &policyRevision, &policyGeneration, &policyDigest, &expiresAt); err != nil {
 			return nil, normalizeDBError(err)
 		}
 		if verdict.Valid && verdict.String != "" {
 			row.Verdict = json.RawMessage(verdict.String)
+		}
+		if policyRevision.Valid {
+			row.KernelPolicyRevisionID = policyRevision.Int64
+		}
+		if policyGeneration.Valid {
+			row.KernelPolicyGeneration = policyGeneration.Int64
+		}
+		if policyDigest.Valid {
+			row.KernelPolicyDigest = policyDigest.String
+		}
+		if expiresAt.Valid {
+			row.ExpiresAt = expiresAt.Time
 		}
 		result = append(result, row)
 	}
@@ -518,8 +620,9 @@ func countTradesForDay(ctx context.Context, db queryRower, shadow bool, start, e
 	return n, normalizeDBError(err)
 }
 
-// WithProposalLock takes the idempotency lock before the ledger lock. Both are
-// transaction-scoped, so a crashed process cannot strand either gate.
+// WithProposalLock takes idempotency, Kernel-policy, then ledger locks in one
+// global order. Review takes its operation row before the same policy->ledger
+// suffix. Every lock is transaction-scoped, so a crash cannot strand a gate.
 func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow, lockLedger bool, fn func(OperationGate) error) error {
 	ctx, cancel := s.deadline()
 	defer cancel()
@@ -537,6 +640,9 @@ func (s *Store) WithProposalLock(identity *IdempotencyIdentity, shadow, lockLedg
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, idempotencyLockKey(identity.Subject, identity.Key)); err != nil {
 			return normalizeDBError(err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, kernelPolicyLockKey); err != nil {
+		return normalizeDBError(err)
 	}
 	if lockLedger {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ledgerLockKey(shadow)); err != nil {

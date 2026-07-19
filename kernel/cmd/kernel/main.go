@@ -46,7 +46,6 @@ type server struct {
 	attemptStale                      time.Duration
 	providerDedupeVerified            bool
 	providerReplayWindowBoundVerified bool
-	proposalTTL                       time.Duration
 	runtimeURL                        string
 	runtimeHTTP                       *http.Client
 	consoleOrigin                     string
@@ -105,6 +104,8 @@ type storeAPI interface {
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
 	FeatureActive(name string) (bool, error)
 	LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error)
+	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
+	DatabaseNow() (time.Time, error)
 }
 
 type dayStateReader interface {
@@ -134,22 +135,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("console origin: %v", err)
 	}
-	limits, err := config.LoadLimits()
-	if err != nil {
-		log.Fatalf("limits: %v", err)
-	}
-	proposalTTL, err := proposalLifetime(limits.ProposalTTLSec)
-	if err != nil {
-		log.Fatalf("limits: %v", err)
-	}
 	attemptConfig, err := loadAttemptConfig()
 	if err != nil {
 		log.Fatalf("execution config: %v", err)
 	}
 	brokerName := config.Env("BROKER", "fake")
-	if err := validateProductionQuoteAge(brokerName, limits.QuoteMaxAgeSec); err != nil {
-		log.Fatalf("limits: %v", err)
-	}
 	var account broker.AccountProvider
 	var execution broker.ExecutionProvider
 	var market marketdata.Provider
@@ -227,6 +217,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	kernelPolicy, err := st.LoadKernelPolicyAuthority()
+	if err != nil {
+		log.Fatalf("kernel policy authority: %v; run the explicit kernel-policy command before server startup", err)
+	}
+	limits := kernelPolicy.Policy
+	if err := validateProductionQuoteAge(brokerName, limits.QuoteMaxAgeSec); err != nil {
+		log.Fatalf("kernel policy authority: %v", err)
+	}
 	if _, err := requireLiveCanaryAuthority(mode.TradingMode, st); err != nil {
 		log.Fatalf("live canary authority: %v", err)
 	}
@@ -283,7 +281,6 @@ func main() {
 		// ref-id dedupe is empirically verified, but its server-side order-created
 		// latency is not; automatic replay therefore remains fail-closed there.
 		providerReplayWindowBoundVerified: brokerName == "fake",
-		proposalTTL:                       proposalTTL,
 		runtimeURL:                        config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
 		consoleOrigin:                     consoleOrigin,
 		marketTZ:                          marketTZ,
@@ -301,8 +298,12 @@ func main() {
 	if err := startRepricer(s); err != nil {
 		log.Fatalf("repricer startup: %v", err)
 	}
-	st.Event("kernel_start", map[string]string{
-		"broker": os.Getenv("BROKER"), "profile": limits.Profile, "mode": mode.TradingMode,
+	st.Event("kernel_start", map[string]any{
+		"broker": os.Getenv("BROKER"), "mode": mode.TradingMode,
+		"kernel_policy": map[string]any{
+			"revision_id": kernelPolicy.ID, "generation": kernelPolicy.Generation,
+			"digest": kernelPolicy.Digest,
+		},
 	})
 
 	log.Printf("alpheus-kernel listening on :8100 mode=%s", mode.TradingMode)
@@ -516,6 +517,10 @@ func spendableBuyingPower(authoritative, locallyHeld units.Micros) (units.Micros
 }
 
 func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string) (risk.DayState, error) {
+	return s.dayStateAtAccountWithLimits(ctx, gate, shadow, account, window, halted, haltReason, s.limits)
+}
+
+func (s *server) dayStateAtAccountWithLimits(ctx context.Context, gate dayStateReader, shadow bool, account broker.AccountState, window marketWindow, halted bool, haltReason string, limits config.Limits) (risk.DayState, error) {
 	n, err := gate.CountTradesForDay(shadow, window.start, window.end)
 	if err != nil {
 		return risk.DayState{}, err
@@ -543,9 +548,9 @@ func (s *server) dayStateAtAccount(ctx context.Context, gate dayStateReader, sha
 		Ledger: ledger, MarketDay: window.day, Start: window.start, End: window.end,
 		ObservedAt:              window.asOf,
 		ProviderRealizedPnL:     providerPnL,
-		MaxDailyLossPct:         s.limits.HardLimits.MaxDailyLossPct,
-		ConsecutiveLossDaysHalt: s.limits.HardLimits.ConsecutiveLossDaysHalt,
-		PnLReconciliationLimit:  s.limits.PnLReconciliationTolerance,
+		MaxDailyLossPct:         limits.HardLimits.MaxDailyLossPct,
+		ConsecutiveLossDaysHalt: limits.HardLimits.ConsecutiveLossDaysHalt,
+		PnLReconciliationLimit:  limits.PnLReconciliationTolerance,
 	})
 	if err != nil {
 		return risk.DayState{}, err
@@ -585,14 +590,19 @@ func (s *server) providerRealizedPnL(ctx context.Context, shadow bool, marketDay
 }
 
 func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) {
+	kernelPolicy, err := s.store.LoadKernelPolicyAuthority()
+	if err != nil {
+		writeStoreError(w, "get kernel policy authority", err)
+		return
+	}
 	canary, err := s.liveCanaryAuthorityView()
 	if err != nil {
 		writeStoreError(w, "get live canary authority", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"build_pinned_kernel_limits": s.limits,
-		"db_live_canary":             canary,
+		"db_kernel_policy": kernelPolicy,
+		"db_live_canary":   canary,
 	})
 }
 
@@ -623,6 +633,11 @@ func (s *server) marketProvider() marketdata.Provider {
 func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 	if err := s.refreshGlobalHalt(); err != nil {
 		writeStoreError(w, "refresh global halt", err)
+		return
+	}
+	kernelPolicy, err := s.store.LoadKernelPolicyAuthority()
+	if err != nil {
+		writeStoreError(w, "get kernel policy authority", err)
 		return
 	}
 	canary, err := s.liveCanaryAuthorityView()
@@ -665,7 +680,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		liveDay, err = s.dayStateAtAccount(r.Context(), gate, false, acct, window, halted, haltReason)
+		liveDay, err = s.dayStateAtAccountWithLimits(r.Context(), gate, false, acct, window, halted, haltReason, kernelPolicy.Policy)
 		return err
 	}); err != nil {
 		if errors.Is(err, errBrokerDataUnavailable) {
@@ -687,7 +702,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		if !shadowWindow.day.Equal(window.day) {
 			return errMarketDayAdvanced
 		}
-		shadowDay, err = s.dayStateAtAccount(r.Context(), gate, true, shadowAccount, shadowWindow, halted, haltReason)
+		shadowDay, err = s.dayStateAtAccountWithLimits(r.Context(), gate, true, shadowAccount, shadowWindow, halted, haltReason, kernelPolicy.Policy)
 		return err
 	}); err != nil {
 		writeStoreError(w, "get shadow day state", err)
@@ -722,6 +737,7 @@ func (s *server) getState(w http.ResponseWriter, r *http.Request) {
 		"day":                 map[string]risk.DayState{"live": liveDay, "shadow": shadowDay},
 		"live_execution_gate": liveExecutionGate,
 		"db_live_canary":      canary,
+		"db_kernel_policy":    kernelPolicy,
 		"mode":                s.tradingMode(),
 		"source":              "kernel",
 		"as_of":               window.asOf,
@@ -772,7 +788,6 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if op.Action == "open" {
-		op = s.deriveOpenOperation(r.Context(), op, quote)
 		if err := s.refreshGlobalHalt(); err != nil {
 			writeStoreError(w, "refresh global halt", err)
 			return
@@ -810,6 +825,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				replay = existing
 				return nil
 			}
+		}
+		kernelAuthority, err := gate.KernelPolicyAuthority()
+		if err != nil {
+			return err
+		}
+		effectiveLimits := kernelAuthority.Policy
+		if op.Action == "open" {
+			op = s.deriveOpenOperationWithLimits(r.Context(), op, quote, effectiveLimits)
 		}
 		if op.Action == "open" {
 			// M3A deliberately fetches account state after acquiring the stable
@@ -942,13 +965,13 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		day := risk.DayState{}
 		if op.Action == "open" {
 			var err error
-			day, err = s.dayStateAtAccount(r.Context(), gate, op.Shadow, acct, window, halted, haltReason)
+			day, err = s.dayStateAtAccountWithLimits(r.Context(), gate, op.Shadow, acct, window, halted, haltReason, effectiveLimits)
 			if err != nil {
 				return err
 			}
 		}
-		v = risk.Classify(op, s.limits, day, quote)
-		if op.Action == "close" && !op.Shadow && (quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC())) {
+		v = risk.Classify(op, effectiveLimits, day, quote)
+		if op.Action == "close" && !op.Shadow && (quote == nil || !quote.Usable(effectiveLimits.QuoteMaxAgeSec, time.Now().UTC())) {
 			v = risk.Verdict{Class: "REJECT", Reasons: []string{"market_data_unavailable"}}
 		}
 		var canaryAuthority *store.LiveCanaryRevision
@@ -975,9 +998,6 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if err := gate.InsertEvent("operation_proposed", map[string]any{"id": opID, "op": op, "verdict": v}); err != nil {
-			return err
-		}
 		class := v.Class
 		switch v.Class {
 		case "REJECT":
@@ -985,7 +1005,13 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		case "C":
 			status = "pending_review"
 		}
-		if err := gate.InsertOperation(opID, op.Proposer, class, status, op, v, identity); err != nil {
+		policyBinding, err := gate.InsertOperationBound(opID, op.Proposer, class, status, op, v, identity, kernelAuthority)
+		if err != nil {
+			return err
+		}
+		if err := gate.InsertEvent("operation_proposed", map[string]any{
+			"id": opID, "op": op, "verdict": v, "kernel_policy": policyBinding,
+		}); err != nil {
 			return err
 		}
 		if v.Class == "B" && op.Action == "open" {
@@ -1001,7 +1027,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			grantEvent := map[string]any{
-				"operation_id": opID, "ledger": ledgerName(op.Shadow),
+				"operation_id": opID, "ledger": ledgerName(op.Shadow), "kernel_policy": policyBinding,
 			}
 			if binding := liveCanaryEventBinding(canaryAuthority); binding != nil {
 				grantEvent["live_canary"] = binding
@@ -1018,7 +1044,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		}
 		switch op.Action {
 		case "open", "close":
-			limit, err := executionLimit(op, quote, s.limits.QuoteMaxAgeSec)
+			limit, err := executionLimit(op, quote, effectiveLimits.QuoteMaxAgeSec)
 			if err != nil {
 				return err
 			}
@@ -1027,7 +1053,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			if op.Shadow {
 				attempt.Intent = "paper_place"
 				attempt.ClientOrderID = "shadow:" + attempt.ID
-				if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+				if quote == nil || !quote.Usable(effectiveLimits.QuoteMaxAgeSec, time.Now().UTC()) {
 					return fmt.Errorf("market_data_unavailable")
 				}
 				if op.Side == "buy" {
@@ -1893,7 +1919,11 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 }
 
 func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quote *broker.Quote) risk.Operation {
-	if quote == nil || !quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+	return s.deriveOpenOperationWithLimits(ctx, op, quote, s.limits)
+}
+
+func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Operation, quote *broker.Quote, limits config.Limits) risk.Operation {
+	if quote == nil || !quote.Usable(limits.QuoteMaxAgeSec, time.Now().UTC()) {
 		op.RejectReason = "market_data_unavailable"
 		return op
 	}
@@ -1947,7 +1977,7 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 		op.ApprovedPriceCap = quote.Ask
 	}
 	op.WorkingPrice = quote.Ask
-	if s.limits.ExecutionPolicy.StartAt == "mid" {
+	if limits.ExecutionPolicy.StartAt == "mid" {
 		op.WorkingPrice = quote.Mid()
 	}
 	if op.WorkingPrice > op.ApprovedPriceCap {
@@ -1977,9 +2007,9 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 		op.RejectReason = "risk_overflow"
 		return op
 	}
-	feePerUnit := s.limits.ExecutionPolicy.FeePerShare
+	feePerUnit := limits.ExecutionPolicy.FeePerShare
 	if op.Kind == "option" {
-		feePerUnit = s.limits.ExecutionPolicy.FeePerContract
+		feePerUnit = limits.ExecutionPolicy.FeePerContract
 	}
 	// Fees also round up because they increase the account's required cash.
 	fees, err := units.MulQtyPrice(op.Qty, feePerUnit, 1, true)
@@ -2146,7 +2176,6 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	if quoteErr == nil {
 		quote = &freshQuote
 	}
-	prepared := s.prepareApprovedOpen(r.Context(), persisted, quote)
 	if err := s.refreshGlobalHalt(); err != nil {
 		writeStoreError(w, "refresh global halt", err)
 		return
@@ -2155,6 +2184,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 
 	var attempt *store.ExecutionAttempt
 	var approvalVerdict risk.Verdict
+	var boundVerdict risk.Verdict
 	var approvedOp risk.Operation
 	conflictReason := ""
 	err = s.store.WithReviewLock(id, func(gate store.OperationGate, locked *store.OperationRow) error {
@@ -2162,27 +2192,33 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			conflictReason = "approval_snapshot_mismatch"
 			return errReviewGateRejected
 		}
-		if s.proposalTTL <= 0 {
-			return fmt.Errorf("proposal TTL is not configured")
+		currentAuthority, err := gate.KernelPolicyAuthority()
+		if err != nil {
+			return err
+		}
+		boundAuthority, err := gate.BoundKernelPolicy(locked)
+		if err != nil {
+			return err
 		}
 		now, err := gate.DatabaseNow()
 		if err != nil {
 			return err
 		}
-		if locked.TS.Add(s.proposalTTL).Before(now) {
+		if locked.ExpiresAt.IsZero() || !now.Before(locked.ExpiresAt) {
 			conflictReason = "proposal_expired"
 			verdict := map[string]any{
 				"reviewer": reviewer, "rationale": in.Rationale, "decision": "expired",
-				"proposal_ts": locked.TS, "reviewed_at": now,
+				"proposal_ts": locked.TS, "expires_at": locked.ExpiresAt, "reviewed_at": now,
 			}
 			if err := gate.SetOperationStatus(id, "expired", verdict); err != nil {
 				return err
 			}
 			return gate.InsertEvent("operation_reviewed", map[string]any{
 				"operation_id": id, "reviewer": reviewer, "decision": "expired",
-				"proposal_ts": locked.TS, "reviewed_at": now,
+				"proposal_ts": locked.TS, "expires_at": locked.ExpiresAt, "reviewed_at": now,
 			})
 		}
+		prepared := s.prepareApprovedOpenWithLimits(r.Context(), persisted, quote, boundAuthority.Policy)
 		if err := gate.LockLedger(prepared.Shadow); err != nil {
 			return err
 		}
@@ -2202,14 +2238,17 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		databaseNow := window.asOf
-		day, err := s.dayStateAtAccount(r.Context(), gate, prepared.Shadow, account, window, halted, haltReason)
+		day, err := s.dayStateAtAccountWithLimits(r.Context(), gate, prepared.Shadow, account, window, halted, haltReason, currentAuthority.Policy)
 		if err != nil {
 			return err
 		}
-		approvalVerdict = risk.ClassifyAt(prepared, s.limits, day, quote, time.Now().UTC())
-		if approvalVerdict.Class == "REJECT" {
+		boundVerdict = risk.ClassifyAt(prepared, boundAuthority.Policy, day, quote, time.Now().UTC())
+		approvalVerdict = risk.ClassifyAt(prepared, currentAuthority.Policy, day, quote, time.Now().UTC())
+		if boundVerdict.Class == "REJECT" || approvalVerdict.Class == "REJECT" {
 			conflictReason = "approval gate rejected"
-			if len(approvalVerdict.Reasons) > 0 {
+			if len(boundVerdict.Reasons) > 0 && boundVerdict.Class == "REJECT" {
+				conflictReason = boundVerdict.Reasons[0]
+			} else if len(approvalVerdict.Reasons) > 0 {
 				conflictReason = approvalVerdict.Reasons[0]
 			}
 			return errReviewGateRejected
@@ -2238,7 +2277,12 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 		approval := map[string]any{
 			"reviewer": reviewer, "rationale": in.Rationale, "decision": "approved",
 			"proposal_ts": locked.TS, "approved_at": databaseNow, "market_day": window.day,
-			"quote": quote, "verdict": approvalVerdict,
+			"quote": quote, "bound_verdict": boundVerdict, "current_verdict": approvalVerdict,
+			"bound_kernel_policy": operationPolicyView(locked),
+			"current_kernel_policy": map[string]any{
+				"revision_id": currentAuthority.ID, "generation": currentAuthority.Generation,
+				"digest": currentAuthority.Digest,
+			},
 			"approved_price_cap": prepared.ApprovedPriceCap, "working_price": prepared.WorkingPrice,
 			"derived_max_risk": prepared.DerivedMaxRisk, "required_cash": prepared.RequiredCash,
 			"multiplier": prepared.Multiplier, "attempt_id": staged.ID,
@@ -2342,12 +2386,16 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) prepareApprovedOpen(ctx context.Context, persisted risk.Operation, quote *broker.Quote) risk.Operation {
+	return s.prepareApprovedOpenWithLimits(ctx, persisted, quote, s.limits)
+}
+
+func (s *server) prepareApprovedOpenWithLimits(ctx context.Context, persisted risk.Operation, quote *broker.Quote, limits config.Limits) risk.Operation {
 	prepared := persisted
 	cap := persisted.ApprovedPriceCap
 	originalLimit := persisted.Limit
 	prepared.Limit = &cap
 	prepared.RejectReason = ""
-	prepared = s.deriveOpenOperation(ctx, prepared, quote)
+	prepared = s.deriveOpenOperationWithLimits(ctx, prepared, quote, limits)
 	prepared.Limit = originalLimit
 	if prepared.RejectReason != "" {
 		return prepared
@@ -2364,6 +2412,18 @@ func (s *server) prepareApprovedOpen(ctx context.Context, persisted risk.Operati
 		prepared.RejectReason = "approval_snapshot_mismatch"
 	}
 	return prepared
+}
+
+func operationPolicyView(operation *store.OperationRow) map[string]any {
+	if operation == nil {
+		return nil
+	}
+	return map[string]any{
+		"revision_id": operation.KernelPolicyRevisionID,
+		"generation":  operation.KernelPolicyGeneration,
+		"digest":      operation.KernelPolicyDigest,
+		"expires_at":  operation.ExpiresAt,
+	}
 }
 
 func (s *server) stageApprovedOpen(gate store.OperationGate, operationID string, op risk.Operation, marketDay time.Time, canaryAuthority *store.LiveCanaryRevision) (*store.ExecutionAttempt, error) {
