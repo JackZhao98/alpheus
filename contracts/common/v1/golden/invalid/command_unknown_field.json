@@ -1,0 +1,13 @@
+{
+  "schema_revision": 1,
+  "command_id": "command-1",
+  "actor": {"principal_id": "worker-1", "kind": "workload", "audience": "worker"},
+  "audience": "research_gateway",
+  "command_type": "fetch_evidence",
+  "idempotency_key": "task-1:fetch-1",
+  "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "causation_id": "task-1",
+  "correlation_id": "run-1",
+  "deadline": "2026-07-19T12:01:00Z",
+  "human_authorized": true
+}

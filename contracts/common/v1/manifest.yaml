@@ -1,0 +1,80 @@
+{
+  "pack": "alpheus.common",
+  "owner": "platform_governance",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "privacy_default": "internal",
+  "records": [
+    "audit_actor",
+    "effective_run_authority",
+    "failure",
+    "freshness",
+    "head_ref",
+    "record_ref",
+    "release_manifest",
+    "revision_ref",
+    "run_origin"
+  ],
+  "commands": ["command_envelope"],
+  "events": ["event_envelope"],
+  "queries": [],
+  "projections": [],
+  "state_machines": [],
+  "idempotency_scope": ["authenticated_actor", "command_type", "idempotency_key"],
+  "time_profile": {
+    "persisted_instants": "utc_rfc3339_z",
+    "security_intervals": "half_open_database_time",
+    "client_clocks": "evidence_only"
+  },
+  "digest_profile": {
+    "algorithm": "sha256",
+    "encoding": "lowercase_hex",
+    "domain_separation": true
+  },
+  "assets": {
+    "schemas": ["schema/common.schema.json", "schema/release.schema.json"],
+    "api": "api/openapi.yaml",
+    "events": "events/asyncapi.yaml",
+    "state_machines": "state-machines/index.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": [
+      "golden/valid/command_envelope.json",
+      "golden/valid/effective_run_authority.json",
+      "golden/valid/run_origin_schedule.json",
+      "golden/valid/run_origin_user.json"
+    ],
+    "invalid": [
+      "golden/invalid/authority_unknown_mode.json",
+      "golden/invalid/command_unknown_field.json",
+      "golden/invalid/schedule_fabricated_conversation.json",
+      "golden/invalid/user_missing_conversation.json"
+    ],
+    "digests": [
+      "golden/digest/command_envelope.sha256",
+      "golden/digest/effective_run_authority.sha256",
+      "golden/digest/run_origin_schedule.sha256",
+      "golden/digest/run_origin_user.sha256"
+    ]
+  },
+  "semantic_checks": [
+    "known_enum_and_revision",
+    "digest_shape",
+    "run_origin_discriminator",
+    "owner_and_audience_binding",
+    "temporal_order",
+    "authority_source_freshness",
+    "changed_body_idempotency_conflict",
+    "release_evidence_sorted_unique"
+  ],
+  "migration": "identity_or_canonicalization_changes_require_explicit_human_review",
+  "replay": "exact_request_digest_only",
+  "redaction": "driver_connector_model_and_secret_text_never_public",
+  "deletion": "contract_revisions_and_release_evidence_are_immutable"
+}

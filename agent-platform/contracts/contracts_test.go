@@ -152,6 +152,19 @@ func TestChangedBodyReplayConflicts(t *testing.T) {
 	}
 }
 
+func TestOpaqueIDsRejectSurroundingWhitespace(t *testing.T) {
+	value := validCommand()
+	value.CommandID = " command-1"
+	if err := value.Validate(); err == nil {
+		t.Fatal("leading whitespace was silently normalized")
+	}
+	value = validCommand()
+	value.IdempotencyKey = "task-1 "
+	if err := value.Validate(); err == nil {
+		t.Fatal("trailing whitespace was silently normalized")
+	}
+}
+
 func TestEffectiveAuthorityFailsClosed(t *testing.T) {
 	headRevision := revision(OwnerPlatformGovernance, "platform_mode_revision", "mode-1")
 	value := EffectiveRunAuthority{

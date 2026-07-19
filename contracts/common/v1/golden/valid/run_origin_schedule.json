@@ -1,0 +1,27 @@
+{
+  "schema_revision": 1,
+  "kind": "schedule",
+  "source": {
+    "owner": "agent_control",
+    "record_type": "schedule_occurrence",
+    "record_id": "schedule-occurrence-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "initiating_actor": {
+    "principal_id": "scheduler-1",
+    "kind": "workload",
+    "audience": "control_api"
+  },
+  "owner_policy": {
+    "owner": "platform_governance",
+    "record_type": "owner_policy_revision",
+    "record_id": "policy-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation": 1
+  },
+  "occurred_at": "2026-07-19T12:00:00Z",
+  "observed_at": "2026-07-19T12:00:01Z",
+  "committed_at": "2026-07-19T12:00:02Z"
+}

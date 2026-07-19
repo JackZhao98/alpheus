@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
@@ -220,8 +221,15 @@ func validSHA256(value string) bool {
 }
 
 func validID(value string) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && len(value) <= 200 && !strings.ContainsAny(value, " \t\r\n")
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 200 {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
+			return false
+		}
+	}
+	return true
 }
 
 func validName(value string) bool {

@@ -40,6 +40,13 @@ if ! go -C agent-platform vet ./... >"$ARTIFACT_DIR/go-vet.txt" 2>&1; then
 	exit 1
 fi
 
+if ! go -C agent-platform test -json ./contractvalidate >"$ARTIFACT_DIR/contract-pack.json" 2>&1; then
+	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"contract-pack"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="contract-pack"><failure>Schema Freeze Pack validation failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+	echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=contract-pack" >&2
+	exit 1
+fi
+
 if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2>&1; then
 	printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"go-test-race"}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
 	printf '<testsuite name="%s" tests="1" failures="1"><testcase name="go-test-race"><failure>tests failed</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
@@ -47,7 +54,7 @@ if ! go -C agent-platform test -race -json ./... >"$ARTIFACT_DIR/go-test.json" 2
 	exit 1
 fi
 
-printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
-printf '<testsuite name="%s" tests="4" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
+printf '{"stage":"%s","status":"FAIL","seed":"%s","reason":"mandatory-ap0-probes-not-implemented","completed_checks":["gofmt","go-vet","contract-pack","go-test-race"]}\n' "$STAGE" "$SEED" >"$ARTIFACT_DIR/summary.json"
+printf '<testsuite name="%s" tests="5" failures="1"><testcase name="gofmt"/><testcase name="go-vet"/><testcase name="contract-pack"/><testcase name="go-test-race"/><testcase name="ap0-mandatory-probes"><failure>AP0 remains incomplete</failure></testcase></testsuite>\n' "$STAGE" >"$ARTIFACT_DIR/junit.xml"
 echo "FAIL stage=$STAGE seed=$SEED artifacts=$ARTIFACT_DIR reason=mandatory-ap0-probes-not-implemented" >&2
 exit 1

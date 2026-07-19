@@ -72,10 +72,31 @@ func TestCommandParsingFailsClosed(t *testing.T) {
 		{"unknown"},
 		{"verify-release"},
 		{"verify-release", "--file", "missing", "extra"},
+		{"validate-contract"},
+		{"validate-contract", "--file", "missing", "--type", "failure", "extra"},
 	}
 	for _, args := range tests {
 		if err := run(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("args %q unexpectedly passed", args)
 		}
+	}
+}
+
+func TestValidateContractCommand(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "failure.json")
+	if err := os.WriteFile(file, []byte(`{"code":"connector_timeout","message":"unavailable","retryable":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run([]string{"validate-contract", "--file", file, "--type", "failure"}, &output); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(output.String(), `"status":"valid"`) || !strings.Contains(output.String(), canonical.Profile) {
+		t.Fatalf("unexpected output: %s", output.String())
+	}
+	if err := run([]string{
+		"validate-contract", "--file", file, "--type", "failure", "--expect-digest", cliDigest,
+	}, &bytes.Buffer{}); err == nil {
+		t.Fatal("digest mismatch passed")
 	}
 }

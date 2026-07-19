@@ -1,0 +1,5 @@
+{
+  "schema_revision": 1,
+  "state_machines": [],
+  "note": "The AP0-2 common envelope profile defines no mutable state machine. Governance and Blob lifecycles land in later AP0 packets."
+}

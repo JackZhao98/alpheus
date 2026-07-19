@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const SchemaRevisionV1 uint16 = 1
@@ -410,12 +411,11 @@ func validSHA256(value string) bool {
 }
 
 func validID(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" || len(value) > 200 {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 200 {
 		return false
 	}
 	for _, char := range value {
-		if char < 0x21 || char == 0x7f {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
 			return false
 		}
 	}

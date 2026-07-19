@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"alpheus/agentplatform/canonical"
+	"alpheus/agentplatform/contractvalidate"
 	"alpheus/agentplatform/release"
 )
 
@@ -21,14 +23,46 @@ func main() {
 
 func run(args []string, output io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: agent-platform verify-release [flags]")
+		return fmt.Errorf("usage: agent-platform <validate-contract|verify-release> [flags]")
 	}
 	switch args[0] {
+	case "validate-contract":
+		return validateContract(args[1:], output)
 	case "verify-release":
 		return verifyRelease(args[1:], output)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func validateContract(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("validate-contract", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	file := flags.String("file", "", "contract JSON file")
+	contractType := flags.String("type", "", "common contract type")
+	expectedDigest := flags.String("expect-digest", "", "optional exact contract SHA-256")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*file) == "" || strings.TrimSpace(*contractType) == "" {
+		return fmt.Errorf("--file and --type are required; positional arguments are forbidden")
+	}
+	input, err := os.Open(*file)
+	if err != nil {
+		return fmt.Errorf("open contract: %w", err)
+	}
+	defer input.Close()
+	_, digest, err := contractvalidate.Validate(strings.TrimSpace(*contractType), input)
+	if err != nil {
+		return err
+	}
+	if expected := strings.TrimSpace(*expectedDigest); expected != "" && digest != expected {
+		return fmt.Errorf("contract digest mismatch")
+	}
+	return json.NewEncoder(output).Encode(map[string]any{
+		"status": "valid", "contract_type": strings.TrimSpace(*contractType),
+		"contract_digest": digest, "canonical_profile": canonical.Profile,
+	})
 }
 
 func verifyRelease(args []string, output io.Writer) error {

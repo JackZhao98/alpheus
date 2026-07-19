@@ -1,0 +1,9 @@
+{
+  "schema_revision": 1,
+  "contract_pack": "retain_forever",
+  "canonical_goldens": "retain_forever",
+  "release_manifests": "retain_forever",
+  "runtime_records": "owning_domain_policy_required",
+  "inbox_tombstones": "deferred_to_ap0_3_replay_horizon",
+  "blob_content": "deferred_to_ap0_4_owner_reference_policy"
+}

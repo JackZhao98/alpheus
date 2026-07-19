@@ -1,0 +1,14 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Alpheus AP0 Common Event Envelope",
+    "version": "1.0.0",
+    "description": "AP0-2 freezes the envelope only; concrete channels and owner events are declared by later packs."
+  },
+  "channels": {},
+  "components": {
+    "schemas": {
+      "EventEnvelope": {"$ref": "../schema/common.schema.json#/$defs/EventEnvelope"}
+    }
+  }
+}

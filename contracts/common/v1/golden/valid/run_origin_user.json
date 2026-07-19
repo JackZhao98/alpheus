@@ -1,0 +1,34 @@
+{
+  "schema_revision": 1,
+  "kind": "user_request",
+  "source": {
+    "owner": "agent_control",
+    "record_type": "user_request",
+    "record_id": "request-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "conversation": {
+    "owner": "agent_control",
+    "record_type": "conversation",
+    "record_id": "conversation-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "initiating_actor": {
+    "principal_id": "user-1",
+    "kind": "user",
+    "audience": "control_api"
+  },
+  "owner_policy": {
+    "owner": "platform_governance",
+    "record_type": "owner_policy_revision",
+    "record_id": "policy-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation": 1
+  },
+  "occurred_at": "2026-07-19T12:00:00Z",
+  "observed_at": "2026-07-19T12:00:01Z",
+  "committed_at": "2026-07-19T12:00:02Z"
+}

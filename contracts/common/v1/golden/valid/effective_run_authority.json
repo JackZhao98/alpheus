@@ -1,0 +1,38 @@
+{
+  "schema_revision": 1,
+  "origin_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "actor": {
+    "principal_id": "worker-1",
+    "kind": "workload",
+    "audience": "worker"
+  },
+  "owner_policy": {
+    "owner": "platform_governance",
+    "record_type": "owner_policy_revision",
+    "record_id": "policy-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation": 1
+  },
+  "effect_ceiling": "external_read",
+  "issued_at": "2026-07-19T12:00:00Z",
+  "valid_until": "2026-07-19T12:01:00Z",
+  "source_heads": [
+    {
+      "owner": "platform_governance",
+      "head_type": "platform_mode_head",
+      "head_id": "mode-head-1",
+      "observed_generation": 1,
+      "revision": {
+        "owner": "platform_governance",
+        "record_type": "platform_mode_revision",
+        "record_id": "mode-1",
+        "schema_revision": 1,
+        "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "generation": 1
+      },
+      "observed_at": "2026-07-19T11:59:59Z",
+      "freshness_deadline": "2026-07-19T12:02:00Z"
+    }
+  ]
+}

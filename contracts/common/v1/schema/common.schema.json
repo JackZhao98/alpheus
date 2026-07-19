@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/common/v1/schema/common.schema.json",
+  "title": "Alpheus AP0 Common Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/AuditActor"},
+    {"$ref": "#/$defs/RecordRef"},
+    {"$ref": "#/$defs/RevisionRef"},
+    {"$ref": "#/$defs/HeadRef"},
+    {"$ref": "#/$defs/RunOrigin"},
+    {"$ref": "#/$defs/EffectiveRunAuthority"},
+    {"$ref": "#/$defs/CommandEnvelope"},
+    {"$ref": "#/$defs/EventEnvelope"},
+    {"$ref": "#/$defs/Freshness"},
+    {"$ref": "#/$defs/Failure"}
+  ],
+  "$defs": {
+    "Owner": {
+      "type": "string",
+      "enum": ["agent_control", "blob", "delegation", "grace", "kernel", "platform_governance", "research_gateway", "worker"]
+    },
+    "PrincipalKind": {
+      "type": "string",
+      "enum": ["kernel", "user", "workload"]
+    },
+    "Audience": {
+      "type": "string",
+      "enum": ["activator", "control_api", "delegation_engine", "grace_engine", "grace_intake", "kernel", "kernel_admin", "research_gateway", "validator", "worker"]
+    },
+    "EffectClass": {
+      "type": "string",
+      "enum": ["broker_mutation", "exact_confirmation", "external_read", "none", "operation_intent"]
+    },
+    "PlatformMode": {
+      "type": "string",
+      "enum": ["disabled", "live_autonomous", "live_confirmed", "read_only", "shadow"]
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "OpaqueID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f]+$"
+    },
+    "MachineName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "UTCInstant": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "AuditActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "kind", "audience"],
+      "properties": {
+        "principal_id": {"$ref": "#/$defs/OpaqueID"},
+        "kind": {"$ref": "#/$defs/PrincipalKind"},
+        "audience": {"$ref": "#/$defs/Audience"}
+      }
+    },
+    "RecordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Owner"},
+        "record_type": {"$ref": "#/$defs/MachineName"},
+        "record_id": {"$ref": "#/$defs/OpaqueID"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"}
+      }
+    },
+    "RevisionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest", "generation"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Owner"},
+        "record_type": {"$ref": "#/$defs/MachineName"},
+        "record_id": {"$ref": "#/$defs/OpaqueID"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "HeadRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "head_type", "head_id", "observed_generation", "revision", "observed_at", "freshness_deadline"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Owner"},
+        "head_type": {"$ref": "#/$defs/MachineName"},
+        "head_id": {"$ref": "#/$defs/OpaqueID"},
+        "observed_generation": {"type": "integer", "minimum": 1},
+        "revision": {"$ref": "#/$defs/RevisionRef"},
+        "observed_at": {"$ref": "#/$defs/UTCInstant"},
+        "freshness_deadline": {"$ref": "#/$defs/UTCInstant"}
+      }
+    },
+    "RecoveryLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["original_causation_id", "original_idempotency_key", "original_authority", "original_effect"],
+      "properties": {
+        "original_causation_id": {"$ref": "#/$defs/OpaqueID"},
+        "original_idempotency_key": {"$ref": "#/$defs/OpaqueID"},
+        "original_authority": {"$ref": "#/$defs/RecordRef"},
+        "original_effect": {"$ref": "#/$defs/RecordRef"}
+      }
+    },
+    "RunOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "kind", "source", "initiating_actor", "owner_policy", "occurred_at", "observed_at", "committed_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "kind": {"enum": ["external_event", "kernel_event", "schedule", "system_maintenance", "system_recovery", "user_request"]},
+        "source": {"$ref": "#/$defs/RecordRef"},
+        "conversation": {"$ref": "#/$defs/RecordRef"},
+        "initiating_actor": {"$ref": "#/$defs/AuditActor"},
+        "owner_policy": {"$ref": "#/$defs/RevisionRef"},
+        "occurred_at": {"$ref": "#/$defs/UTCInstant"},
+        "observed_at": {"$ref": "#/$defs/UTCInstant"},
+        "committed_at": {"$ref": "#/$defs/UTCInstant"},
+        "recovery": {"$ref": "#/$defs/RecoveryLineage"}
+      },
+      "allOf": [
+        {
+          "properties": {
+            "owner_policy": {
+              "allOf": [
+                {"$ref": "#/$defs/RevisionRef"},
+                {"properties": {"owner": {"const": "platform_governance"}}}
+              ]
+            }
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {"const": "user_request"},
+            "source": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "user_request"}}},
+            "conversation": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "conversation"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "user"}, "audience": {"const": "control_api"}}}
+          },
+          "required": ["conversation"],
+          "not": {"required": ["recovery"]}
+        },
+        {
+          "properties": {
+            "kind": {"const": "schedule"},
+            "source": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "schedule_occurrence"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "workload"}, "audience": {"const": "control_api"}}}
+          },
+          "not": {"anyOf": [{"required": ["conversation"]}, {"required": ["recovery"]}]}
+        },
+        {
+          "properties": {
+            "kind": {"const": "kernel_event"},
+            "source": {"properties": {"owner": {"const": "kernel"}, "record_type": {"const": "kernel_event"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "kernel"}, "audience": {"const": "kernel"}}}
+          },
+          "not": {"anyOf": [{"required": ["conversation"]}, {"required": ["recovery"]}]}
+        },
+        {
+          "properties": {
+            "kind": {"const": "external_event"},
+            "source": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "external_event"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "workload"}, "audience": {"const": "control_api"}}}
+          },
+          "not": {"anyOf": [{"required": ["conversation"]}, {"required": ["recovery"]}]}
+        },
+        {
+          "properties": {
+            "kind": {"const": "system_maintenance"},
+            "source": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "maintenance_occurrence"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "workload"}, "audience": {"const": "control_api"}}}
+          },
+          "not": {"anyOf": [{"required": ["conversation"]}, {"required": ["recovery"]}]}
+        },
+        {
+          "properties": {
+            "kind": {"const": "system_recovery"},
+            "source": {"properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "recovery_occurrence"}}},
+            "initiating_actor": {"properties": {"kind": {"const": "workload"}, "audience": {"const": "control_api"}}}
+          },
+          "required": ["recovery"],
+          "not": {"required": ["conversation"]}
+        }
+      ]
+    },
+    "EffectiveRunAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "origin_digest", "actor", "owner_policy", "effect_ceiling", "issued_at", "valid_until", "source_heads"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "origin_digest": {"$ref": "#/$defs/Digest"},
+        "actor": {"$ref": "#/$defs/AuditActor"},
+        "owner_policy": {
+          "allOf": [
+            {"$ref": "#/$defs/RevisionRef"},
+            {"properties": {"owner": {"const": "platform_governance"}}}
+          ]
+        },
+        "mode": {"$ref": "#/$defs/PlatformMode"},
+        "effect_ceiling": {"$ref": "#/$defs/EffectClass"},
+        "issued_at": {"$ref": "#/$defs/UTCInstant"},
+        "valid_until": {"$ref": "#/$defs/UTCInstant"},
+        "source_heads": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/HeadRef"}}
+      }
+    },
+    "CommandEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "command_id", "actor", "audience", "command_type", "idempotency_key", "request_digest", "causation_id", "correlation_id", "deadline"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "command_id": {"$ref": "#/$defs/OpaqueID"},
+        "actor": {"$ref": "#/$defs/AuditActor"},
+        "audience": {"$ref": "#/$defs/Audience"},
+        "command_type": {"$ref": "#/$defs/MachineName"},
+        "idempotency_key": {"$ref": "#/$defs/OpaqueID"},
+        "request_digest": {"$ref": "#/$defs/Digest"},
+        "causation_id": {"$ref": "#/$defs/OpaqueID"},
+        "correlation_id": {"$ref": "#/$defs/OpaqueID"},
+        "deadline": {"$ref": "#/$defs/UTCInstant"}
+      }
+    },
+    "EventEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "event_id", "event_type", "owner", "actor", "record", "body_digest", "causation_id", "correlation_id", "owner_sequence", "occurred_at", "committed_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "event_id": {"$ref": "#/$defs/OpaqueID"},
+        "event_type": {"$ref": "#/$defs/MachineName"},
+        "owner": {"$ref": "#/$defs/Owner"},
+        "actor": {"$ref": "#/$defs/AuditActor"},
+        "record": {"$ref": "#/$defs/RecordRef"},
+        "body_digest": {"$ref": "#/$defs/Digest"},
+        "causation_id": {"$ref": "#/$defs/OpaqueID"},
+        "correlation_id": {"$ref": "#/$defs/OpaqueID"},
+        "owner_sequence": {"type": "integer", "minimum": 1},
+        "occurred_at": {"$ref": "#/$defs/UTCInstant"},
+        "committed_at": {"$ref": "#/$defs/UTCInstant"}
+      }
+    },
+    "Freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "observed_at", "fresh_until"],
+      "properties": {
+        "state": {"enum": ["current", "stale", "unknown"]},
+        "observed_at": {"$ref": "#/$defs/UTCInstant"},
+        "fresh_until": {"$ref": "#/$defs/UTCInstant"}
+      }
+    },
+    "Failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {"$ref": "#/$defs/MachineName"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S"},
+        "retryable": {"type": "boolean"}
+      }
+    }
+  }
+}
