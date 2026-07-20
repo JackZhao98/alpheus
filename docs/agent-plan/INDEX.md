@@ -53,7 +53,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 Runtime contract freeze corrected at `006e623`; AP1 behavior and effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 Runtime contract freeze corrected at `006e623` with canonical policy sources at `fef99de`; AP1 behavior and effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -98,9 +98,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    through AP0-6 are complete. The accepted AP0 release is bound to source
    `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest
    `0614bf7764e9d684e05e63c587f3fdf6c77c91589ce87e7d6ea5295c932d1da2`.
-   AP1-1's detailed Runtime contract pack was frozen at `df73161` and its
-   persistence-blocking seams were corrected at `006e623`. Implement AP1-2
-   PostgreSQL durable state and narrow transactional commands next.
+   AP1-1's detailed Runtime contract pack was frozen at `df73161`, its
+   persistence-blocking seams were corrected at `006e623`, and the exact
+   OwnerPolicy/OutputContract canonical sources landed at `fef99de`. Implement
+   AP1-2 PostgreSQL durable state and narrow transactional commands next.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
