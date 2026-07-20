@@ -19,6 +19,7 @@ type Operation struct {
 	Symbol            string            `json:"symbol,omitempty"`
 	Side              string            `json:"side,omitempty"`
 	OrderType         string            `json:"order_type,omitempty"`
+	ExecutionStyle    string            `json:"execution_style,omitempty"`
 	Qty               units.Qty         `json:"qty,omitempty"`
 	Limit             *units.Micros     `json:"limit,omitempty"`
 	MaxRiskUSD        *units.Micros     `json:"max_risk_usd,omitempty"`

@@ -113,7 +113,7 @@ func newRepriceTestServer(t *testing.T, quantity string, maxReprices int) (*serv
 	qty := units.MustQty(quantity)
 	op := risk.Operation{
 		Proposer: "m5b", Action: "open", Kind: "equity", Underlying: "XYZ", Symbol: "XYZ",
-		Side: "buy", Qty: qty, ApprovedPriceCap: units.MustMicros("110"),
+		Side: "buy", ExecutionStyle: "managed", Qty: qty, ApprovedPriceCap: units.MustMicros("110"),
 		WorkingPrice: units.MustMicros("105"), Multiplier: 1,
 		DerivedMaxRisk: units.MustMicros("440"), RequiredCash: units.MustMicros("440"),
 	}
@@ -481,7 +481,7 @@ func TestM5BHaltBeforePendingReplacementReleasesWithoutPlacement(t *testing.T) {
 	}
 }
 
-func TestM5BHaltCancelsOpenButDoesNotRepriceExplicitCloseLimit(t *testing.T) {
+func TestM5BHaltCancelsOpenButDoesNotSuppressManagedClose(t *testing.T) {
 	s, st, execution, _, _ := newRepriceTestServer(t, "1", 3)
 	st.halted, st.haltReason = true, "operator stop"
 	if err := s.repriceOnce(context.Background()); err != nil {
@@ -520,8 +520,28 @@ func TestM5BHaltCancelsOpenButDoesNotRepriceExplicitCloseLimit(t *testing.T) {
 	if err := closeServer.repriceOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(closeExecution.requests) != 0 {
-		t.Fatalf("explicit close limit was repriced: requests=%+v", closeExecution.requests)
+	if len(closeExecution.requests) != 1 || closeExecution.requests[0].Side != "sell" ||
+		closeExecution.requests[0].PositionEffect != "close" {
+		t.Fatalf("halted close requests=%+v, want one explicitly managed replacement", closeExecution.requests)
+	}
+}
+
+func TestM5BStaticOrderNeverReprices(t *testing.T) {
+	s, st, execution, order, op := newRepriceTestServer(t, "1", 3)
+	op.ExecutionStyle = "static"
+	payload, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.operationRows[order.OperationID] = store.OperationRow{
+		ID: order.OperationID, Class: "B", Status: "auto_approved", Payload: payload, TS: time.Now().UTC(),
+	}
+	st.operations[order.OperationID] = op
+	if err := s.repriceOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(execution.requests) != 0 {
+		t.Fatalf("static order reached provider repricing: requests=%+v", execution.requests)
 	}
 }
 

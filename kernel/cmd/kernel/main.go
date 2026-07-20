@@ -2071,6 +2071,7 @@ type proposeRequest struct {
 	Symbol            string            `json:"symbol"`
 	Side              string            `json:"side"`
 	OrderType         string            `json:"order_type"`
+	ExecutionStyle    string            `json:"execution_style"`
 	Qty               units.Qty         `json:"qty"`
 	Limit             *units.Micros     `json:"limit"`
 	MaxRiskUSD        *units.Micros     `json:"max_risk_usd"`
@@ -2107,8 +2108,8 @@ func hashClientIntent(op risk.Operation) ([sha256.Size]byte, error) {
 	intent := proposeRequest{
 		Proposer: op.Proposer, Action: op.Action, Kind: op.Kind,
 		Underlying: op.Underlying, Symbol: op.Symbol, Side: op.Side,
-		OrderType: op.OrderType,
-		Qty:       op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
+		OrderType: op.OrderType, ExecutionStyle: op.ExecutionStyle,
+		Qty: op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
 		Short: op.Short, Plan: op.Plan, Thesis: op.Thesis, Setup: op.Setup,
 		Shadow: op.Shadow, BrokerOrderID: op.BrokerOrderID, PositionID: op.PositionID,
 		ClosesOperationID: op.ClosesOperationID,
@@ -2124,8 +2125,8 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 	op := risk.Operation{
 		Proposer: request.Proposer, Action: request.Action, Kind: request.Kind,
 		Underlying: request.Underlying, Symbol: request.Symbol, Side: request.Side,
-		OrderType: request.OrderType,
-		Qty:       request.Qty, Limit: request.Limit, MaxRiskUSD: request.MaxRiskUSD,
+		OrderType: request.OrderType, ExecutionStyle: strings.TrimSpace(request.ExecutionStyle),
+		Qty: request.Qty, Limit: request.Limit, MaxRiskUSD: request.MaxRiskUSD,
 		Short: request.Short, Plan: request.Plan, Thesis: request.Thesis,
 		Setup: request.Setup, Shadow: request.Shadow,
 		BrokerOrderID:     request.BrokerOrderID,
@@ -2141,6 +2142,12 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 	case "open":
 		if op.OrderType == "" {
 			op.OrderType = "limit"
+		}
+		if op.ExecutionStyle == "" {
+			op.ExecutionStyle = "static"
+		}
+		if op.ExecutionStyle != "static" && op.ExecutionStyle != "managed" {
+			return op, fmt.Errorf("bad execution_style %q", op.ExecutionStyle)
 		}
 		if strings.TrimSpace(op.Underlying) == "" {
 			return op, fmt.Errorf("open requires underlying")
@@ -2163,6 +2170,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 		switch op.OrderType {
 		case "limit":
 		case "market":
+			if op.ExecutionStyle != "static" {
+				return op, fmt.Errorf("market orders require static execution_style")
+			}
 			if op.Kind != "equity" || op.Side != "buy" {
 				return op, fmt.Errorf("market orders currently support equity buys only")
 			}
@@ -2182,6 +2192,15 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 		if op.OrderType != "" {
 			return op, fmt.Errorf("order_type is currently supported only for open")
 		}
+		if op.ExecutionStyle == "" {
+			op.ExecutionStyle = "static"
+		}
+		if op.ExecutionStyle != "static" && op.ExecutionStyle != "managed" {
+			return op, fmt.Errorf("bad execution_style %q", op.ExecutionStyle)
+		}
+		if op.ExecutionStyle == "managed" && op.Limit == nil {
+			return op, fmt.Errorf("managed close requires limit")
+		}
 		op.PositionID = strings.TrimSpace(op.PositionID)
 		if strings.TrimSpace(symbol) == "" {
 			return op, fmt.Errorf("close requires symbol or underlying")
@@ -2200,6 +2219,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
 	case "cancel":
+		if op.ExecutionStyle != "" {
+			return op, fmt.Errorf("execution_style is supported only for open or close")
+		}
 		if op.OrderType != "" {
 			return op, fmt.Errorf("order_type is currently supported only for open")
 		}
@@ -2208,6 +2230,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 			return op, fmt.Errorf("cancel requires broker_order_id")
 		}
 	case "tighten_stop":
+		if op.ExecutionStyle != "" {
+			return op, fmt.Errorf("execution_style is supported only for open or close")
+		}
 		if op.OrderType != "" {
 			return op, fmt.Errorf("order_type is currently supported only for open")
 		}
@@ -2383,6 +2408,9 @@ func supportsOrderKind(execution broker.ExecutionProvider, kind string) bool {
 }
 
 func addRiskFacts(response map[string]any, op risk.Operation) {
+	if op.Action == "open" || op.Action == "close" {
+		response["execution_style"] = op.ExecutionStyle
+	}
 	if op.Action != "open" {
 		return
 	}

@@ -126,6 +126,11 @@ func equityMarketOrdersFixture() json.RawMessage {
 		executionOrderID, executionEquity, executionFillID))
 }
 
+func equityWorkingSellOrdersFixture() json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SOFI","side":"sell","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":"18.00","stop_price":null,"average_price":null,"reject_reason":"","created_at":"2026-07-20T19:48:09.301Z","last_transaction_at":"2026-07-20T19:48:09.301Z","type":"limit","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
+		executionOrderID, executionEquity))
+}
+
 func newExecutionFixture(t *testing.T, mutation *recordingMutation, orderState string) (*RobinhoodExecution, *Robinhood) {
 	t.Helper()
 	read, err := NewRobinhood(fixtureCaller{
@@ -292,6 +297,40 @@ func TestRobinhoodEquityMarketPlaceOmitsProviderPrice(t *testing.T) {
 	}
 	if _, exists := mutation.calls[0].args["limit_price"]; exists {
 		t.Fatalf("market order leaked limit_price: calls=%+v", mutation.calls)
+	}
+}
+
+func TestRobinhoodEquityWorkingSellUsesRecordedCloseShapeOnce(t *testing.T) {
+	mutation := &recordingMutation{responses: map[string]json.RawMessage{
+		"place_equity_order": equityOrderFixture(),
+	}}
+	adapter, read := newExecutionFixture(t, mutation, "confirmed")
+	read.caller = fixtureCaller{
+		"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": equityWorkingSellOrdersFixture(),
+	}
+	adapter.instruments = executionInstrument{instrument: Instrument{
+		Symbol: "SOFI", InstrumentID: executionEquity, Kind: "equity", Multiplier: 1,
+		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+		Source: robinhoodSource, AsOf: time.Now().UTC(),
+	}}
+	result, err := adapter.PlaceOrder(context.Background(), PlaceRequest{
+		ClientOrderID: executionRefID, Symbol: "SOFI", Side: "sell", PositionEffect: "close",
+		OrderType: "limit", Qty: units.MustQty("1"), Limit: units.MustMicros("18"), Kind: "equity",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BrokerOrderID != executionOrderID || result.State != "submitted" ||
+		result.FilledQty != 0 || len(result.Fills) != 0 {
+		t.Fatalf("working sell result=%+v", result)
+	}
+	mutation.mu.Lock()
+	defer mutation.mu.Unlock()
+	if len(mutation.calls) != 1 || mutation.calls[0].tool != "place_equity_order" ||
+		mutation.calls[0].args["symbol"] != "SOFI" || mutation.calls[0].args["side"] != "sell" ||
+		mutation.calls[0].args["limit_price"] != "18" || mutation.calls[0].args["quantity"] != "1" {
+		t.Fatalf("working sell calls=%+v", mutation.calls)
 	}
 }
 

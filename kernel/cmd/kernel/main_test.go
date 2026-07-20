@@ -2838,7 +2838,7 @@ func TestEquityMarketOpenUsesExplicitRiskAuthorityAndNoClientLimit(t *testing.T)
 
 	w, body := postOperation(t, s, `{"proposer":"market-test","action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":1,"max_risk_usd":50,"plan":`+plan+`}`)
 	if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "executed" ||
-		body["order_type"] != "market" || body["derived_max_risk"] != 50.0 ||
+		body["order_type"] != "market" || body["execution_style"] != "static" || body["derived_max_risk"] != 50.0 ||
 		body["required_cash"] != 50.0 || body["approved_price_cap"] != 50.0 {
 		t.Fatalf("market open: status=%d body=%v", w.Code, body)
 	}
@@ -2873,6 +2873,65 @@ func TestEquityMarketOpenRejectsRiskAuthorityBelowCurrentAsk(t *testing.T) {
 	reasons := body["reasons"].([]any)
 	if len(reasons) == 0 || reasons[0] != "market_risk_cap_below_quote" {
 		t.Fatalf("reasons=%v", reasons)
+	}
+}
+
+func TestExecutionStyleIsStaticByDefaultAndManagedOnlyByRequest(t *testing.T) {
+	base := proposeRequest{
+		Action: "open", Kind: "equity", Underlying: "SOFI", Symbol: "SOFI",
+		Side: "buy", OrderType: "limit", Qty: units.MustQty("1"),
+	}
+	static, err := validateAndBuildOperation(base)
+	if err != nil || static.ExecutionStyle != "static" {
+		t.Fatalf("default operation=%+v err=%v, want static", static, err)
+	}
+
+	managedRequest := base
+	managedRequest.ExecutionStyle = "managed"
+	managed, err := validateAndBuildOperation(managedRequest)
+	if err != nil || managed.ExecutionStyle != "managed" {
+		t.Fatalf("managed operation=%+v err=%v", managed, err)
+	}
+
+	marketManaged := managedRequest
+	marketManaged.OrderType = "market"
+	marketManaged.Limit = nil
+	maxRisk := units.MustMicros("50")
+	marketManaged.MaxRiskUSD = &maxRisk
+	if _, err := validateAndBuildOperation(marketManaged); err == nil {
+		t.Fatal("managed market order was accepted")
+	}
+
+	managedClose := proposeRequest{
+		Action: "close", Symbol: "SOFI", Qty: units.MustQty("1"), ExecutionStyle: "managed",
+	}
+	if _, err := validateAndBuildOperation(managedClose); err == nil {
+		t.Fatal("managed close without a limit was accepted")
+	}
+
+	bad := base
+	bad.ExecutionStyle = "surprise"
+	if _, err := validateAndBuildOperation(bad); err == nil {
+		t.Fatal("unknown execution style was accepted")
+	}
+}
+
+func TestExecutionStyleIsPartOfIdempotentClientIntent(t *testing.T) {
+	base := risk.Operation{
+		Action: "open", Kind: "equity", Underlying: "SOFI", Symbol: "SOFI",
+		Side: "buy", OrderType: "limit", ExecutionStyle: "static", Qty: units.MustQty("1"),
+	}
+	staticHash, err := hashClientIntent(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ExecutionStyle = "managed"
+	managedHash, err := hashClientIntent(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staticHash == managedHash {
+		t.Fatal("static and managed execution produced the same client-intent hash")
 	}
 }
 

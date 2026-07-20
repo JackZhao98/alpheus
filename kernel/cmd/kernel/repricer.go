@@ -70,11 +70,10 @@ func (s *server) repriceOrder(ctx context.Context, order *store.Order) error {
 	if op.OrderType == "market" {
 		return nil
 	}
-	// A close with an explicit limit is an owner/strategy-selected working exit,
-	// not a starting price for automatic cancel-and-replace. Repricing it can
-	// churn the same broker order when the quote remains below the minimum and
-	// can eventually cancel a valid GFD exit at max_reprices.
-	if op.Action == "close" && op.Limit != nil {
+	// Repricing is an explicit execution instruction, never an implicit property
+	// of a working limit. Historical operations have no execution_style and are
+	// therefore static after upgrades.
+	if op.ExecutionStyle != "managed" {
 		return nil
 	}
 	if err := validateOrderPolicyBinding(row, order); err != nil {
