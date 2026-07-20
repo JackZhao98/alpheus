@@ -204,11 +204,10 @@ func providerOrderShape(orderType string) (string, string) {
 }
 
 func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error) {
-	// Cancel authority must never be derived from the interactive 15-second
-	// read cache. A stale working state here can race a fill or duplicate a
-	// cancellation that already reached the broker.
-	freshCtx := rhmcp.WithFreshReads(ctx)
-	current, kind, err := r.getOrder(freshCtx, brokerOrderID)
+	// Execution is constructed with the authority-only Robinhood reader. A
+	// stale working state here can race a fill or duplicate a cancellation that
+	// already reached the broker, so it cannot use the UI/read-model channel.
+	current, kind, err := r.getOrder(ctx, brokerOrderID)
 	if err != nil {
 		return OrderResult{}, err
 	}
@@ -239,7 +238,7 @@ func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID stri
 		current.Reason = "cancel rejected by provider"
 		return current, nil
 	}
-	return r.confirmCancelState(freshCtx, brokerOrderID, kind, current)
+	return r.confirmCancelState(ctx, brokerOrderID, kind, current)
 }
 
 func (r *RobinhoodExecution) confirmCancelState(ctx context.Context, brokerOrderID, kind string, last OrderResult) (OrderResult, error) {

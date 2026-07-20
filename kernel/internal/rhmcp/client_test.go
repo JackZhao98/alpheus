@@ -62,7 +62,11 @@ func TestClientCachesCallsAndReconnects(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("calls=%d, want one cached transport call", calls.Load())
 	}
-	if _, err := client.Call(WithFreshReads(context.Background()), "get_accounts", map[string]any{}); err != nil {
+	authority, err := NewAuthorityClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.Call(context.Background(), "get_accounts", map[string]any{}); err != nil {
 		t.Fatalf("fresh read: %v", err)
 	}
 	if calls.Load() != 2 {

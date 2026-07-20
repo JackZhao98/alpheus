@@ -12,7 +12,6 @@ import (
 
 	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
-	"alpheus/kernel/internal/rhmcp"
 	"alpheus/kernel/internal/risk"
 	"alpheus/kernel/internal/store"
 	"alpheus/kernel/internal/units"
@@ -176,7 +175,10 @@ func externalWorkingCloseQuantity(snapshot *providerSnapshot, op risk.Operation)
 }
 
 func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*providerSnapshot, error) {
-	provider := s.accountProvider()
+	return s.captureProviderSnapshotFrom(ctx, purpose, s.accountProvider())
+}
+
+func (s *server) captureProviderSnapshotFrom(ctx context.Context, purpose string, provider broker.AccountProvider) (*providerSnapshot, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("account provider unavailable")
 	}
@@ -294,14 +296,13 @@ func (s *server) captureProviderSnapshot(ctx context.Context, purpose string) (*
 // interactive MCP cache; read-model and ordinary cached snapshots remain
 // evidence only and can never reduce the internal exposure ledger.
 func (s *server) captureReconciledProviderDecision(ctx context.Context) (*providerSnapshot, error) {
-	freshCtx := rhmcp.WithFreshReads(ctx)
-	bindingCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	bindingErr := s.assertLiveAccountBinding(bindingCtx, "")
 	cancel()
 	if bindingErr != nil {
 		return nil, bindingErr
 	}
-	snapshot, err := s.captureProviderSnapshot(freshCtx, "decision")
+	snapshot, err := s.captureProviderSnapshotFrom(ctx, "decision", s.authorityAccountProvider())
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +319,7 @@ func (s *server) captureProviderFills(ctx context.Context, purpose, accountID, s
 	}
 	started := time.Now().UTC()
 	providerCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-	fills, providerErr := s.accountProvider().RecentFills(providerCtx, since)
+	fills, providerErr := s.authorityAccountProvider().RecentFills(providerCtx, since)
 	cancel()
 	completed := time.Now().UTC()
 	family := store.BrokerObservationFamilyInput{
@@ -414,16 +415,15 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 	if s.tradingMode() != config.ModeLive {
 		return nil, fmt.Errorf("pre-effect manifests are live-only")
 	}
-	// Interactive/read-model traffic may use the bounded MCP cache. Money-path
-	// authority may not: every pre-effect family must cross the transport.
-	freshCtx := rhmcp.WithFreshReads(ctx)
-	bindingCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+	// The authority Provider is structurally non-cacheable; no call-site flag
+	// can downgrade this pre-effect evidence into a read-model snapshot.
+	bindingCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 	bindingErr := s.assertLiveAccountBinding(bindingCtx, attempt.OperationID)
 	cancel()
 	if bindingErr != nil {
 		return nil, bindingErr
 	}
-	snapshot, err := s.captureProviderSnapshot(freshCtx, "pre_effect")
+	snapshot, err := s.captureProviderSnapshotFrom(ctx, "pre_effect", s.authorityAccountProvider())
 	if err != nil {
 		s.recordPreEffectRefusal(attempt, "account_snapshot_unavailable")
 		return nil, fmt.Errorf("%w: account snapshot", errPreEffectUnavailable)
@@ -440,16 +440,16 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		if effect == "" {
 			return nil, fmt.Errorf("pre-effect place action is invalid")
 		}
-		provider := s.marketProvider()
+		provider := s.authorityMarketProvider()
 		if provider == nil {
 			s.recordPreEffectRefusal(attempt, "market_provider_unavailable")
 			return nil, fmt.Errorf("%w: market provider", errPreEffectUnavailable)
 		}
 		symbol := operationSymbol(op)
-		quoteCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		quote, quoteErr := provider.Quote(quoteCtx, symbol)
 		cancel()
-		instrumentCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 		instrument, instrumentErr := provider.Instrument(instrumentCtx, symbol)
 		cancel()
 		maxAge := attempt.QuoteMaxAgeSec
@@ -484,14 +484,14 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 			return nil, fmt.Errorf("%w: cancel target is not working", errPreEffectRejected)
 		}
 		if effect == "replace_cancel" {
-			provider := s.marketProvider()
+			provider := s.authorityMarketProvider()
 			if provider == nil {
 				return nil, fmt.Errorf("%w: replacement market provider", errPreEffectUnavailable)
 			}
-			quoteCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+			quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 			quote, quoteErr := provider.Quote(quoteCtx, operationSymbol(op))
 			cancel()
-			instrumentCtx, cancel := context.WithTimeout(freshCtx, s.brokerCallTimeout())
+			instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
 			instrument, instrumentErr := provider.Instrument(instrumentCtx, operationSymbol(op))
 			cancel()
 			maxAge := attempt.QuoteMaxAgeSec
@@ -513,7 +513,7 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		return nil, err
 	}
 	evaluation, err := s.evaluateLivePreEffect(
-		freshCtx, snapshot, attempt, row, op, facts.Quote, facts.Instrument, facts.TargetOrder, replay,
+		ctx, snapshot, attempt, row, op, facts.Quote, facts.Instrument, facts.TargetOrder, replay,
 	)
 	if err != nil {
 		s.recordPreEffectRefusal(attempt, "aggregate_gate_failed")

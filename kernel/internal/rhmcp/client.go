@@ -70,19 +70,48 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-type freshReadContextKey struct{}
-
-// WithFreshReads marks a money-path context whose Provider reads must cross
-// the MCP transport instead of accepting the normal bounded query cache. The
-// successful response still refreshes that cache for non-authoritative UI and
-// research callers.
-func WithFreshReads(ctx context.Context) context.Context {
-	return context.WithValue(ctx, freshReadContextKey{}, true)
+// AuthorityClient is the non-cacheable read capability for Kernel decisions
+// that can lead to a broker effect. It deliberately has a different type from
+// Client so callers cannot opt in or out of freshness with a context flag.
+// Both views share one authenticated MCP session and rate limiter.
+type AuthorityClient struct {
+	client *Client
 }
 
-func requiresFreshReads(ctx context.Context) bool {
-	fresh, _ := ctx.Value(freshReadContextKey{}).(bool)
-	return fresh
+// NewAuthorityClient derives the authority-only view of an existing query
+// client. It does not own the transport; the originating Client must be
+// closed by its owner.
+func NewAuthorityClient(client *Client) (*AuthorityClient, error) {
+	if client == nil {
+		return nil, fmt.Errorf("authority client requires query client")
+	}
+	return &AuthorityClient{client: client}, nil
+}
+
+func (c *AuthorityClient) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	if c == nil || c.client == nil {
+		return nil, fmt.Errorf("authority client unavailable")
+	}
+	return c.client.call(ctx, tool, args, false)
+}
+
+func (c *AuthorityClient) Status() Status {
+	if c == nil || c.client == nil {
+		return Status{}
+	}
+	return c.client.Status()
+}
+
+func (c *AuthorityClient) MarkSchemaDrift() {
+	if c != nil && c.client != nil {
+		c.client.MarkSchemaDrift()
+	}
+}
+
+func (c *AuthorityClient) MarkDataError() {
+	if c != nil && c.client != nil {
+		c.client.MarkDataError()
+	}
 }
 
 type tokenBucket struct {
@@ -310,6 +339,10 @@ func (c *Client) cachePut(key string, data json.RawMessage) {
 }
 
 func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	return c.call(ctx, tool, args, true)
+}
+
+func (c *Client) call(ctx context.Context, tool string, args map[string]any, allowCache bool) (json.RawMessage, error) {
 	if _, ok := c.allowed[tool]; !ok {
 		return nil, fmt.Errorf("provider tool is not read-allowlisted")
 	}
@@ -317,8 +350,7 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (js
 	if err != nil {
 		return nil, err
 	}
-	fresh := requiresFreshReads(ctx)
-	if !fresh {
+	if allowCache {
 		if data, ok := c.cacheGet(key); ok {
 			return data, nil
 		}
@@ -326,7 +358,7 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (js
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !fresh {
+	if allowCache {
 		if data, ok := c.cacheGet(key); ok {
 			return data, nil
 		}

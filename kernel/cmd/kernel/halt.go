@@ -116,7 +116,7 @@ func (s *server) assertLiveAccountBinding(ctx context.Context, operationID strin
 	if s.tradingMode() != config.ModeLive {
 		return nil
 	}
-	actual, err := s.accountProvider().AccountID(ctx)
+	actual, err := s.authorityAccountProvider().AccountID(ctx)
 	reason := "mismatch"
 	if err != nil {
 		reason = "resolution_failed"

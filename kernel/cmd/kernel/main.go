@@ -29,13 +29,15 @@ import (
 )
 
 type server struct {
-	limits    config.Limits
-	mode      config.ModeConfig
-	account   broker.AccountProvider
-	execution broker.ExecutionProvider
-	market    marketdata.Provider
-	mcpLab    *mcpReadLab
-	simVenue  *broker.Fake
+	limits           config.Limits
+	mode             config.ModeConfig
+	account          broker.AccountProvider
+	authorityAccount broker.AccountProvider
+	execution        broker.ExecutionProvider
+	market           marketdata.Provider
+	authorityMarket  marketdata.Provider
+	mcpLab           *mcpReadLab
+	simVenue         *broker.Fake
 	// broker is a simulation/test compatibility seam. Production construction
 	// leaves it nil and registers read and execution capabilities separately.
 	broker                            broker.Adapter
@@ -163,15 +165,19 @@ func main() {
 	}
 	brokerName := config.Env("BROKER", "fake")
 	var account broker.AccountProvider
+	var authorityAccount broker.AccountProvider
 	var execution broker.ExecutionProvider
 	var market marketdata.Provider
+	var authorityMarket marketdata.Provider
 	var mcpLab *mcpReadLab
 	var simVenue *broker.Fake
 	switch brokerName {
 	case "fake":
 		simVenue = broker.NewFake(units.MustMicros("300"))
 		account, execution = simVenue, simVenue
+		authorityAccount = simVenue
 		market = marketdata.NewFakeProvider(simVenue)
+		authorityMarket = market
 	case "robinhood":
 		if mode.LiveAccountID == "" {
 			log.Fatalf("broker: LIVE_ACCOUNT_ID is required for Robinhood reads")
@@ -196,6 +202,17 @@ func main() {
 			log.Fatalf("broker: %v", err)
 		}
 		account = robinhoodAccount
+		authorityClient, err := rhmcp.NewAuthorityClient(client)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+		authorityRobinhoodAccount, err := broker.NewRobinhood(authorityClient, mode.LiveAccountID)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+		authorityAccount = authorityRobinhoodAccount
 		mcpLab, err = newMCPReadLab(client, mode.LiveAccountID, snapshot)
 		if err != nil {
 			_ = client.Close()
@@ -207,6 +224,12 @@ func main() {
 			log.Fatalf("broker: %v", err)
 		}
 		market = robinhoodMarket
+		authorityRobinhoodMarket, err := marketdata.NewRobinhoodProvider(authorityClient, client, snapshot.Version)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("broker: %v", err)
+		}
+		authorityMarket = authorityRobinhoodMarket
 		if mode.TradingMode == config.ModeLive {
 			mutation, mutationErr := rhmcp.NewMutation(rhmcp.Config{
 				TokenFile: config.Env("RH_MCP_TOKEN_FILE", ""),
@@ -215,7 +238,7 @@ func main() {
 				_ = client.Close()
 				log.Fatalf("broker: %v", mutationErr)
 			}
-			execution, err = broker.NewRobinhoodExecution(robinhoodAccount, mutation, robinhoodMarket)
+			execution, err = broker.NewRobinhoodExecution(authorityRobinhoodAccount, mutation, authorityRobinhoodMarket)
 			if err != nil {
 				_ = mutation.Close()
 				_ = client.Close()
@@ -293,7 +316,8 @@ func main() {
 		}
 	}
 	s := &server{
-		limits: limits, mode: mode, account: account, execution: execution, market: market,
+		limits: limits, mode: mode, account: account, authorityAccount: authorityAccount,
+		execution: execution, market: market, authorityMarket: authorityMarket,
 		mcpLab: mcpLab, simVenue: simVenue, broker: compatibilityBroker(simVenue), store: st,
 		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
@@ -601,7 +625,7 @@ func (s *server) providerRealizedPnL(ctx context.Context, shadow bool, marketDay
 	if shadow {
 		return nil, nil
 	}
-	provider, ok := s.accountProvider().(broker.RealizedPnLProvider)
+	provider, ok := s.authorityAccountProvider().(broker.RealizedPnLProvider)
 	if !ok {
 		return nil, nil
 	}
@@ -639,6 +663,16 @@ func (s *server) accountProvider() broker.AccountProvider {
 	return s.broker
 }
 
+// authorityAccountProvider is the only account capability eligible to support
+// a Live decision or broker-effect reconciliation. Production wiring supplies
+// a non-cacheable Provider; fake/test wiring naturally falls back to account.
+func (s *server) authorityAccountProvider() broker.AccountProvider {
+	if s.authorityAccount != nil {
+		return s.authorityAccount
+	}
+	return s.accountProvider()
+}
+
 func (s *server) executionProvider() broker.ExecutionProvider {
 	if s.execution != nil {
 		return s.execution
@@ -664,6 +698,15 @@ func (s *server) marketProvider() marketdata.Provider {
 		return marketdata.NewFakeProvider(fake)
 	}
 	return nil
+}
+
+// authorityMarketProvider is the non-cacheable market capability for Live
+// decisions. Cached market data remains available only through marketProvider.
+func (s *server) authorityMarketProvider() marketdata.Provider {
+	if s.authorityMarket != nil {
+		return s.authorityMarket
+	}
+	return s.marketProvider()
 }
 
 func (s *server) getState(w http.ResponseWriter, r *http.Request) {
@@ -842,22 +885,19 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if sym == "" {
 			sym = op.Underlying
 		}
-		quoteParent := r.Context()
+		quoteProvider := s.marketProvider()
 		if s.tradingMode() == config.ModeLive && !op.Shadow {
-			// A money-path decision must cross the Provider transport. Reusing the
-			// interactive cache can turn a healthy live quote into a false stale-
-			// data rejection at the exact moment an order is proposed.
-			quoteParent = rhmcp.WithFreshReads(quoteParent)
+			quoteProvider = s.authorityMarketProvider()
 		}
-		quoteCtx, cancel := context.WithTimeout(quoteParent, s.brokerCallTimeout())
-		q, quoteErr := s.marketProvider().Quote(quoteCtx, sym)
+		quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+		q, quoteErr := quoteProvider.Quote(quoteCtx, sym)
 		cancel()
 		if quoteErr == nil {
 			quote = &q
 		}
 		if op.Action == "close" && s.tradingMode() == config.ModeLive && !op.Shadow {
 			instrumentCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-			instrument, instrumentErr := s.marketProvider().Instrument(instrumentCtx, sym)
+			instrument, instrumentErr := s.authorityMarketProvider().Instrument(instrumentCtx, sym)
 			cancel()
 			if instrumentErr == nil {
 				closeInstrument = &instrument
@@ -921,7 +961,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 				acct, err = s.shadowAccountSnapshotWithLimits(r.Context(), gate, effectiveLimits)
 			} else {
 				accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-				acct, err = s.accountProvider().Account(accountCtx)
+				acct, err = s.authorityAccountProvider().Account(accountCtx)
 				cancel()
 			}
 			if err != nil {
@@ -993,7 +1033,7 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 					// in-memory Provider read is non-networked, so refresh under the symbol
 					// gate to preserve the same no-reversal invariant as Live.
 					positionsCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-					positions, err = s.accountProvider().Positions(positionsCtx)
+					positions, err = s.authorityAccountProvider().Positions(positionsCtx)
 					cancel()
 					if err != nil {
 						return fmt.Errorf("%w: positions", errBrokerDataUnavailable)
@@ -2368,7 +2408,7 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 		op.Multiplier = 1
 		if s.tradingMode() == config.ModeLive && !op.Shadow {
 			instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-			instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
+			instrument, err := s.authorityMarketProvider().Instrument(instrumentCtx, symbol)
 			cancel()
 			if err != nil || instrument.Kind != "equity" || instrument.Multiplier != 1 ||
 				!instrument.PrecisionSane() {
@@ -2381,7 +2421,7 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 		}
 	case "option":
 		instrumentCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-		instrument, err := s.marketProvider().Instrument(instrumentCtx, symbol)
+		instrument, err := s.authorityMarketProvider().Instrument(instrumentCtx, symbol)
 		cancel()
 		if err != nil || instrument.Kind != "option" || instrument.Multiplier != 100 ||
 			!instrument.PrecisionSane() {
@@ -2665,7 +2705,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 	}
 	var quote *broker.Quote
 	quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-	freshQuote, quoteErr := s.marketProvider().Quote(quoteCtx, operationSymbol(persisted))
+	freshQuote, quoteErr := s.authorityMarketProvider().Quote(quoteCtx, operationSymbol(persisted))
 	cancel()
 	if quoteErr == nil {
 		quote = &freshQuote
@@ -2723,7 +2763,7 @@ func (s *server) review(w http.ResponseWriter, r *http.Request) {
 			account, err = s.shadowAccountSnapshotWithLimits(r.Context(), gate, markLimits)
 		} else {
 			accountCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
-			account, err = s.accountProvider().Account(accountCtx)
+			account, err = s.authorityAccountProvider().Account(accountCtx)
 			cancel()
 		}
 		if err != nil {

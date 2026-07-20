@@ -261,7 +261,7 @@ func (s *server) repriceLedgerHalted(ctx context.Context, shadow bool, limits co
 			account, err = s.shadowAccountSnapshotWithLimits(ctx, gate, limits)
 		} else {
 			accountCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-			account, err = s.accountProvider().Account(accountCtx)
+			account, err = s.authorityAccountProvider().Account(accountCtx)
 			cancel()
 		}
 		if err != nil {

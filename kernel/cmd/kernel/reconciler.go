@@ -332,7 +332,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			}
 		}
 		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-		quote, err := s.marketProvider().Quote(quoteCtx, operationSymbol(op))
+		quote, err := s.authorityMarketProvider().Quote(quoteCtx, operationSymbol(op))
 		cancel()
 		if err != nil {
 			_, failErr := s.store.FailPendingAttempt(attempt.ID, "market data unavailable during recovery")
@@ -376,7 +376,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 				account, err = s.shadowAccountSnapshotWithLimits(ctx, gate, markLimits)
 			} else {
 				accountCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-				account, err = s.accountProvider().Account(accountCtx)
+				account, err = s.authorityAccountProvider().Account(accountCtx)
 				cancel()
 			}
 			if err != nil {
@@ -419,7 +419,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 			return errors.Join(err, failErr)
 		}
 		quoteCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-		quote, err := s.marketProvider().Quote(quoteCtx, reservation.Symbol)
+		quote, err := s.authorityMarketProvider().Quote(quoteCtx, reservation.Symbol)
 		cancel()
 		quoteMaxAge := minInt(boundLimits.QuoteMaxAgeSec, currentLimits.QuoteMaxAgeSec)
 		if err != nil || !quote.Usable(quoteMaxAge, time.Now().UTC()) {
@@ -450,7 +450,7 @@ func (s *server) reconcilePendingAttempt(ctx context.Context, attempt *store.Exe
 				}
 			} else {
 				positionCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-				positions, err := s.accountProvider().Positions(positionCtx)
+				positions, err := s.authorityAccountProvider().Positions(positionCtx)
 				cancel()
 				if err != nil {
 					return err
@@ -608,7 +608,7 @@ func (s *server) replacementCloseStillCovered(ctx context.Context, attempt *stor
 			}
 		} else {
 			positionCtx, cancel := context.WithTimeout(ctx, s.brokerCallTimeout())
-			positions, err := s.accountProvider().Positions(positionCtx)
+			positions, err := s.authorityAccountProvider().Positions(positionCtx)
 			cancel()
 			if err != nil {
 				return err
