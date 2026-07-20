@@ -258,6 +258,56 @@ pretending that non-unique order attributes are a client identity.
 
 ## M11 gate status
 
+### M11 Canary Stop and Recovery Acceptance — landed 2026-07-20
+
+The owner separately confirmed both production tickets, and both mutations
+were routed through the Alpheus Kernel rather than sent directly through the
+Robinhood MCP.
+
+The first ticket staged one SOFI share as a regular-hours GFD limit order. The
+Kernel created operation `38bc4b8b-009c-4ebe-880c-9afd31166889`, attempt
+`ba66fbfb-dc42-4621-ad39-0b2a6fd9c7d5`, and broker order
+`6a5e708f-5e3e-4f49-bfce-6245793adda4`. The database-fenced Halt cut drove the
+working order to a canonical cancelled terminal state with zero fills and no
+position. Its `$17.12` grant remained consumed as required.
+
+The second, independently confirmed ticket exercised a true regular-hours GFD
+Market buy for one SOFI share with the remaining `$32.88` of the immutable
+daily authority. Kernel operation `9edd30ad-f49b-405e-a809-78a00df08cf1`
+created attempt `ad9f9ce7-24ac-4bb3-a64b-5cd8914581c8` and Provider `ref_id`
+`78b7a8f2-fa49-4691-9c0e-04a2c65c17d3`. Robinhood created broker order
+`6a5e783d-36a0-4869-942f-f817b10213f3` at
+`2026-07-20T19:34:21.1426Z` and filled one share at `$17.09` at
+`2026-07-20T19:34:21.292Z`, with fill id
+`6a5e783d-7d1e-4f2f-bc54-2c54b10e85ef` and zero fees.
+
+The initial Kernel response became `unknown` because Robinhood canonically
+backfilled `price` on the filled Market order, while the adapter expected that
+field to remain null. No retry or second order was sent. Global Halt committed,
+the exact bounded pull produced one candidate, and the Admin recovery flow
+adopted that exact broker order. Commit `2d1b66b` accepts a positive canonical
+execution price for a filled Market order without changing the original Market
+intent matcher. Commit `65492f1` supplies the guarded equity Market path, and
+commit `23a1a13` supplies the database-fenced Halt resume used before the
+separately confirmed effect.
+
+Final acceptance evidence showed the operation `executed`, attempt `settled`,
+one local order, one local fill, a converted reservation with zero remaining
+quantity/risk/cash, `$17.09` Live open risk, no open broker order, an empty
+`live_execution_gate`, and no control warning. The two irreversible daily
+grants total exactly `$50`. The account intentionally retains one SOFI share at
+an average `$17.09`; no closing trade was authorized. Global Halt remains
+committed and the deployed Kernel returned to `read_only` with mutations
+disabled. Exact order/fill origin is `alpheus`; aggregate position origin
+remains conservatively `ambiguous` because the Provider position object lacks
+an order/fill identity, which is an observability limitation rather than an
+unreconciled money-path effect.
+
+This satisfies the frozen one-share production Canary and v1.7 stop/recovery
+acceptance against the post-K1/B0 Kernel. M11 is `LANDED`. This evidence does
+not certify option mutation, automatic Robinhood replay, or Agent Live
+activation, and does not itself activate AP13.
+
 ### v1.8.1 canary policy authority — landed
 
 Commit `d24b8b9` lands K0. Migration 0010 distinguishes legacy descriptive rows
@@ -363,26 +413,24 @@ metadata gate and commit `319f657` wires the equity-only adapter behind explicit
 live startup controls. The isolated no-order live-mode startup certification
 passes. The v1.7 local recovery hardening above and its acceptance evidence had
 to land before a canary. Commit `0913010` satisfies that non-money gate and
-commit `d24b8b9` satisfies K0 database authority. Only the separately confirmed
-canary remains before M11 can be marked landed:
+commit `d24b8b9` satisfies K0 database authority. The separately confirmed
+canary described above subsequently landed M11:
 
-Plan amendment v1.9.1 records that Canary as explicitly deferred. K1, B0 and
-non-money AP0–AP12 work may proceed while production remains read-only, but no
-such work changes M11 to landed or permits AP13+. The eventual Canary runs
-against the final applicable post-K1/B0 Kernel.
+Plan amendment v1.9.1 records the historical deferral that allowed K1, B0 and
+non-money AP0–AP12 work to proceed. Amendment v1.9.3 records completion against
+the final applicable post-K1/B0 Kernel. Landing M11 removes only that specific
+AP13 prerequisite; it does not activate Agent Live or waive any other gate.
 
-1. The first Alpheus-routed live canary remains a separate human-confirmed
-   action. Its trade ticket must be exactly one share and remain within the
-   active immutable $50/five-day authority. Direct MCP evidence is not silently
-   treated as the acceptance order.
-2. The currently running Robinhood deployment remains `read_only`; do not
-   change its mode or restart it as part of documentation work.
+1. The Alpheus-routed live canary was separately human-confirmed, used exactly
+   one share per ticket, and remained within the active immutable $50/five-day
+   authority. Direct MCP evidence was not treated as the acceptance order.
+2. The running Robinhood deployment has returned to `read_only`; documentation
+   work must not restart it or issue another mutation.
 3. Option placement produced only unknown/zero-order negative evidence. The
    production constructor is equity-only; option placement and recovery remain
    closed pending separate evidence and certification.
 
-No additional real-money probe is authorized by this implementation or by the
-completion of the earlier bounded evidence ticket.
+No additional real-money probe is authorized by this acceptance record.
 
 Verified placement deduplication prevents a second broker effect when the exact
 same ref and intent are replayed, but it does not by itself solve accounting:

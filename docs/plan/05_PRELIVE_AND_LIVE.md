@@ -327,3 +327,25 @@ authorizes no order. K1, B0 and non-money AP0–AP12 work may continue under
 zero production broker mutations. The exact M11 Canary and this phase's full
 stop/recovery acceptance remain mandatory before AP13 or any later Agent Live
 stage and must run against the final applicable post-K1/B0 Kernel.
+
+## Amendment v1.9.3 — real Canary accepted
+
+On 2026-07-20 the owner separately confirmed two one-share SOFI tickets routed
+through the post-K1/B0 Alpheus Kernel. The first was a working limit order that
+the fenced Halt procedure cancelled with zero fill. The second was a true
+Market order that Robinhood filled once at `$17.09`. A canonical response-shape
+gap initially left the second attempt `unknown`; no retry occurred, Halt stayed
+committed, an exact bounded pull returned one candidate, and the existing Admin
+flow adopted it into one durable order, one fill, converted exposure and an
+empty Live gate. The adapter correction is `2d1b66b`; guarded Market support is
+`65492f1`; fenced Halt resume is `23a1a13`.
+
+Both irreversible grants total exactly the active `$50` daily Canary cap. The
+final deployment is `read_only` with global Halt committed, mutations disabled
+and no control warnings. The account intentionally retains the one filled SOFI
+share; a later sale would be a new separately authorized operation, not Canary
+rollback. The full evidence is recorded in `../M11_PROVIDER_GAP.md`.
+
+M11 is therefore `LANDED`. This supersedes only the historical deferral status
+in v1.9.1. Option mutation and automatic Robinhood replay remain uncertified,
+and landing M11 does not itself activate AP13 or waive its other prerequisites.

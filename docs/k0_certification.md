@@ -3,6 +3,10 @@
 Status: **LANDED** in `d24b8b9`; exact target-database bootstrap and read-only
 deployment certified on 2026-07-18.
 
+Post-certification status: plan amendment v1.9.3 landed the separately
+confirmed M11 Canary on 2026-07-20. Historical deferred-status statements below
+describe the K0 certification boundary at the time and are not current status.
+
 K0 is a non-money control-plane repair. Its deployment CLI does not construct a
 Provider or submit, query, or cancel a broker order. The later target deployment
 certification restarted the Kernel only in `read_only` and used authenticated

@@ -1,8 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
 > Status: **LEAN V1 FROZEN — AP0 NON-MONEY ACCEPTED; AP1-1 CONTRACTS COMPLETE,
-> AP1 NOT ACCEPTED; M11
-> CANARY DEFERRED; AP13+ withheld pending M11 landing**
+> AP1 NOT ACCEPTED; M11 LANDED; AGENT LIVE NOT ACTIVATED**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -91,9 +90,11 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Keep M11 `CANARY DEFERRED`, production read-only, and AP13+ closed under
-   plan amendment v1.9.1. The real Canary will run later against the final
-   applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
+1. M11 landed under plan amendment v1.9.3 after the separately confirmed
+   post-K1/B0 Canary and stop/recovery acceptance. Keep production read-only
+   and global Halt committed. M11 landing satisfies only that AP13 prerequisite;
+   Agent Live remains closed until every AP13 entry gate is separately accepted
+   and activated.
 2. K1, B0, Lean v1, the Charter closeout, refreshed AP0 audit, and AP0-1
    through AP0-6 are complete. The accepted AP0 release is bound to source
    `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest

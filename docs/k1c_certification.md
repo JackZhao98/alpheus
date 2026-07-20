@@ -5,6 +5,10 @@ isolated PostgreSQL 16 and FakeBroker Compose projects. The production stack
 remained `read_only`; no production database, deployment, account or broker
 mutation was performed.
 
+Post-certification status: plan amendment v1.9.3 landed the separately
+confirmed M11 Canary on 2026-07-20. Historical deferred-status statements below
+describe the K1C certification boundary at the time and are not current status.
+
 ## Durable completed-day evidence
 
 Migration 0019 adds an immutable typed `live_canary_day_attestation`. A row

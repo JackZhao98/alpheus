@@ -4,9 +4,9 @@
 
 > Amendment: **v1.9**
 >
-> Status: **FROZEN ARCHITECTURE; amendment v1.9.1 permits B0 after the M11
-> non-money gate and requires it before AP0; the real Canary remains required
-> before AP13**
+> Status: **FROZEN ARCHITECTURE; amendment v1.9.1 permitted B0 after the M11
+> non-money gate and required it before AP0; amendment v1.9.3 has since landed
+> the post-B0 real Canary without activating AP13**
 >
 > Scope: coexistence with orders, fills, and positions changed outside Alpheus;
 > final Provider-fact refresh before a broker mutation; ownership and audit of

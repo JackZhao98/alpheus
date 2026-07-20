@@ -12,6 +12,11 @@
 >
 > Authorization: **AP0 NON-MONEY IMPLEMENTATION AUTHORIZED**
 
+> Post-audit status amendment v1.9.3: the separately confirmed post-K1/B0 M11
+> Canary and stop/recovery acceptance landed on 2026-07-20. Production returned
+> to `read_only` with global Halt committed. This closes R-02 but does not
+> activate AP13 or alter the audit's non-money AP0 authorization.
+
 ## 1. Decision
 
 This document incorporates the previous full-topology audit and the focused
@@ -44,8 +49,9 @@ AP0 non-money implementation is authorized. The Kernel clock blocker is closed,
 its complete certification is green, K1 and B0 are landed, Lean v1 is frozen,
 and the Charter closeout is recorded by plan amendment v1.9.2. AP0 authorizes
 no Runtime operation emission, GRACE model, Delegation grant, production
-activation or Live effect. Amendment v1.9.1 keeps the separately confirmed
-Canary as an AP13+ gate while preserving M11 as non-landed.
+activation or Live effect. Amendment v1.9.1 historically kept the separately
+confirmed Canary as an AP13+ gate; amendment v1.9.3 records that M11 has since
+landed without activating Agent Live.
 
 ## 2. Scope and method
 
@@ -232,31 +238,18 @@ Closure evidence includes:
 The production Robinhood deployment remained read-only and was neither joined
 nor restarted. R-01 is no longer an open release blocker.
 
-### R-02 — M11 canary stop/recovery evidence is incomplete
+### R-02 — CLOSED: M11 canary stop/recovery evidence
 
-The Kernel plan index marks M11 `CANARY DEFERRED`. The production deployment
-remains read-only, and the first Alpheus-routed one-share Live canary still needs
-its separately confirmed exact ticket. Plan amendments v1.7 (`5df440c`) and
-v1.8 (`4328327`) now define the missing pre-canary code gates: bounded same-ref
-recovery, transactional Live admission/Halt serialization and database-
-authoritative canary policy. Recovery/Halt and its non-money acceptance landed
-in `0913010`; K0 database canary authority and its non-money acceptance landed
-in `d24b8b9` without a production Provider call.
-
-The target database bootstrap and read-only deployment were subsequently
-completed under separate explicit owner authorization: version 10, authority
-revision/generation `1/1`, `$50`/five days, no broker mutation, and zero
-attempt/order/fill/current-day grant/open-risk/unknown effect. Amendment v1.9.1
-permits K1, B0 and later non-money AP0–AP12 work to proceed without treating
-that evidence as a Canary pass. Before AP13, under a fresh confirmation, execute
-only the already specified one-share equity canary against the final applicable
-post-K1/B0 Kernel. Halt new risk, preserve the Live recovery adapter,
-reconcile/adopt/cancel or ingest every real order/fill/position/PnL fact, prove
-the gate/accounting clean, and only then return deployment to `read_only`. A
-real fill is never rolled back; any reduction is a new Kernel-verified effect.
-Mark M11 `LANDED` only if every frozen acceptance item passes. This audit did
-not authorize the target-database mutation; the later owner instruction did.
-It still authorizes no real-money order.
+Amendment v1.9.3 records the separately confirmed post-K1/B0 production
+acceptance. A one-share working SOFI limit was cancelled unfilled through the
+fenced Halt path. A separately confirmed one-share SOFI Market order filled
+exactly once at `$17.09`; a canonical Provider response mismatch stopped retry,
+entered `unknown`, and was resolved by exact candidate adoption into one durable
+order/fill and settled accounting. The two irreversible grants total the exact
+`$50` authority. Final Live gate and warnings were empty, and production
+returned to `read_only` with global Halt committed. M11 is `LANDED`; Agent Live,
+options and automatic Robinhood replay remain closed. Full identifiers and
+evidence are in `../M11_PROVIDER_GAP.md`.
 
 ### R-03 — CLOSED: Agent Platform Charter amendment
 
@@ -303,7 +296,7 @@ The frozen Lean v1 sequence is the current rollout order:
 M11 non-money/deferred gate -> K1 + B0 -> Lean v1 freeze
 -> Charter/audit closeout -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
--> AP9 || AP10 -> AP11 -> AP12 -> M11 Canary/LANDED
+-> AP9 || AP10 -> AP11 -> AP12 -> M11 Canary/LANDED (now complete)
 -> AP13 -> AP14 -> AP15
 ```
 
@@ -328,7 +321,7 @@ AP0_NON_MONEY_STATUS: AUTHORIZED
 
 AP0 non-money implementation may begin from this frozen governance state and
 the explicit owner decision. M11 recovery/Halt, K0, K1 and B0 are committed and
-certified, while the target deployment remains read-only. The one-share Canary
-is explicitly deferred and neither this audit nor the Lean amendment authorizes
-that order. AP0 cannot emit operations or activate GRACE, Delegation or Live;
-M11 landing additionally precedes AP13.
+certified. Amendment v1.9.3 subsequently landed the one-share Canary and
+returned the target deployment to read-only with global Halt committed. AP0
+cannot emit operations or activate GRACE, Delegation or Live; M11 now satisfies
+only its specific AP13 prerequisite, while all other AP13 gates remain.

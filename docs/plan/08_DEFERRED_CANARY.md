@@ -4,12 +4,17 @@
 
 > Amendment: **v1.9.1**
 >
-> Status: **FROZEN SEQUENCING AMENDMENT**
+> Status: **HISTORICAL — SUPERSEDED BY v1.9.3 ACCEPTANCE**
 >
 > Scope: defer the real one-share M11 Canary without treating it as passed, and
 > permit independently safe non-money Kernel and Agent Platform work to
 > continue. This amendment authorizes no broker mutation and weakens no Live
 > gate.
+
+> Completion: on 2026-07-20 the separately confirmed Alpheus-routed Canary and
+> stop/recovery acceptance passed against the post-K1/B0 Kernel. M11 is now
+> `LANDED`; see `../M11_PROVIDER_GAP.md`. This file remains as the historical
+> record explaining why non-money development was allowed during deferral.
 
 ## 1. Evidence and decision
 
@@ -146,3 +151,19 @@ Before AP0 implementation begins, automated/document checks must prove:
 - no requirement to keep redesigning while a market window is unavailable;
   and
 - no requirement that M11 precede code whose acceptance has zero broker effect.
+
+## 8. Completion record — v1.9.3
+
+The historical deferral ended on 2026-07-20. Two separately confirmed,
+one-share SOFI tickets consumed exactly the immutable `$50` daily authority.
+The working limit order was cancelled unfilled through the fenced Kernel
+control path. The true Market order filled once at `$17.09`; a canonical
+response-shape mismatch correctly stopped retry, entered `unknown`, and was
+resolved by exact candidate adoption with no duplicate order. Final state had
+one durable order/fill, settled accounting, an empty Live gate and no control
+warning, after which the deployment returned to `read_only` with global Halt
+committed.
+
+This completion changes M11 from `CANARY DEFERRED` to `LANDED` and removes that
+single prerequisite from AP13. It does not activate Agent Live, certify option
+mutation or automatic Robinhood replay, or satisfy any other AP13 prerequisite.

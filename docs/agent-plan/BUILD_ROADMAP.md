@@ -65,10 +65,10 @@ a second scheduler or proposer, otherwise one trigger could create two effects.
 
 All of the following are required:
 
-- the M11 non-money gate in
-  [`../plan/08_DEFERRED_CANARY.md`](../plan/08_DEFERRED_CANARY.md) is complete,
-  M11 is explicitly `CANARY DEFERRED`, and the production deployment remains
-  read-only; the real Canary is an AP13 gate, not an AP0 implementation gate;
+- the historical M11 non-money gate in
+  [`../plan/08_DEFERRED_CANARY.md`](../plan/08_DEFERRED_CANARY.md) was complete
+  before AP0 began; amendment v1.9.3 has since landed the real Canary while the
+  production deployment remains read-only and Agent Live remains closed;
 - Kernel policy migration K1 is landed and no migrated business/risk value
   falls back to YAML;
 - Kernel broker-coexistence amendment B0 is landed, so external/manual broker
@@ -180,7 +180,7 @@ historical audit -> M11 non-money gate -> K1 + B0 -> Lean v1 freeze
                           |
                         AP12  end-to-end Shadow
                           |
-          deferred M11 Canary LANDED
+              M11 Canary LANDED
                           |
                         AP13  transitional human-confirmed Live
                           |
@@ -1425,7 +1425,8 @@ conditions are closed:
 
 1. retain landed M11 v1.7.1 recovery/Halt commit `0913010`, v1.8.1 K0
    database-authority commit `d24b8b9`, the target K0/read-only deployment
-   certification, and explicit `CANARY DEFERRED` status; keep AP13+ closed;
+   certification, and the historical v1.9.1 deferral boundary; amendment v1.9.3
+   later lands the Canary without activating AP13;
 2. K1 and B0 are landed;
 3. Lean v1 and the reviewed Agent Platform Charter amendment are frozen; and
 4. the refreshed audit has no unresolved AP0 authority, identity, ordering or
