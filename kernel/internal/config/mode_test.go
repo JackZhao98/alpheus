@@ -19,6 +19,8 @@ func TestModeConfigFailClosed(t *testing.T) {
 		{"live disabled", func() ModeConfig { c := validNonSim(ModeLive); c.LiveTradingEnabled = false; return c }()},
 		{"live missing account", func() ModeConfig { c := validNonSim(ModeLive); c.LiveAccountID = ""; return c }()},
 		{"tokens overlap", func() ModeConfig { c := validNonSim(ModeShadow); c.AdminToken = c.RuntimeToken; return c }()},
+		{"agent password without key", ModeConfig{TradingMode: ModeSim, AgentWebPassword: "long-enough-password"}},
+		{"agent password too short", ModeConfig{TradingMode: ModeSim, AgentWebPassword: "short", AgentWebSessionKey: "12345678901234567890123456789012"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,6 +34,9 @@ func TestModeConfigFailClosed(t *testing.T) {
 func TestModeConfigAcceptsSafeModes(t *testing.T) {
 	if err := (ModeConfig{TradingMode: ModeSim}).Validate(); err != nil {
 		t.Fatalf("sim: %v", err)
+	}
+	if err := (ModeConfig{TradingMode: ModeSim, AgentWebPassword: "long-enough-password", AgentWebSessionKey: "12345678901234567890123456789012"}).Validate(); err != nil {
+		t.Fatalf("agent web config: %v", err)
 	}
 	for _, mode := range []string{ModeShadow, ModeReadOnly, ModeLive} {
 		if err := validNonSim(mode).Validate(); err != nil {

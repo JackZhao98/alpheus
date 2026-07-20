@@ -21,6 +21,8 @@ type ModeConfig struct {
 	RuntimeToken       string `json:"-" yaml:"-"`
 	AdminToken         string `json:"-" yaml:"-"`
 	KernelToken        string `json:"-" yaml:"-"`
+	AgentWebPassword   string `json:"-" yaml:"-"`
+	AgentWebSessionKey string `json:"-" yaml:"-"`
 	LiveTradingEnabled bool
 	LiveAccountID      string `json:"-" yaml:"-"`
 }
@@ -36,6 +38,8 @@ func LoadModeConfig() (ModeConfig, error) {
 		RuntimeToken:       osValue("RUNTIME_TOKEN"),
 		AdminToken:         osValue("ADMIN_TOKEN"),
 		KernelToken:        osValue("KERNEL_TOKEN"),
+		AgentWebPassword:   osValue("AGENT_WEB_PASSWORD"),
+		AgentWebSessionKey: osValue("AGENT_WEB_SESSION_KEY"),
 		LiveTradingEnabled: strings.EqualFold(strings.TrimSpace(osValue("LIVE_TRADING_ENABLED")), "true"),
 		LiveAccountID:      liveAccountID,
 	}
@@ -106,6 +110,15 @@ func (c ModeConfig) Validate() error {
 		if c.LiveAccountID == "" {
 			return fmt.Errorf("LIVE_ACCOUNT_ID required in live mode")
 		}
+	}
+	if (c.AgentWebPassword == "") != (c.AgentWebSessionKey == "") {
+		return fmt.Errorf("AGENT_WEB_PASSWORD and AGENT_WEB_SESSION_KEY must be set together")
+	}
+	if c.AgentWebPassword != "" && len(c.AgentWebPassword) < 12 {
+		return fmt.Errorf("AGENT_WEB_PASSWORD must contain at least 12 bytes")
+	}
+	if c.AgentWebSessionKey != "" && len(c.AgentWebSessionKey) < 32 {
+		return fmt.Errorf("AGENT_WEB_SESSION_KEY must contain at least 32 bytes")
 	}
 	return nil
 }

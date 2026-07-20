@@ -478,28 +478,6 @@ async function runManualQuery() {
   }
 }
 
-async function runAgentQuery() {
-  const symbol = byId("agent-symbol").value.trim().toUpperCase();
-  const query = byId("agent-question").value.trim();
-  if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !query) throw new Error("Enter a valid symbol and question.");
-  byId("agent-query-run").disabled = true;
-  setText("agent-query-status", "SCOUT WORKING");
-  setPanelError("agent-query-error", "");
-  try {
-    const result = await api("/agent/query", {
-      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbol, query})
-    });
-    byId("agent-query-result").textContent = JSON.stringify(result, null, 2);
-    setText("agent-query-status", "COMPLETE · NO OPERATION");
-  } catch (error) {
-    byId("agent-query-result").textContent = "No result returned.";
-    setText("agent-query-status", "FAILED CLOSED");
-    setPanelError("agent-query-error", error.message === "AUTH_REQUIRED" ? "Enter a valid read token above." : error.message);
-  } finally {
-    byId("agent-query-run").disabled = false;
-  }
-}
-
 function selectedMCPTool() {
   return mcpTools.find((tool) => tool.name === byId("mcp-tool").value) || null;
 }
@@ -674,11 +652,6 @@ byId("operations-more").addEventListener("click", async () => {
 byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try { await runManualQuery(); } catch (error) { setText("query-status", "CHECK INPUT"); setPanelError("query-error", error.message); }
-});
-
-byId("agent-query-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try { await runAgentQuery(); } catch (error) { setText("agent-query-status", "CHECK INPUT"); setPanelError("agent-query-error", error.message); }
 });
 
 byId("query-clear").addEventListener("click", () => {

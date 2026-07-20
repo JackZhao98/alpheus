@@ -13,6 +13,12 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /cockpit", serveCockpitFile("index.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /assets/cockpit.css", serveCockpitFile("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /assets/cockpit.js", serveCockpitFile("app.js", "application/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /agent-lab", serveCockpitFile("agent-lab.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /assets/agent-lab.css", serveCockpitFile("agent-lab.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /assets/agent-lab.js", serveCockpitFile("agent-lab.js", "application/javascript; charset=utf-8"))
+	mux.HandleFunc("POST /agent/auth/login", s.postAgentLogin)
+	mux.HandleFunc("GET /agent/auth/session", s.getAgentSession)
+	mux.HandleFunc("POST /agent/auth/logout", s.postAgentLogout)
 	mux.HandleFunc("GET /limits", s.authorize(permissionRead, s.getLimits))
 	mux.HandleFunc("GET /auth/capabilities", s.authorize(permissionRead, s.getAuthCapabilities))
 	mux.HandleFunc("GET /state", s.authorize(permissionRead, s.getState))
@@ -30,7 +36,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /provider/status", s.authorize(permissionRead, s.getProviderStatus))
 	mux.HandleFunc("GET /mcp/read-tools", s.authorize(permissionRead, s.getMCPReadTools))
 	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))
-	mux.HandleFunc("POST /agent/query", s.authorize(permissionRead, s.postAgentQuery))
+	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(s.postAgentQuery))
 
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)

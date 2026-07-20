@@ -34,10 +34,10 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	})}
 	st := newMemoryStore()
 	s := &server{
-		mode:  config.ModeConfig{TradingMode: config.ModeSim, KernelToken: "kernel-secret"},
+		mode:  config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret"},
 		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
 	}
-	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"sofi","query":"值得研究吗？"}`, "")
+	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"sofi","query":"值得研究吗？"}`, "runtime-secret")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"role":"scout"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
