@@ -7,7 +7,8 @@
 > Status: normative ownership model; implementation is split into the narrow
 > M11 blocker and the post-M11-non-money/pre-AP0 migration below. Amendment
 > v1.9.1 historically permitted K1 while the real Canary was deferred;
-> amendment v1.9.3 has since landed M11. See
+> amendment v1.9.3 landed the scoped Canary, and v1.9.4 subsequently reopened
+> M11 execution acceptance. See
 > [`08_DEFERRED_CANARY.md`](08_DEFERRED_CANARY.md).
 
 ## Why this amendment exists

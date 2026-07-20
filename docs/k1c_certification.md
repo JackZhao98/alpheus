@@ -8,6 +8,8 @@ mutation was performed.
 Post-certification status: plan amendment v1.9.3 landed the separately
 confirmed M11 Canary on 2026-07-20. Historical deferred-status statements below
 describe the K1C certification boundary at the time and are not current status.
+Amendment v1.9.4 subsequently reopened M11 execution acceptance; K1C itself
+remains landed.
 
 ## Durable completed-day evidence
 

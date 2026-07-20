@@ -258,6 +258,29 @@ pretending that non-unique order attributes are a client identity.
 
 ## M11 gate status
 
+### v1.9.4 execution-core incident — acceptance reopened
+
+After the v1.9.3 evidence below, the first separately previewed and confirmed
+working close exposed an uncovered interaction. Operation
+`552b1515-c1a1-48bb-9d32-f2b03d59461b` placed one SOFI sell limit at `$18`.
+The default repricer cancelled and replaced that order at the same price three
+times before containment. There was never more than one active sell and no fill
+occurred. Returning the deployment to `read_only` with the working order then
+panicked because production construction boxed a nil FakeBroker into a non-nil
+compatibility interface.
+
+Commit `776635a` disables repricing for explicit close limits and fixes the
+typed-nil construction. The deployed Kernel returned healthy in `read_only`,
+with global Halt committed and an empty Live execution gate. These fixes do not
+erase the acceptance gap: v1.9.3 did not prove static order intent, a complete
+working-order lifecycle, or read-only restart before claiming M11 landed.
+
+M11 is therefore `IN PROGRESS`. Relanding requires the minimal deterministic
+submit/query/cancel/fill/partial-fill/expiry/restart matrix, static execution by
+default, explicit opt-in for any managed repricing, recorded real-shape Provider
+fixtures, and exactly one broker effect per authorization. AP13, Option Live,
+automatic Robinhood replay and additional production probes remain blocked.
+
 ### M11 Canary Stop and Recovery Acceptance — landed 2026-07-20
 
 The owner separately confirmed both production tickets, and both mutations
@@ -303,10 +326,11 @@ remains conservatively `ambiguous` because the Provider position object lacks
 an order/fill identity, which is an observability limitation rather than an
 unreconciled money-path effect.
 
-This satisfies the frozen one-share production Canary and v1.7 stop/recovery
-acceptance against the post-K1/B0 Kernel. M11 is `LANDED`. This evidence does
-not certify option mutation, automatic Robinhood replay, or Agent Live
-activation, and does not itself activate AP13.
+This satisfied the then-scoped one-share production Canary and v1.7
+stop/recovery acceptance against the post-K1/B0 Kernel. Amendment v1.9.4
+subsequently reopened M11 after the uncovered working-close lifecycle. This
+evidence remains historical fact but no longer establishes current `LANDED`
+status.
 
 ### v1.8.1 canary policy authority — landed
 

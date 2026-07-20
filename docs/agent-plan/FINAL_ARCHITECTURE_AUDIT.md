@@ -17,6 +17,10 @@
 > to `read_only` with global Halt committed. This closes R-02 but does not
 > activate AP13 or alter the audit's non-money AP0 authorization.
 
+> Post-audit status amendment v1.9.4: R-02 is reopened after the first working
+> close exposed implicit same-price cancel/replace and a read-only startup
+> panic. M11 is `IN PROGRESS`; AP13 and all Agent Live effects remain blocked.
+
 ## 1. Decision
 
 This document incorporates the previous full-topology audit and the focused
@@ -238,7 +242,7 @@ Closure evidence includes:
 The production Robinhood deployment remained read-only and was neither joined
 nor restarted. R-01 is no longer an open release blocker.
 
-### R-02 — CLOSED: M11 canary stop/recovery evidence
+### R-02 — REOPENED: M11 deterministic execution lifecycle
 
 Amendment v1.9.3 records the separately confirmed post-K1/B0 production
 acceptance. A one-share working SOFI limit was cancelled unfilled through the
@@ -250,6 +254,12 @@ order/fill and settled accounting. The two irreversible grants total the exact
 returned to `read_only` with global Halt committed. M11 is `LANDED`; Agent Live,
 options and automatic Robinhood replay remain closed. Full identifiers and
 evidence are in `../M11_PROVIDER_GAP.md`.
+
+Amendment v1.9.4 supersedes the closure status, not those historical facts. The
+first working explicit close limit was repeatedly cancelled and replaced at the
+same price by an implicitly enabled repricer, and read-only restart with that
+order panicked through a typed-nil Broker interface. M11 is `IN PROGRESS` until
+the minimal static-by-default lifecycle matrix passes. AP13 remains closed.
 
 ### R-03 — CLOSED: Agent Platform Charter amendment
 
@@ -296,7 +306,7 @@ The frozen Lean v1 sequence is the current rollout order:
 M11 non-money/deferred gate -> K1 + B0 -> Lean v1 freeze
 -> Charter/audit closeout -> AP0 -> AP1
 -> AP2 || AP3 -> AP4 -> AP5 -> AP6 -> AP7 -> AP8
--> AP9 || AP10 -> AP11 -> AP12 -> M11 Canary/LANDED (now complete)
+-> AP9 || AP10 -> AP11 -> AP12 -> M11 deterministic recertification
 -> AP13 -> AP14 -> AP15
 ```
 
@@ -322,6 +332,7 @@ AP0_NON_MONEY_STATUS: AUTHORIZED
 AP0 non-money implementation may begin from this frozen governance state and
 the explicit owner decision. M11 recovery/Halt, K0, K1 and B0 are committed and
 certified. Amendment v1.9.3 subsequently landed the one-share Canary and
-returned the target deployment to read-only with global Halt committed. AP0
-cannot emit operations or activate GRACE, Delegation or Live; M11 now satisfies
-only its specific AP13 prerequisite, while all other AP13 gates remain.
+returned the target deployment to read-only with global Halt committed.
+Amendment v1.9.4 then reopened M11 execution acceptance. AP0 cannot emit
+operations or activate GRACE, Delegation or Live; AP13 remains blocked pending
+M11 recertification and all of its other gates.

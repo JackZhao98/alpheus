@@ -349,3 +349,27 @@ rollback. The full evidence is recorded in `../M11_PROVIDER_GAP.md`.
 M11 is therefore `LANDED`. This supersedes only the historical deferral status
 in v1.9.1. Option mutation and automatic Robinhood replay remain uncertified,
 and landing M11 does not itself activate AP13 or waive its other prerequisites.
+
+## Amendment v1.9.4 — execution-core acceptance reopened
+
+The v1.9.3 Market canary and recovery facts remain accurate, but the subsequent
+first owner-directed working close lifecycle exposed two interactions outside
+that acceptance. Kernel operation `552b1515-c1a1-48bb-9d32-f2b03d59461b`
+placed one SOFI sell limit at `$18`; the implicit repricer then cancelled and
+replaced the same-price order three times. At no point were two sells active and
+no fill occurred, but a user-selected static price must not authorize hidden
+cancel/replace effects. A later return to `read_only` with the working order
+panicked because a nil FakeBroker was boxed into a non-nil execution interface.
+
+Commit `776635a` makes explicit close limits static and prevents the typed-nil
+production compatibility adapter. Those repairs are necessary but not by
+themselves new production acceptance. M11 returns to `IN PROGRESS` until one
+deterministic matrix covers static Limit buy/sell submission, query, cancel,
+fill, partial fill, expiry, working-order restart, and read-only observation,
+with exactly one broker effect per authorized request. Market response-shape
+fixtures must cover working and terminal price forms. Repricing becomes
+explicit opt-in rather than an implicit property of every eligible Limit.
+
+Production remains `read_only` with global Halt committed. AP13, autonomous
+Live, Option mutation and additional real-money probes remain closed pending a
+new owner decision after non-money certification.

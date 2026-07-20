@@ -4,17 +4,17 @@
 
 > Amendment: **v1.9.1**
 >
-> Status: **HISTORICAL — SUPERSEDED BY v1.9.3 ACCEPTANCE**
+> Status: **HISTORICAL — v1.9.3 ACCEPTANCE REOPENED BY v1.9.4**
 >
 > Scope: defer the real one-share M11 Canary without treating it as passed, and
 > permit independently safe non-money Kernel and Agent Platform work to
 > continue. This amendment authorizes no broker mutation and weakens no Live
 > gate.
 
-> Completion: on 2026-07-20 the separately confirmed Alpheus-routed Canary and
-> stop/recovery acceptance passed against the post-K1/B0 Kernel. M11 is now
-> `LANDED`; see `../M11_PROVIDER_GAP.md`. This file remains as the historical
-> record explaining why non-money development was allowed during deferral.
+> Completion history: on 2026-07-20 the separately confirmed Alpheus-routed
+> Canary and stop/recovery acceptance passed against the post-K1/B0 Kernel.
+> Amendment v1.9.4 later reopened M11 after an uncovered working-close
+> lifecycle. See `../M11_PROVIDER_GAP.md`.
 
 ## 1. Evidence and decision
 
@@ -167,3 +167,11 @@ committed.
 This completion changes M11 from `CANARY DEFERRED` to `LANDED` and removes that
 single prerequisite from AP13. It does not activate Agent Live, certify option
 mutation or automatic Robinhood replay, or satisfy any other AP13 prerequisite.
+
+## 9. Reopened acceptance — v1.9.4
+
+The v1.9.3 evidence did not cover implicit repricing or read-only restart while
+a real close limit remained working. The first such lifecycle produced repeated
+same-price cancel/replace effects and a typed-nil Broker startup panic. Although
+no duplicate active order or fill occurred, M11 returns to `IN PROGRESS` until
+the minimal execution lifecycle is recertified. AP13 remains blocked.
