@@ -269,7 +269,7 @@ func (value Attempt) Validate() error {
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
 		value.Ordinal <= 0 || !knownAttemptState(value.State) || value.StateGeneration <= 0 ||
 		value.Lease.Validate() != nil || !orderedUTC(value.CreatedAt, value.UpdatedAt) ||
-		value.CreatedAt.Before(value.Lease.ClaimedAt) || value.UpdatedAt.Before(value.Lease.HeartbeatAt) {
+		value.Lease.ClaimedAt.Before(value.CreatedAt) || value.UpdatedAt.Before(value.Lease.HeartbeatAt) {
 		return ErrInvalidRuntime
 	}
 	needsResult := value.State == AttemptResultCommitted

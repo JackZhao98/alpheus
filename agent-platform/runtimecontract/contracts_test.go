@@ -270,6 +270,25 @@ func TestContractsFailClosed(t *testing.T) {
 		}
 	})
 
+	t.Run("reclaimed lease may follow attempt creation", func(t *testing.T) {
+		value := validFixture().attempt
+		value.Lease.Generation++
+		value.Lease.Token = "lease-2"
+		value.Lease.ClaimedAt = value.CreatedAt.Add(time.Minute)
+		value.Lease.HeartbeatAt = value.Lease.ClaimedAt
+		if err := value.Validate(); err != nil {
+			t.Fatalf("reclaimed lease was rejected: %v", err)
+		}
+	})
+
+	t.Run("lease cannot predate attempt creation", func(t *testing.T) {
+		value := validFixture().attempt
+		value.Lease.ClaimedAt = value.CreatedAt.Add(-time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("lease predating attempt creation passed")
+		}
+	})
+
 	t.Run("unknown turn update cannot predate dispatch", func(t *testing.T) {
 		value := validFixture().turn
 		value.State = TurnUnknown
