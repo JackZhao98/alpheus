@@ -122,7 +122,7 @@ func equityOrdersFixture(quantity, price, state string) json.RawMessage {
 }
 
 func equityMarketOrdersFixture() json.RawMessage {
-	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"filled","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"1","price":null,"stop_price":null,"average_price":"100.1","reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"market","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[{"id":"%s","quantity":"1","price":"100.1","fees":"0.01","timestamp":"2026-07-17T20:00:01Z"}]}],"next":""},"guide":"fixture"}`,
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"filled","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"1","price":"100.1","stop_price":null,"average_price":"100.1","reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"market","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[{"id":"%s","quantity":"1","price":"100.1","fees":"0.01","timestamp":"2026-07-17T20:00:01Z"}]}],"next":""},"guide":"fixture"}`,
 		executionOrderID, executionEquity, executionFillID))
 }
 

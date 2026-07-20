@@ -96,7 +96,10 @@ func (r *RobinhoodExecution) PlaceOrder(ctx context.Context, req PlaceRequest) (
 			return OrderResult{}, fmt.Errorf("canonical equity placement unavailable")
 		}
 		order := orders[0]
-		priceMatches := req.OrderType == "market" && order.Price == nil
+		// Robinhood omits price while a market order is working, then may
+		// backfill it with the execution price once terminal. Price is therefore
+		// result data, not part of a market-order intent match.
+		priceMatches := req.OrderType == "market"
 		if req.OrderType == "limit" {
 			priceMatches = order.Price != nil && *order.Price == req.Limit
 		}
@@ -239,7 +242,7 @@ func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query
 			order.MarketHours == "" || order.Trigger == "" || order.PlacedAgent == "" {
 			return nil, robinhoodSchemaError(r.read.caller, "equity candidate schema drift")
 		}
-		priceMatches := intent.OrderType == "market" && order.Price == nil
+		priceMatches := intent.OrderType == "market"
 		if intent.OrderType == "limit" {
 			priceMatches = order.Price != nil && *order.Price == intent.Limit
 		}
@@ -333,7 +336,8 @@ func (r *RobinhoodExecution) readOptionOrder(ctx context.Context, brokerOrderID 
 }
 
 func normalizeEquityOrder(caller rhmcp.Caller, order equityReadOrder) (OrderResult, error) {
-	priceSane := order.Type == "market" && order.Trigger == "immediate" && order.Price == nil
+	priceSane := order.Type == "market" && order.Trigger == "immediate" &&
+		(order.Price == nil || *order.Price > 0)
 	if order.Type == "limit" && order.Trigger == "immediate" {
 		priceSane = order.Price != nil && *order.Price > 0
 	}
