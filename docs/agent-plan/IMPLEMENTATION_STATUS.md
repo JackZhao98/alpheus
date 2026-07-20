@@ -10,9 +10,10 @@
   corrected source `6c276e9`, evidence seal `628b717`, and release digest
   `0614bf77...932d1da2`.
 - AP1-1's durable Runtime contract freeze is complete at `df73161`, with its
-  persistence-blocking contract correction at `006e623` and exact
-  OwnerPolicy/OutputContract canonical sources at `fef99de`; AP1 is not
-  accepted and no Runtime behavior or effect is enabled.
+  persistence-blocking contract correction at `006e623`, exact
+  OwnerPolicy/OutputContract canonical sources at `fef99de`, and reclaimed
+  Attempt lease chronology correction at `d23215c`; AP1 is not accepted and no
+  Runtime behavior or effect is enabled.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money
@@ -38,7 +39,7 @@ milestones and not independent authorization gates.
 
 | Packet | Status | Scope |
 |---|---|---|
-| AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced attempts and leases, replay-safe model dispatch/result/unknown commands, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
+| AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
 | AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions landed at `bce88cc` after AP0 historical certification was frozen at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, and JSON OutputContract definitions are durable, exact-reference-bound, immutable/default-deny, and effect `none`; runtime state, narrow role-derived command functions, idempotency, generation and lease fencing, atomic budget accounting, cancellation, and recovery remain in progress. |
 | AP1-3 Control Plane and bounded Worker execution | Not started | Integrate the existing `agent-runtime` deployable with AP1 persistence; no second service, operation emission, Provider/broker access or Live effect. |
 | AP1-4 crash/concurrency acceptance and stage seal | Not started | Race, crash-window, duplicate-delivery, stale-lease, budget, cancellation, recovery and non-money acceptance evidence. |

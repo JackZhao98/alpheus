@@ -99,8 +99,9 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest
    `0614bf7764e9d684e05e63c587f3fdf6c77c91589ce87e7d6ea5295c932d1da2`.
    AP1-1's detailed Runtime contract pack was frozen at `df73161`, its
-   persistence-blocking seams were corrected at `006e623`, and the exact
-   OwnerPolicy/OutputContract canonical sources landed at `fef99de`. Historical
+   persistence-blocking seams were corrected at `006e623`, the exact
+   OwnerPolicy/OutputContract canonical sources landed at `fef99de`, and
+   reclaimed Attempt lease chronology was corrected at `d23215c`. Historical
    AP0 certification was isolated from later-stage files at `714bee2`, and
    AP1-2's immutable/default-deny definition storage landed at `bce88cc`.
    Runtime state and narrow transactional commands remain in progress.
