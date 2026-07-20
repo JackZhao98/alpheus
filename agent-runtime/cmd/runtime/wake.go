@@ -182,7 +182,11 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 			wakeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent query failed"})
 			return
 		}
-		wakeJSON(w, http.StatusOK, map[string]any{"role": role.Role, "output": output})
+		wakeJSON(w, http.StatusOK, map[string]any{
+			"role":      role.Role,
+			"cognition": env("COGNITION", "stub"),
+			"output":    output,
+		})
 	})
 	return mux
 }

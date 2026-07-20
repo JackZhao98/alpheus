@@ -62,7 +62,9 @@ byId("query-form").addEventListener("submit", async (event) => {
       method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbol, query})
     });
     byId("result").textContent = JSON.stringify(result, null, 2);
-    byId("status").textContent = "COMPLETE · NO OPERATION";
+    byId("status").textContent = result.cognition === "stub"
+      ? "STUB PASS · MODEL NOT CONNECTED"
+      : "COMPLETE · NO OPERATION";
   } catch (error) {
     if (error.message === "unauthorized") showAuthenticated(false);
     byId("result").textContent = "No result returned.";

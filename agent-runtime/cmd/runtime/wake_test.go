@@ -156,6 +156,9 @@ func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
 	if response["role"] != "scout" {
 		t.Fatalf("response=%v", response)
 	}
+	if response["cognition"] != "stub" {
+		t.Fatalf("response=%v", response)
+	}
 }
 
 func authenticatedWakeRequest(body string) *http.Request {
