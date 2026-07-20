@@ -19,11 +19,16 @@
   Runtime state landed at `7671762`, and its first transactional lease slice
   landed at `95a1af2`. Durable model-call dispatch, unknown containment,
   reconciliation, budget settlement, and expired-dispatch same-Attempt recovery
-  landed at `4f3a082`. Its database surface now lets a correctly provisioned
+  landed at `4f3a082`. Atomic Attempt completion/failure, immutable non-effect
+  Artifact retention, disabled publication intent creation, retry/dead-letter
+  settlement, and final-fence race containment landed at `9ea1c04`. Its
+  database surface now lets a correctly provisioned
   Worker claim, start, and heartbeat durable non-money Tasks and transact exact
-  model-call facts. No deployed Worker uses it yet; there is still no model
-  adapter or network call, and completion/failure, child-task, cancellation,
-  and recovery commands remain absent, so the system cannot call a model or
+  model-call and terminalization facts. No deployed Worker uses it yet; there
+  is still no model adapter or network call, and child-task, cancellation, and
+  recovery commands remain absent. Custom OutputContract bytes are not yet
+  trusted-validated: a Control-service validation receipt is required before
+  any Artifact may be consumed downstream. The system cannot call a model or
   produce an external effect.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
@@ -51,7 +56,7 @@ milestones and not independent authorization gates.
 | Packet | Status | Scope |
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
-| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; AP0 historical certification isolated at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Role-derived claim/start/heartbeat and model-call dispatch/unknown/resolve transactions enforce strict raw JSON, exact idempotency and Blob lineage, current admission at dispatch, root-to-leaf budget reservation/settlement, lease fences, cross-Run identity serialization, same-Attempt ambiguity recovery, Worker-only grants, and canonical transition events. Completion/failure, child-task, cancellation, and recovery commands remain in progress. |
+| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; AP0 historical certification isolated at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Role-derived claim/start/heartbeat, model-call dispatch/unknown/resolve, and Attempt commit/fail transactions enforce strict raw JSON, exact idempotency and Blob lineage, current admission at dispatch, root-to-leaf budget reservation/settlement, final database-time fences, persistent Artifact Blob bindings, exact slot release, retry/dead-letter accounting, Worker-only grants, and canonical transition events. Trusted OutputContract byte-validation receipts, child-task, cancellation, and recovery commands remain in progress. |
 | AP1-3 Control Plane and bounded Worker execution | Not started | Integrate the existing `agent-runtime` deployable with AP1 persistence; no second service, operation emission, Provider/broker access or Live effect. |
 | AP1-4 crash/concurrency acceptance and stage seal | Not started | Race, crash-window, duplicate-delivery, stale-lease, budget, cancellation, recovery and non-money acceptance evidence. |
 
@@ -141,6 +146,18 @@ denies with no Turn, Manifest, or budget delta. Maximum legal identifiers and
 Manifest, Result, and RuntimeEvent digests are independently revalidated by the
 Go canonicalization CLI. The probe invokes no model, Provider, Kernel,
 operation, or broker path and retains effect ceiling `none`.
+
+The AP1 Attempt-terminalization probe upgrades through migration 0008 and
+verifies exact Result/OutputContract lineage, immutable Artifact and persistent
+Blob bindings, disabled publication, success/failure/retry/dead-letter state,
+single active-slot release, strict Worker-only ACLs, and cross-language
+Artifact/publication digests. A 20-way mixed commit/fail barrier produces one
+winner and 19 durable denials. Held budget and Result locks force requests past
+their lease or command deadline and prove the final fence leaves no state or
+event delta. Conflicting Blob metadata, unresolved Turns, missing Blobs, stale
+fences, and malformed retry semantics fail closed. This slice remains effect
+`none`; it does not validate custom OutputContract bytes or enable downstream
+Artifact consumption.
 
 The governance probe exercises all three typed head families, immutable
 revision/receipt/event records, owner-versus-Activator role isolation,
