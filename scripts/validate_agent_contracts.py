@@ -39,6 +39,7 @@ CONTRACT_TYPES = {
     ("alpheus.governance", "platform_mode_revision.json"): "platform_mode_revision",
     ("alpheus.runtime", "artifact_nonmoney.json"): "artifact",
     ("alpheus.runtime", "claim_task_command.json"): "claim_task_command",
+    ("alpheus.runtime", "commit_attempt_nonmoney.json"): "commit_attempt_command",
     ("alpheus.runtime", "fail_attempt_retryable.json"): "fail_attempt_command",
     ("alpheus.runtime", "output_contract_revision.json"): "output_contract_revision",
     ("alpheus.runtime", "publication_disabled.json"): "artifact_publication_intent",
