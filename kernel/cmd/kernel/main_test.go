@@ -2180,12 +2180,12 @@ func (m *memoryStore) PutBlackboard(day string, doc json.RawMessage) error {
 	return nil
 }
 
-func (m *memoryStore) CreateAgentQueryJob(subject, symbol, query string) (*store.AgentQueryJob, error) {
+func (m *memoryStore) CreateAgentQueryJob(subject, workflow, symbol, query string) (*store.AgentQueryJob, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
 	job := store.AgentQueryJob{
-		ID: store.NewID(), Subject: subject, Symbol: symbol, Query: query,
+		ID: store.NewID(), Subject: subject, Workflow: workflow, Symbol: symbol, Query: query,
 		Status: "queued", CreatedAt: now, UpdatedAt: now,
 	}
 	m.agentQueryJobs[job.ID] = job

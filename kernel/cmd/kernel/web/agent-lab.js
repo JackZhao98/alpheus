@@ -50,10 +50,10 @@ byId("logout").addEventListener("click", async () => {
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function waitForAgentQuery(job) {
-  const deadline = Date.now() + 180000;
+  const deadline = Date.now() + 300000;
   while (job.status === "queued" || job.status === "running") {
-    if (Date.now() >= deadline) throw new Error("Scout 仍在运行，请稍后重试。");
-    byId("status").textContent = job.status === "queued" ? "SCOUT QUEUED" : "SCOUT WORKING";
+    if (Date.now() >= deadline) throw new Error("Agent Team 仍在运行，请稍后重试。");
+    byId("status").textContent = job.status === "queued" ? "QUERY QUEUED" : "AGENTS WORKING";
     await wait(750);
     job = await request(`/agent/query-jobs/${encodeURIComponent(job.id)}`);
   }
@@ -63,6 +63,7 @@ async function waitForAgentQuery(job) {
 byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const symbol = byId("symbol").value.trim().toUpperCase();
+  const workflow = byId("workflow").value;
   const query = byId("question").value.trim();
   const openaiToken = byId("openai-token").value.trim();
   if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !query) {
@@ -80,7 +81,7 @@ byId("query-form").addEventListener("submit", async (event) => {
   try {
     let job = await request("/agent/query", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({symbol, query, openai_api_key:openaiToken})
+      body:JSON.stringify({workflow, symbol, query, openai_api_key:openaiToken})
     });
     job = await waitForAgentQuery(job);
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");

@@ -48,6 +48,20 @@ func testRole() roles.Role {
 	}
 }
 
+func TestNewOpenAIQueryForTierBindsOnlyRequestedTier(t *testing.T) {
+	cog, err := NewOpenAIQueryForTier("sk-test", "decider", "gpt-5.6-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm, ok := cog.(*LLM)
+	if !ok || llm.models["decider"] != "gpt-5.6-sol" || len(llm.models) != 1 {
+		t.Fatalf("cognition=%T models=%v", cog, llm.models)
+	}
+	if _, err := NewOpenAIQueryForTier("sk-test", "unknown", "gpt-5.6-sol"); err == nil {
+		t.Fatal("unknown model tier accepted")
+	}
+}
+
 func testContext() map[string]json.RawMessage {
 	return map[string]json.RawMessage{
 		"today":      json.RawMessage(`"2026-07-17"`),

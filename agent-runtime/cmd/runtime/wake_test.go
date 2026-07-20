@@ -138,9 +138,10 @@ func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
 		"scout": {Role: "scout"},
 	}, func(roles.Role, string, string) {
 		t.Fatal("query must not run the operation session path")
-	}, func(role roles.Role, symbol, query, apiKey string) (queryResult, error) {
+	}, func(workflow, symbol, query, apiKey string) (queryResult, error) {
 		gotSymbol, gotQuery, gotAPIKey = symbol, query, apiKey
 		return queryResult{
+			Role: "scout", Workflow: workflow,
 			Output:    contracts.OpportunityBrief{Action: "PASS"},
 			Cognition: "llm", Provider: "openai", Model: "gpt-5.6-sol",
 		}, nil
@@ -158,6 +159,9 @@ func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response["role"] != "scout" {
+		t.Fatalf("response=%v", response)
+	}
+	if response["workflow"] != "scout" {
 		t.Fatalf("response=%v", response)
 	}
 	if response["cognition"] != "llm" || response["provider"] != "openai" || response["model"] != "gpt-5.6-sol" {

@@ -9,6 +9,7 @@ import (
 type AgentQueryJob struct {
 	ID        string          `json:"id"`
 	Subject   string          `json:"-"`
+	Workflow  string          `json:"workflow"`
 	Symbol    string          `json:"symbol"`
 	Query     string          `json:"-"`
 	Status    string          `json:"status"`
@@ -18,17 +19,17 @@ type AgentQueryJob struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-const agentQueryJobColumns = `id::text,authenticated_subject,symbol,query,status,
+const agentQueryJobColumns = `id::text,authenticated_subject,workflow,symbol,query,status,
 	result::text,error_code,created_at,updated_at`
 
-func (s *Store) CreateAgentQueryJob(subject, symbol, query string) (*AgentQueryJob, error) {
+func (s *Store) CreateAgentQueryJob(subject, workflow, symbol, query string) (*AgentQueryJob, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
 	job := &AgentQueryJob{ID: NewID()}
 	row := s.DB.QueryRowContext(ctx, `INSERT INTO agent_query_job
-		(id,authenticated_subject,symbol,query,status)
-		VALUES ($1,$2,$3,$4,'queued') RETURNING `+agentQueryJobColumns,
-		job.ID, subject, symbol, query)
+		(id,authenticated_subject,workflow,symbol,query,status)
+		VALUES ($1,$2,$3,$4,$5,'queued') RETURNING `+agentQueryJobColumns,
+		job.ID, subject, workflow, symbol, query)
 	if err := scanAgentQueryJob(row, job); err != nil {
 		return nil, normalizeDBError(err)
 	}
@@ -83,7 +84,7 @@ type agentQueryJobScanner interface {
 
 func scanAgentQueryJob(row agentQueryJobScanner, job *AgentQueryJob) error {
 	var result, errorCode sql.NullString
-	if err := row.Scan(&job.ID, &job.Subject, &job.Symbol, &job.Query, &job.Status,
+	if err := row.Scan(&job.ID, &job.Subject, &job.Workflow, &job.Symbol, &job.Query, &job.Status,
 		&result, &errorCode, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		return err
 	}

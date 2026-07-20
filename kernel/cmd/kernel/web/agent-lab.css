@@ -20,8 +20,8 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .field-note { margin:0 0 4px; color:#86a59a; font-size:12px; line-height:1.5; }
 form { display:grid; gap:10px; }
 label { margin-top:8px; color:#c4d9d0; font-size:14px; font-weight:700; }
-input,textarea,button { width:100%; border-radius:10px; border:1px solid #335d50; font:inherit; }
-input,textarea { padding:13px 14px; background:#071713; color:#f5fffb; }
+input,textarea,select,button { width:100%; border-radius:10px; border:1px solid #335d50; font:inherit; }
+input,textarea,select { padding:13px 14px; background:#071713; color:#f5fffb; }
 textarea { resize:vertical; }
 button { margin-top:10px; padding:13px 16px; background:#3bd79f; color:#04120d; border:0; font-weight:850; cursor:pointer; }
 button:disabled { opacity:.55; cursor:wait; }

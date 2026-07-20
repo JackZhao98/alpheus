@@ -63,32 +63,8 @@ func main() {
 	}
 	wakeHandler := newRuntimeHandler(kernelToken, roleByName, func(role roles.Role, trigger, occurrenceID string) {
 		go runSession(client, cog, role, trigger, occurrenceID)
-	}, func(role roles.Role, symbol, question, openAIAPIKey string) (queryResult, error) {
-		ctx, err := client.AssembleQuery(role, symbol, question)
-		if err != nil {
-			return queryResult{}, err
-		}
-		queryCog := cog
-		result := queryResult{Cognition: env("COGNITION", "stub")}
-		if openAIAPIKey != "" {
-			model := env("MONITOR_MODEL", "gpt-5.6-sol")
-			queryCog, err = cognition.NewOpenAIQuery(openAIAPIKey, model, cognition.WithTelemetry(telemetrySink))
-			if err != nil {
-				return queryResult{}, err
-			}
-			result.Cognition = "llm"
-			result.Provider = "openai"
-			result.Model = model
-		}
-		out, err := queryCog.Run(role, ctx)
-		if err != nil {
-			return queryResult{}, err
-		}
-		if err := out.Validate(); err != nil {
-			return queryResult{}, err
-		}
-		result.Output = out
-		return result, nil
+	}, func(workflow, symbol, question, openAIAPIKey string) (queryResult, error) {
+		return runManualQuery(client, cog, roleByName, workflow, symbol, question, openAIAPIKey, telemetrySink)
 	})
 	log.Printf("agent-runtime up: roles=%v cognition=%s kernel=%s", names, env("COGNITION", "stub"), kernel)
 	if tick > 0 {
@@ -101,6 +77,80 @@ func main() {
 	if err := http.ListenAndServe(addr, wakeHandler); err != nil {
 		log.Fatalf("wake server: %v", err)
 	}
+}
+
+func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleByName map[string]roles.Role,
+	workflow, symbol, question, openAIAPIKey string, telemetry func(cognition.Telemetry) error) (queryResult, error) {
+	scout, ok := roleByName["scout"]
+	if !ok {
+		return queryResult{}, fmt.Errorf("scout unavailable")
+	}
+	scoutContext, err := client.AssembleQuery(scout, symbol, question)
+	if err != nil {
+		return queryResult{}, err
+	}
+	scoutCog := fallback
+	monitorModel := ""
+	result := queryResult{Role: scout.Role, Workflow: workflow, Cognition: env("COGNITION", "stub")}
+	if openAIAPIKey != "" {
+		monitorModel = env("MONITOR_MODEL", "gpt-5.6-sol")
+		scoutCog, err = cognition.NewOpenAIQueryForTier(openAIAPIKey, "monitor", monitorModel, cognition.WithTelemetry(telemetry))
+		if err != nil {
+			return queryResult{}, err
+		}
+		result.Cognition, result.Provider, result.Model = "llm", "openai", monitorModel
+	}
+	scoutOutput, err := scoutCog.Run(scout, scoutContext)
+	if err != nil {
+		return queryResult{}, err
+	}
+	if err := scoutOutput.Validate(); err != nil {
+		return queryResult{}, err
+	}
+	if workflow == "scout" {
+		result.Output = scoutOutput
+		return result, nil
+	}
+
+	desk, ok := roleByName["desk_master"]
+	if !ok {
+		return queryResult{}, fmt.Errorf("decision desk unavailable")
+	}
+	deskContext, err := client.Assemble(desk)
+	if err != nil {
+		return queryResult{}, err
+	}
+	deskContext["user_query"] = scoutContext["user_query"]
+	deskContext["symbol"] = scoutContext["symbol"]
+	scoutBrief, err := json.Marshal(scoutOutput)
+	if err != nil {
+		return queryResult{}, err
+	}
+	deskContext["scout_brief"] = scoutBrief
+	deskCog := fallback
+	if openAIAPIKey != "" {
+		deciderModel := env("DECIDER_MODEL", "gpt-5.6-sol")
+		deskCog, err = cognition.NewOpenAIQueryForTier(openAIAPIKey, "decider", deciderModel, cognition.WithTelemetry(telemetry))
+		if err != nil {
+			return queryResult{}, err
+		}
+		result.Model = deciderModel
+	}
+	deskOutput, err := deskCog.Run(desk, deskContext)
+	if err != nil {
+		return queryResult{}, err
+	}
+	if err := deskOutput.Validate(); err != nil {
+		return queryResult{}, err
+	}
+	decision, ok := deskOutput.(contracts.DeskDecision)
+	if !ok || decision.Action == "PROPOSE" || len(decision.Proposals) != 0 || len(decision.BlackboardPatch) != 0 {
+		return queryResult{}, fmt.Errorf("read-only decision desk attempted a mutation or proposal")
+	}
+	result.Role = desk.Role
+	result.Output = decision
+	result.ScoutOutput = scoutOutput
+	return result, nil
 }
 
 func runTickFallback(client *assemble.Client, cog cognition.Cognition, rs []roles.Role, interval time.Duration) {

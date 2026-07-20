@@ -198,10 +198,21 @@ func newLLMFromEnvironment(sink telemetrySink) (*LLM, error) {
 // initiated query. The API key is retained only by this short-lived value and
 // is never copied into environment variables, telemetry, or persisted state.
 func NewOpenAIQuery(apiKey, model string, opts ...Option) (Cognition, error) {
+	return NewOpenAIQueryForTier(apiKey, "monitor", model, opts...)
+}
+
+// NewOpenAIQueryForTier constructs one short-lived, page-token-backed model
+// adapter for the requested role tier. It exists only for the manual query
+// workflow and never mutates process-wide provider configuration.
+func NewOpenAIQueryForTier(apiKey, tier, model string, opts ...Option) (Cognition, error) {
 	apiKey = strings.TrimSpace(apiKey)
+	tier = strings.TrimSpace(tier)
 	model = strings.TrimSpace(model)
 	if apiKey == "" {
 		return nil, errors.New("OpenAI API key is required")
+	}
+	if tier != "monitor" && tier != "decider" {
+		return nil, errors.New("OpenAI model tier must be monitor or decider")
 	}
 	if model == "" {
 		return nil, errors.New("OpenAI model is required")
@@ -210,7 +221,7 @@ func NewOpenAIQuery(apiKey, model string, opts ...Option) (Cognition, error) {
 	for _, option := range opts {
 		option(&cfg)
 	}
-	return newConfiguredLLM(newOpenAITransport(apiKey), map[string]string{"monitor": model}, cfg.telemetry)
+	return newConfiguredLLM(newOpenAITransport(apiKey), map[string]string{tier: model}, cfg.telemetry)
 }
 
 func newConfiguredLLM(transport completionTransport, models map[string]string, sink telemetrySink) (*LLM, error) {

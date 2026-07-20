@@ -24,13 +24,13 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			t.Fatal(err)
 		}
-		if input.Symbol != "SOFI" || input.Query != "值得研究吗？" || input.OpenAIAPIKey != "sk-test-secret" {
+		if input.Workflow != "team" || input.Symbol != "SOFI" || input.Query != "值得研究吗？" || input.OpenAIAPIKey != "sk-test-secret" {
 			t.Fatalf("input=%+v", input)
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"role":"scout","cognition":"llm","provider":"openai","model":"gpt-5.6-sol","output":{"action":"PASS","candidates":[],"structural_notes":[]}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"role":"desk_master","workflow":"team","cognition":"llm","provider":"openai","model":"gpt-5.6-sol","scout_output":{"action":"PASS","candidates":[],"structural_notes":[]},"output":{"action":"PASS","reasoning":"insufficient evidence","proposals":[],"watch_triggers":[],"blackboard_patch":{}}}`)),
 			Request:    r,
 		}, nil
 	})}
@@ -39,12 +39,12 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 		mode:  config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret"},
 		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
 	}
-	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"sofi","query":"值得研究吗？","openai_api_key":"sk-test-secret"}`, "runtime-secret")
+	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"workflow":"team","symbol":"sofi","query":"值得研究吗？","openai_api_key":"sk-test-secret"}`, "runtime-secret")
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var submitted store.AgentQueryJob
-	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil || submitted.ID == "" || submitted.Status != "queued" {
+	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil || submitted.ID == "" || submitted.Workflow != "team" || submitted.Status != "queued" {
 		t.Fatalf("submitted=%+v err=%v", submitted, err)
 	}
 	var completed store.AgentQueryJob
@@ -62,7 +62,7 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if completed.Status != "succeeded" || !strings.Contains(string(completed.Result), `"role":"scout"`) {
+	if completed.Status != "succeeded" || !strings.Contains(string(completed.Result), `"role":"desk_master"`) {
 		t.Fatalf("completed=%+v", completed)
 	}
 	hasEvent := false

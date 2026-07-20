@@ -21,13 +21,16 @@ const maxQueryBodyBytes int64 = 16 << 10
 const maxWakeDedupEntries = 4096
 
 type queryResult struct {
-	Output    contracts.Output
-	Cognition string
-	Provider  string
-	Model     string
+	Role        string
+	Workflow    string
+	Output      contracts.Output
+	ScoutOutput contracts.Output
+	Cognition   string
+	Provider    string
+	Model       string
 }
 
-type queryRunner func(roles.Role, string, string, string) (queryResult, error)
+type queryRunner func(string, string, string, string) (queryResult, error)
 
 type wakeDeduper struct {
 	mu   sync.Mutex
@@ -162,6 +165,7 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxQueryBodyBytes)
 		var in struct {
+			Workflow     string `json:"workflow"`
 			Symbol       string `json:"symbol"`
 			Query        string `json:"query"`
 			OpenAIAPIKey string `json:"openai_api_key"`
@@ -185,23 +189,31 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid OpenAI API token"})
 			return
 		}
-		role, ok := roleByName["scout"]
-		if !ok {
-			wakeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "scout unavailable"})
+		in.Workflow = strings.TrimSpace(in.Workflow)
+		if in.Workflow == "" {
+			in.Workflow = "scout"
+		}
+		if in.Workflow != "scout" && in.Workflow != "team" {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "workflow must be scout or team"})
 			return
 		}
-		result, err := query(role, in.Symbol, in.Query, in.OpenAIAPIKey)
+		result, err := query(in.Workflow, in.Symbol, in.Query, in.OpenAIAPIKey)
 		if err != nil {
 			wakeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent query failed"})
 			return
 		}
-		wakeJSON(w, http.StatusOK, map[string]any{
-			"role":      role.Role,
+		response := map[string]any{
+			"role":      result.Role,
+			"workflow":  result.Workflow,
 			"cognition": result.Cognition,
 			"provider":  result.Provider,
 			"model":     result.Model,
 			"output":    result.Output,
-		})
+		}
+		if result.ScoutOutput != nil {
+			response["scout_output"] = result.ScoutOutput
+		}
+		wakeJSON(w, http.StatusOK, response)
 	})
 	return mux
 }

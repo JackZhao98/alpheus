@@ -13,6 +13,7 @@ import (
 const maxAgentQueryResponseBytes int64 = 1 << 20
 
 type agentQueryInput struct {
+	Workflow     string `json:"workflow"`
 	Symbol       string `json:"symbol"`
 	Query        string `json:"query"`
 	OpenAIAPIKey string `json:"openai_api_key"`
@@ -26,9 +27,13 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Workflow = strings.TrimSpace(input.Workflow)
+	if input.Workflow == "" {
+		input.Workflow = "scout"
+	}
 	input.Query = strings.TrimSpace(input.Query)
 	input.OpenAIAPIKey = strings.TrimSpace(input.OpenAIAPIKey)
-	if !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
+	if (input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and query are required"})
 		return
 	}
@@ -41,7 +46,7 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
 		return
 	}
-	job, err := s.store.CreateAgentQueryJob(authenticatedSubject(r), input.Symbol, input.Query)
+	job, err := s.store.CreateAgentQueryJob(authenticatedSubject(r), input.Workflow, input.Symbol, input.Query)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
 		return
@@ -72,7 +77,7 @@ func (s *server) executeAgentQuery(jobID string, input agentQueryInput) {
 	if err != nil || !started {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 135*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 270*time.Second)
 	defer cancel()
 	result, errorCode := s.callAgentRuntime(ctx, input)
 	if errorCode != "" {
@@ -83,7 +88,7 @@ func (s *server) executeAgentQuery(jobID string, input agentQueryInput) {
 	if err != nil || !completed {
 		return
 	}
-	s.store.Event("agent_query", map[string]string{"role": "scout", "symbol": input.Symbol})
+	s.store.Event("agent_query", map[string]string{"workflow": input.Workflow, "symbol": input.Symbol})
 }
 
 func (s *server) callAgentRuntime(ctx context.Context, input agentQueryInput) (json.RawMessage, string) {
@@ -105,7 +110,7 @@ func (s *server) callAgentRuntime(ctx context.Context, input agentQueryInput) (j
 	}
 	client := s.runtimeHTTP
 	if client == nil {
-		client = &http.Client{Timeout: 130 * time.Second}
+		client = &http.Client{Timeout: 265 * time.Second}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
