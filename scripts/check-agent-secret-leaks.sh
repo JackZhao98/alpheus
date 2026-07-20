@@ -9,6 +9,7 @@ cd "$ROOT"
 targets="agent-platform contracts audit/repro audit/agent docs/agent-plan \
 scripts/certify-agent.sh scripts/test-agent-db-roles.sh scripts/test-agent-blob.sh \
 scripts/test-agent-governance.sh scripts/test-agent-migrations.sh \
+scripts/test-agent-runtime-definitions.sh \
 scripts/validate-agent-contracts.sh scripts/validate_agent_contracts.py \
 scripts/check-agent-nonmoney-boundary.sh scripts/check-agent-secret-leaks.sh"
 pattern='(sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----|postgres(ql)?://[^:/[:space:]]+:[^@[:space:]]+@)'
