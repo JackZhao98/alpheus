@@ -79,6 +79,7 @@ type storeAPI interface {
 	PutBlackboard(day string, doc json.RawMessage) error
 	LoadGlobalHalt() (bool, string, error)
 	ActivateGlobalHalt(reason, subject, mode string) (store.GlobalHaltTransition, error)
+	ResumeGlobalHalt(reason, subject, mode string) (store.GlobalHaltTransition, error)
 	GetExecutionAttempt(id string) (*store.ExecutionAttempt, error)
 	UpdatePendingAttemptLimit(id string, limit units.Micros) (bool, error)
 	ClaimPendingAttempt(id, instance string, leaseDuration time.Duration) (*store.ExecutionAttempt, error)

@@ -42,6 +42,8 @@ var (
 	ErrLiveExecutionBusy          = errors.New("live execution busy")
 	ErrLiveExecutionSuspended     = errors.New("live execution suspended")
 	ErrLiveSendHalted             = errors.New("live send halted")
+	ErrGlobalHaltNotActive        = errors.New("global halt is not active")
+	ErrGlobalHaltExecutionPending = errors.New("global halt has unresolved execution")
 	ErrReplayWindowExpired        = errors.New("replay window expired")
 	ErrPreEffectStale             = errors.New("pre-effect authority stale")
 	ErrInvalidControlWarningQuery = errors.New("invalid control warning query")
@@ -868,6 +870,52 @@ func (s *Store) ActivateGlobalHalt(reason, subject, mode string) (GlobalHaltTran
 		return GlobalHaltTransition{}, normalizeDBError(err)
 	}
 	return transition, nil
+}
+
+// ResumeGlobalHalt clears the database-authoritative kill switch under the
+// same lock used by Halt and every Live placement send. It refuses to reopen
+// admission while an active or unknown Live attempt still exists.
+func (s *Store) ResumeGlobalHalt(reason, subject, mode string) (GlobalHaltTransition, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, globalHaltSendLockKey()); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	halted, previousReason, _, _, err := loadGlobalHalt(ctx, tx)
+	if err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	if !halted {
+		return GlobalHaltTransition{}, ErrGlobalHaltNotActive
+	}
+	var activeID, unknownID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT active_attempt_id,unknown_attempt_id
+		FROM live_execution_gate WHERE singleton=true FOR UPDATE`).Scan(&activeID, &unknownID); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	if activeID.Valid || unknownID.Valid {
+		return GlobalHaltTransition{}, ErrGlobalHaltExecutionPending
+	}
+	var resumedAt time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&resumedAt); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	eventID, err := insertEventWithIDAt(ctx, tx, "global_halt_transition", map[string]any{
+		"halted": false, "reason": reason, "previous_reason": previousReason,
+		"subject": subject, "mode": mode,
+	}, resumedAt)
+	if err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return GlobalHaltTransition{}, normalizeDBError(err)
+	}
+	return GlobalHaltTransition{Reason: reason, EventID: eventID, CutAt: resumedAt}, nil
 }
 
 func loadGlobalHalt(ctx context.Context, db queryRower) (bool, string, int64, time.Time, error) {

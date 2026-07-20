@@ -128,6 +128,18 @@ func TestHaltAndResumeReturnAuditEventIDs(t *testing.T) {
 	if err := json.Unmarshal(halt.Body.Bytes(), &haltBody); err != nil || haltBody["event_id"].(float64) < 1 {
 		t.Fatalf("halt body=%v err=%v", haltBody, err)
 	}
+	globalResume := routeRequest(handler, http.MethodPost, "/halt/resume", `{"reason":"verified clean state"}`, "admin-secret")
+	if globalResume.Code != http.StatusOK || !strings.Contains(globalResume.Body.String(), `"halted":false`) {
+		t.Fatalf("global resume status=%d body=%s", globalResume.Code, globalResume.Body.String())
+	}
+	var globalResumeBody map[string]any
+	if err := json.Unmarshal(globalResume.Body.Bytes(), &globalResumeBody); err != nil || globalResumeBody["event_id"].(float64) <= haltBody["event_id"].(float64) {
+		t.Fatalf("global resume body=%v err=%v", globalResumeBody, err)
+	}
+	again := routeRequest(handler, http.MethodPost, "/halt/resume", `{"reason":"duplicate"}`, "admin-secret")
+	if again.Code != http.StatusConflict || !strings.Contains(again.Body.String(), "global_halt_not_active") {
+		t.Fatalf("duplicate global resume status=%d body=%s", again.Code, again.Body.String())
+	}
 
 	st.mu.Lock()
 	st.breakerStates["live"] = store.BreakerState{Ledger: "live", Halted: true, Reason: "daily_loss", UpdatedAt: time.Now().UTC()}
@@ -139,5 +151,21 @@ func TestHaltAndResumeReturnAuditEventIDs(t *testing.T) {
 	var resumeBody map[string]any
 	if err := json.Unmarshal(resume.Body.Bytes(), &resumeBody); err != nil || resumeBody["event_id"].(float64) < 1 {
 		t.Fatalf("resume body=%v err=%v", resumeBody, err)
+	}
+}
+
+func TestGlobalHaltResumeRefusesUnresolvedLiveAttempt(t *testing.T) {
+	st := newMemoryStore()
+	s := &server{mode: protectedMode(config.ModeLive), store: st, consoleOrigin: defaultConsoleOrigin}
+	handler := s.routes()
+	if halt := routeRequest(handler, http.MethodPost, "/halt", `{"reason":"operator verification"}`, "admin-secret"); halt.Code != http.StatusOK {
+		t.Fatalf("halt status=%d body=%s", halt.Code, halt.Body.String())
+	}
+	st.mu.Lock()
+	st.liveUnknownAttemptID = "11111111-1111-4111-8111-111111111111"
+	st.mu.Unlock()
+	resume := routeRequest(handler, http.MethodPost, "/halt/resume", `{"reason":"unsafe resume"}`, "admin-secret")
+	if resume.Code != http.StatusConflict || !strings.Contains(resume.Body.String(), "global_halt_execution_pending") {
+		t.Fatalf("resume status=%d body=%s", resume.Code, resume.Body.String())
 	}
 }

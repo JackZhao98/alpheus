@@ -53,6 +53,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("PUT /blackboard/{day}", methodNotAllowed)
 		mux.HandleFunc("POST /telemetry", methodNotAllowed)
 		mux.HandleFunc("POST /halt", methodNotAllowed)
+		mux.HandleFunc("POST /halt/resume", methodNotAllowed)
 		mux.HandleFunc("POST /breaker/resume", methodNotAllowed)
 		return mux
 	}
@@ -64,6 +65,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /blackboard/{day}", s.authorize(permissionRuntime, s.putBlackboard))
 	mux.HandleFunc("POST /telemetry", s.authorize(permissionRuntime, s.postTelemetry))
 	mux.HandleFunc("POST /halt", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postHalt)))
+	mux.HandleFunc("POST /halt/resume", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postHaltResume)))
 	mux.HandleFunc("POST /breaker/resume", s.authorize(permissionAdmin, s.requireConsoleOrigin(s.postBreakerResume)))
 	if s.tradingMode() == config.ModeSim || s.tradingMode() == config.ModeShadow {
 		if _, fakeBroker := s.broker.(*broker.Fake); s.simVenue != nil || fakeBroker {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/store"
 )
 
 const globalHaltEvent = "global_halt_transition"
@@ -75,6 +76,40 @@ func (s *server) postHalt(w http.ResponseWriter, r *http.Request) {
 		response["blocked_unsent_attempt_id"] = transition.BlockedUnsentAttemptID
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) postHaltResume(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeJSONBody(w, r, &in) {
+		return
+	}
+	in.Reason = strings.TrimSpace(in.Reason)
+	if in.Reason == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reason is required"})
+		return
+	}
+
+	s.haltMu.Lock()
+	defer s.haltMu.Unlock()
+	transition, err := s.store.ResumeGlobalHalt(in.Reason, authenticatedSubject(r), s.tradingMode())
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrGlobalHaltNotActive):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "global_halt_not_active"})
+		case errors.Is(err, store.ErrGlobalHaltExecutionPending):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "global_halt_execution_pending"})
+		default:
+			writeStoreError(w, "resume global halt", err)
+		}
+		return
+	}
+	s.halted, s.haltReason = false, ""
+	writeJSON(w, http.StatusOK, map[string]any{
+		"halted": false, "reason": transition.Reason, "event_id": transition.EventID,
+		"resumed_at": transition.CutAt,
+	})
 }
 
 func (s *server) assertLiveAccountBinding(ctx context.Context, operationID string) error {

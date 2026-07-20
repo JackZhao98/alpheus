@@ -129,6 +129,7 @@ func TestReadOnlyRoutesReturn405AndLiveDoesNotMountSim(t *testing.T) {
 		{http.MethodPut, "/blackboard/2026-07-17", `{}`},
 		{http.MethodPost, "/telemetry", `{}`},
 		{http.MethodPost, "/halt", `{"reason":"test"}`},
+		{http.MethodPost, "/halt/resume", `{"reason":"test"}`},
 	} {
 		w := routeRequest(readOnly.routes(), request.method, request.path, request.body, "")
 		if w.Code != http.StatusMethodNotAllowed {

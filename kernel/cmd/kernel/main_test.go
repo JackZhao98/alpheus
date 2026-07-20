@@ -356,6 +356,22 @@ func (m *memoryStore) ActivateGlobalHalt(reason, _ string, _ string) (store.Glob
 	return transition, nil
 }
 
+func (m *memoryStore) ResumeGlobalHalt(reason, _ string, _ string) (store.GlobalHaltTransition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.halted {
+		return store.GlobalHaltTransition{}, store.ErrGlobalHaltNotActive
+	}
+	if m.liveActiveAttemptID != "" || m.liveUnknownAttemptID != "" {
+		return store.GlobalHaltTransition{}, store.ErrGlobalHaltExecutionPending
+	}
+	m.events = append(m.events, globalHaltEvent)
+	m.halted, m.haltReason, m.haltedAt = false, "", time.Now().UTC()
+	return store.GlobalHaltTransition{
+		Reason: reason, EventID: int64(len(m.events)), CutAt: m.haltedAt,
+	}, nil
+}
+
 func (m *memoryStore) ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
