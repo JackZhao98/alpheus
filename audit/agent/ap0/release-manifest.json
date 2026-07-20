@@ -1,11 +1,11 @@
 {
   "schema_revision": 1,
   "canonical_profile": "alpheus-c14n-v1",
-  "release_id": "ap0-lean-v1-b026b87",
+  "release_id": "ap0-lean-v1-6c276e9",
   "stage": "AP0",
   "decision": "authorized",
-  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
-  "created_at": "2026-07-19T20:20:16Z",
+  "source_commit": "6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d",
+  "created_at": "2026-07-20T00:07:41Z",
   "authorized_by": {
     "principal_id": "JackZhao98",
     "kind": "user",
@@ -20,17 +20,17 @@
     {"path": "docs/plan/08_DEFERRED_CANARY.md", "digest": "24f64e5dfe53f572581d3d39e8237bee4e6e27b68ed1825694979336c8f35c5a"}
   ],
   "checks": [
-    {"name": "blob_store", "status": "pass", "evidence_digest": "0686d8ced55790f0ff169adca7d4ec2948d3adce10c1f61cc2198fced213e45e"},
-    {"name": "clean_worktree", "status": "pass", "evidence_digest": "6a48dcfeba763b996f684b1bd3f05922e3f19bd44f55c09b24f9916ef2e78453"},
-    {"name": "compose_config", "status": "pass", "evidence_digest": "907648a8ccc536020c87f18d2d8f762ba0dd1fbfb31e9a2705a92627e225da52"},
-    {"name": "contract_schema", "status": "pass", "evidence_digest": "9528b1f57c3c502bdf9814ef51580682bdf55b8a92741bb5f5a0811a21b3362f"},
-    {"name": "db_delivery", "status": "pass", "evidence_digest": "e66e8aceda31cb0f1c7258f3b35bbcf0edf4bbef1b5b01ef17b22893328b7f49"},
-    {"name": "go_test_race", "status": "pass", "evidence_digest": "9f64e44b0808bd3ba9e8aba75d91e2d0eb1f9ede603e0217f2606fca8643e42b"},
-    {"name": "go_vet", "status": "pass", "evidence_digest": "4626126a6229368b58f9c8356bd7679746c514041b927bd2ace71c224ce817f7"},
-    {"name": "gofmt", "status": "pass", "evidence_digest": "39d10092856a65295c2acee4e1a4563e14254362f71ccbe3fe4cb308ea8ee80c"},
-    {"name": "governance", "status": "pass", "evidence_digest": "71063bb3123657886d37b1157daaedbca87911ba2cf18733b631605f9c8abfa8"},
-    {"name": "migration_compatibility", "status": "pass", "evidence_digest": "c25a8986280552750b5b6589ff324df180464169747459e10ed6e517c0c3e659"},
-    {"name": "nonmoney_boundary", "status": "pass", "evidence_digest": "c713191cfc3d537dfb5e6e9943cc2878c4e94c6d76a3bcda7381f021052648a3"},
-    {"name": "secret_leaks", "status": "pass", "evidence_digest": "62847221e382094cc24e44b58a099957153ea5f2a1f27ec8e4861f4cb5392e9b"}
+    {"name": "blob_store", "status": "pass", "evidence_digest": "6e248382e3a8884dca1a1aaf9a06783e95e1a6319dff274714e1f84eaba215de"},
+    {"name": "clean_worktree", "status": "pass", "evidence_digest": "d009c1355e6bb51a3be8b0b7c51bfaa2610abafe62122ebd3fab7c382fc0b059"},
+    {"name": "compose_config", "status": "pass", "evidence_digest": "efd3fe6d82f83e0e165b52d9113f35974626d3b3f00f06c6148884a1a126fbc7"},
+    {"name": "contract_schema", "status": "pass", "evidence_digest": "8783bc0043f33eb9be975d2f97a13252438ea5b27e1d8150722413e3a90ffde3"},
+    {"name": "db_delivery", "status": "pass", "evidence_digest": "312b953d1e2e74edbc9cccbb421d4198bb4c64942983bfa29df1954f45aa0cbd"},
+    {"name": "go_test_race", "status": "pass", "evidence_digest": "8ea7029fcb51a1cd248d5bc767b074a533e31b8bc37d88e6ffa87d48a8e600fd"},
+    {"name": "go_vet", "status": "pass", "evidence_digest": "3d2da162bc70dc2f58ff46477247fa9c5bca96e99135a41cbea9e9ebfe354059"},
+    {"name": "gofmt", "status": "pass", "evidence_digest": "4c4d17bbb6c313263c8353c387dcd9013b6bb789443435900f31a9bd40dea43f"},
+    {"name": "governance", "status": "pass", "evidence_digest": "a807d4e103e50032eacb8001ce7d00cf16af901013b67cc166cb161dee2d44d7"},
+    {"name": "migration_compatibility", "status": "pass", "evidence_digest": "5a8864038a3494bd7d0cb3887a830642f4da5878c2150f6955bc85e04a975cde"},
+    {"name": "nonmoney_boundary", "status": "pass", "evidence_digest": "57929e854d5d1ca7b009bb2587f5e2c9e56462def4b01163d60df8780161e663"},
+    {"name": "secret_leaks", "status": "pass", "evidence_digest": "bd608c97baffa5cf0aaeb67f3617131598d6ab6673b546a22ed2d9918997a7aa"}
   ]
 }

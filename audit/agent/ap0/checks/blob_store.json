@@ -1,10 +1,10 @@
 {
   "schema_revision": 1,
   "stage": "AP0",
-  "source_commit": "b026b87447d054717e6277ee925b126a17515bef",
+  "source_commit": "6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d",
   "seed": "ap0-contract-v1",
   "name": "blob_store",
   "status": "pass",
   "command": "./scripts/test-agent-blob.sh",
-  "assertions": ["acl_and_role_isolation", "bounded_lifecycle_gc", "concurrent_commits_20"]
+  "assertions": ["acl_and_role_isolation", "authenticated_session_identity", "bounded_lifecycle_gc", "concurrent_commits_20", "cross_principal_binding_denied", "owner_and_actor_binding"]
 }
