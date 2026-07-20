@@ -144,9 +144,17 @@ http://127.0.0.1:8100/
 http://127.0.0.1:8100/cockpit
 ```
 
-Cockpit 现在还带一个最小的 `Ask Scout` 预览入口：输入股票代码和问题后，
-Kernel 拉取最新标准化报价与 30 日 bars，Runtime 返回严格类型化的 Scout
-结果。`POST /agent/query` 是只读路径，不能创建 operation；默认 `stub`
+Agent 测试已从 Cockpit 拆到独立页面：
+
+```text
+http://127.0.0.1:8100/agent-lab
+```
+
+设置 `AGENT_WEB_PASSWORD`（至少 12 字节）和独立的
+`AGENT_WEB_SESSION_KEY`（至少 32 字节）后，用户只需输入密码；服务端签发
+12 小时 HttpOnly/SameSite 会话，不必把机器 token 复制进浏览器。输入股票代码
+和问题后，Kernel 拉取最新标准化报价与 30 日 bars，Runtime 返回严格类型化的
+Scout 结果。`POST /agent/query` 是只读路径，不能创建 operation；默认 `stub`
 只返回 `PASS`，配置真实 cognition 后才会产生研究内容。
 
 它显示运行模式、Provider/snapshot 状态、脱敏账户、资金、live/shadow
