@@ -100,6 +100,7 @@ type memoryStore struct {
 	externalControls         map[string]store.ExternalControlEpisode
 	controlTrackedFilled     map[string]units.Qty
 	controlExternalFilled    map[string]units.Qty
+	agentQueryJobs           map[string]store.AgentQueryJob
 }
 
 func newMemoryStore() *memoryStore {
@@ -143,6 +144,7 @@ func newMemoryStore() *memoryStore {
 		externalControls:         map[string]store.ExternalControlEpisode{},
 		controlTrackedFilled:     map[string]units.Qty{},
 		controlExternalFilled:    map[string]units.Qty{},
+		agentQueryJobs:           map[string]store.AgentQueryJob{},
 		eventPayloads:            map[string][]any{},
 		dayOpenEquity:            map[string]units.Micros{},
 		realizedPnL:              map[string]units.Micros{},
@@ -2176,6 +2178,68 @@ func (m *memoryStore) PutBlackboard(day string, doc json.RawMessage) error {
 	defer m.mu.Unlock()
 	m.blackboards[day] = append(json.RawMessage(nil), doc...)
 	return nil
+}
+
+func (m *memoryStore) CreateAgentQueryJob(subject, symbol, query string) (*store.AgentQueryJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	job := store.AgentQueryJob{
+		ID: store.NewID(), Subject: subject, Symbol: symbol, Query: query,
+		Status: "queued", CreatedAt: now, UpdatedAt: now,
+	}
+	m.agentQueryJobs[job.ID] = job
+	copy := job
+	return &copy, nil
+}
+
+func (m *memoryStore) StartAgentQueryJob(id string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.agentQueryJobs[id]
+	if !ok || job.Status != "queued" {
+		return false, nil
+	}
+	job.Status, job.UpdatedAt = "running", time.Now().UTC()
+	m.agentQueryJobs[id] = job
+	return true, nil
+}
+
+func (m *memoryStore) CompleteAgentQueryJob(id string, result json.RawMessage) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.agentQueryJobs[id]
+	if !ok || job.Status != "running" {
+		return false, nil
+	}
+	job.Status, job.UpdatedAt = "succeeded", time.Now().UTC()
+	job.Result = append(json.RawMessage(nil), result...)
+	m.agentQueryJobs[id] = job
+	return true, nil
+}
+
+func (m *memoryStore) FailAgentQueryJob(id, errorCode string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.agentQueryJobs[id]
+	if !ok || (job.Status != "queued" && job.Status != "running") {
+		return false, nil
+	}
+	job.Status, job.UpdatedAt = "failed", time.Now().UTC()
+	job.ErrorCode = errorCode
+	m.agentQueryJobs[id] = job
+	return true, nil
+}
+
+func (m *memoryStore) GetAgentQueryJob(id string) (*store.AgentQueryJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.agentQueryJobs[id]
+	if !ok {
+		return nil, nil
+	}
+	job.Result = append(json.RawMessage(nil), job.Result...)
+	return &job, nil
 }
 
 func (m *memoryStore) LoadGlobalHalt() (bool, string, error) {

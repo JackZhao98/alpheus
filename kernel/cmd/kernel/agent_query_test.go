@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"alpheus/kernel/internal/config"
+	"alpheus/kernel/internal/store"
 )
 
 func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
@@ -38,13 +40,46 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
 	}
 	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"sofi","query":"值得研究吗？","openai_api_key":"sk-test-secret"}`, "runtime-secret")
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"role":"scout"`) {
+	if response.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if !containsEvent(st.events, "agent_query") {
-		t.Fatalf("events=%v", st.events)
+	var submitted store.AgentQueryJob
+	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil || submitted.ID == "" || submitted.Status != "queued" {
+		t.Fatalf("submitted=%+v err=%v", submitted, err)
 	}
-	if strings.Contains(response.Body.String(), "sk-test-secret") {
+	var completed store.AgentQueryJob
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response = routeRequest(s.routes(), http.MethodGet, "/agent/query-jobs/"+submitted.ID, "", "runtime-secret")
+		if response.Code != http.StatusOK {
+			t.Fatalf("poll status=%d body=%s", response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &completed); err != nil {
+			t.Fatal(err)
+		}
+		if completed.Status == "succeeded" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if completed.Status != "succeeded" || !strings.Contains(string(completed.Result), `"role":"scout"`) {
+		t.Fatalf("completed=%+v", completed)
+	}
+	hasEvent := false
+	eventDeadline := time.Now().Add(time.Second)
+	for time.Now().Before(eventDeadline) {
+		st.mu.Lock()
+		hasEvent = containsEvent(st.events, "agent_query")
+		st.mu.Unlock()
+		if hasEvent {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !hasEvent {
+		t.Fatal("agent_query event missing")
+	}
+	if strings.Contains(response.Body.String(), "sk-test-secret") || strings.Contains(string(completed.Result), "sk-test-secret") {
 		t.Fatal("API key leaked into query response")
 	}
 }

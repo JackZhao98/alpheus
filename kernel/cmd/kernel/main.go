@@ -115,6 +115,11 @@ type storeAPI interface {
 	LoadBrokerObservation(id string) (*store.BrokerAccountView, error)
 	ReconcileBrokerObservation(observationID string) (*store.BrokerReconciliationResult, error)
 	LoadBrokerCoexistenceView(accountID string, historyLimit int) (*store.BrokerCoexistenceView, error)
+	CreateAgentQueryJob(subject, symbol, query string) (*store.AgentQueryJob, error)
+	StartAgentQueryJob(id string) (bool, error)
+	CompleteAgentQueryJob(id string, result json.RawMessage) (bool, error)
+	FailAgentQueryJob(id, errorCode string) (bool, error)
+	GetAgentQueryJob(id string) (*store.AgentQueryJob, error)
 }
 
 type dayStateReader interface {

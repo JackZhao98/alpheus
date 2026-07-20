@@ -47,6 +47,19 @@ byId("logout").addEventListener("click", async () => {
   showAuthenticated(false);
 });
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function waitForAgentQuery(job) {
+  const deadline = Date.now() + 180000;
+  while (job.status === "queued" || job.status === "running") {
+    if (Date.now() >= deadline) throw new Error("Scout 仍在运行，请稍后重试。");
+    byId("status").textContent = job.status === "queued" ? "SCOUT QUEUED" : "SCOUT WORKING";
+    await wait(750);
+    job = await request(`/agent/query-jobs/${encodeURIComponent(job.id)}`);
+  }
+  return job;
+}
+
 byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const symbol = byId("symbol").value.trim().toUpperCase();
@@ -65,10 +78,13 @@ byId("query-form").addEventListener("submit", async (event) => {
   byId("status").textContent = "SCOUT WORKING";
   byId("query-error").textContent = "";
   try {
-    const result = await request("/agent/query", {
+    let job = await request("/agent/query", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({symbol, query, openai_api_key:openaiToken})
     });
+    job = await waitForAgentQuery(job);
+    if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");
+    const result = job.result;
     byId("result").textContent = JSON.stringify(result, null, 2);
     byId("status").textContent = result.cognition === "stub"
       ? "STUB PASS · MODEL NOT CONNECTED"
