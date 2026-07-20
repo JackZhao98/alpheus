@@ -370,6 +370,15 @@ with exactly one broker effect per authorized request. Market response-shape
 fixtures must cover working and terminal price forms. Repricing becomes
 explicit opt-in rather than an implicit property of every eligible Limit.
 
+The first reopened-acceptance slice landed in `26a93f2`. Every new open and
+close now persists `execution_style=static` unless the caller explicitly asks
+for `managed`; historical operations without the field also remain static.
+Only managed Limit operations may reach the repricer, managed Market orders are
+rejected, and the execution style is part of the idempotent client intent. A
+recorded Robinhood working-sell fixture proves the accepted close shape is
+normalized after exactly one placement call. This closes the implicit-reprice
+default but does not complete the remaining lifecycle matrix or reland M11.
+
 Production remains `read_only` with global Halt committed. AP13, autonomous
 Live, Option mutation and additional real-money probes remain closed pending a
 new owner decision after non-money certification.

@@ -275,6 +275,20 @@ with global Halt committed and an empty Live execution gate. These fixes do not
 erase the acceptance gap: v1.9.3 did not prove static order intent, a complete
 working-order lifecycle, or read-only restart before claiming M11 landed.
 
+Commit `26a93f2` lands the first non-money recertification slice:
+
+- open and close operations default to persisted `execution_style=static`;
+- historical operations with no execution style also remain static;
+- only an explicit `managed` Limit instruction may reach the repricer, while
+  managed Market orders are rejected;
+- execution style participates in the idempotent request hash, so a retry
+  cannot silently change its broker-effect policy; and
+- a recorded Robinhood `confirmed` SOFI sell fixture proves a working close is
+  normalized as submitted after exactly one `place_equity_order` call.
+
+The full unit suite, race suite and vet pass for this slice. It removes implicit
+repricing as the default but does not yet certify every terminal transition.
+
 M11 is therefore `IN PROGRESS`. Relanding requires the minimal deterministic
 submit/query/cancel/fill/partial-fill/expiry/restart matrix, static execution by
 default, explicit opt-in for any managed repricing, recorded real-shape Provider
