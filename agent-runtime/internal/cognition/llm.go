@@ -428,6 +428,8 @@ func decodeOutput(name string, raw json.RawMessage) (contracts.Output, error) {
 
 	var target contracts.Output
 	switch name {
+	case "QueryIntent":
+		target = &contracts.QueryIntent{}
 	case "DeskDecision":
 		target = &contracts.DeskDecision{}
 	case "OpportunityBrief":
@@ -445,6 +447,8 @@ func decodeOutput(name string, raw json.RawMessage) (contracts.Output, error) {
 	}
 	// Preserve the value forms already used by extractOps and the stub.
 	switch value := parsed.(type) {
+	case *contracts.QueryIntent:
+		return *value, nil
 	case *contracts.DeskDecision:
 		return *value, nil
 	case *contracts.OpportunityBrief:

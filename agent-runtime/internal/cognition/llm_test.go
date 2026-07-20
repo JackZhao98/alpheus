@@ -176,6 +176,17 @@ func TestLLMRetriesOnceWithValidationError(t *testing.T) {
 	}
 }
 
+func TestDecodeOutputSupportsQueryIntent(t *testing.T) {
+	output, err := decodeOutput("QueryIntent", json.RawMessage(`{"route":"TEAM","objective":"evaluate the evidence","required_capabilities":["market_quote","market_bars","portfolio_state","scout","decision_desk"],"missing_inputs":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := output.(contracts.QueryIntent)
+	if !ok || intent.Route != "TEAM" || intent.Objective != "evaluate the evidence" || len(intent.RequiredCapabilities) != 5 {
+		t.Fatalf("output=%T %+v", output, output)
+	}
+}
+
 func TestLLMRejectsDoubleInvalidOutput(t *testing.T) {
 	transport := &fakeTransport{count: 100, responses: []completionResponse{deskResponse("BANANA"), deskResponse("STILL_BAD")}}
 	_, err := testLLM(transport, nil).Run(testRole(), testContext())
