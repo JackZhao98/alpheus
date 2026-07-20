@@ -93,6 +93,7 @@ func TestRuntimeGoFieldsMatchSchema(t *testing.T) {
 		"ModelCallManifestCandidate":  reflect.TypeOf(runtimecontract.ModelCallManifestCandidate{}),
 		"ModelCallResultCandidate":    reflect.TypeOf(runtimecontract.ModelCallResultCandidate{}),
 		"ArtifactCandidate":           reflect.TypeOf(runtimecontract.ArtifactCandidate{}),
+		"OutputContractRevision":      reflect.TypeOf(runtimecontract.OutputContractRevision{}),
 		"RuntimePolicy":               reflect.TypeOf(runtimecontract.RuntimePolicy{}),
 		"TriggerRegistration":         reflect.TypeOf(runtimecontract.TriggerRegistration{}),
 		"TriggerOccurrence":           reflect.TypeOf(runtimecontract.TriggerOccurrence{}),
@@ -158,6 +159,37 @@ func TestRuntimeEnumsMatchSchema(t *testing.T) {
 	}
 }
 
+func TestRuntimeAuthorityRefsAndOutputSchemaAreExact(t *testing.T) {
+	schema := readSchema(t, filepath.Join(runtimePackRoot(t), "schema", "runtime.schema.json"))
+	tests := []struct {
+		definition string
+		property   string
+		wantRef    string
+	}{
+		{"TriggerRegistration", "owner_policy", "#/$defs/OwnerPolicyRevisionRef"},
+		{"TriggerRegistration", "runtime_policy", "#/$defs/RuntimePolicyRevisionRef"},
+		{"TriggerOccurrence", "registration", "#/$defs/TriggerRegistrationRevisionRef"},
+		{"TriggerOccurrence", "owner_policy", "#/$defs/OwnerPolicyRevisionRef"},
+		{"Run", "runtime_policy", "#/$defs/RuntimePolicyRevisionRef"},
+		{"Task", "output_contract", "#/$defs/OutputContractRevisionRef"},
+		{"BudgetLedger", "runtime_policy", "#/$defs/RuntimePolicyRevisionRef"},
+		{"RequestChildTaskCommand", "output_contract", "#/$defs/OutputContractRevisionRef"},
+	}
+	for _, test := range tests {
+		properties := schemaDefinition(t, schema, test.definition)["properties"].(map[string]any)
+		if got := properties[test.property].(map[string]any)["$ref"]; got != test.wantRef {
+			t.Fatalf("%s.%s ref=%v want=%s", test.definition, test.property, got, test.wantRef)
+		}
+	}
+
+	output := schemaDefinition(t, schema, "OutputContractRevision")["properties"].(map[string]any)
+	allOf := output["schema"].(map[string]any)["allOf"].([]any)
+	constraints := allOf[1].(map[string]any)["properties"].(map[string]any)
+	if got := constraints["media_type"].(map[string]any)["const"]; got != "application/json" {
+		t.Fatalf("output schema media_type=%v", got)
+	}
+}
+
 func TestRuntimeStateMachineMatchesCode(t *testing.T) {
 	root := runtimePackRoot(t)
 	raw, err := os.ReadFile(filepath.Join(root, "state-machines", "runtime.yaml"))
@@ -218,6 +250,7 @@ func TestRuntimeGoldens(t *testing.T) {
 		{"valid", "publication_disabled.json", "publication_disabled.sha256", "artifact_publication_intent", true},
 		{"valid", "recovery_reuse.json", "recovery_reuse.sha256", "recovery_record", true},
 		{"valid", "run_queued.json", "run_queued.sha256", "run", true},
+		{"valid", "output_contract_revision.json", "output_contract_revision.sha256", "output_contract_revision", true},
 		{"valid", "runtime_policy.json", "runtime_policy.sha256", "runtime_policy", true},
 		{"invalid", "artifact_operation_intent.json", "", "artifact", false},
 		{"invalid", "budget_overcommitted.json", "", "budget_ledger", false},

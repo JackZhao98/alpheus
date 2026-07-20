@@ -10,65 +10,67 @@ import (
 )
 
 type fixture struct {
-	policy       RuntimePolicy
-	registration TriggerRegistration
-	occurrence   TriggerOccurrence
-	run          Run
-	task         Task
-	dependency   Dependency
-	session      Session
-	attempt      Attempt
-	turn         Turn
-	manifest     ModelCallManifest
-	result       ModelCallResult
-	artifact     Artifact
-	publication  ArtifactPublicationIntent
-	checkpoint   Checkpoint
-	ledger       BudgetLedger
-	cancellation CancellationRequest
-	recovery     RecoveryRecord
-	event        RuntimeEvent
-	claim        ClaimTaskCommand
-	heartbeat    HeartbeatAttemptCommand
-	start        StartAttemptCommand
-	dispatch     DispatchModelCallCommand
-	resolve      ResolveModelCallCommand
-	unknown      MarkModelCallUnknownCommand
-	commit       CommitAttemptCommand
-	fail         FailAttemptCommand
-	child        RequestChildTaskCommand
+	outputContract OutputContractRevision
+	policy         RuntimePolicy
+	registration   TriggerRegistration
+	occurrence     TriggerOccurrence
+	run            Run
+	task           Task
+	dependency     Dependency
+	session        Session
+	attempt        Attempt
+	turn           Turn
+	manifest       ModelCallManifest
+	result         ModelCallResult
+	artifact       Artifact
+	publication    ArtifactPublicationIntent
+	checkpoint     Checkpoint
+	ledger         BudgetLedger
+	cancellation   CancellationRequest
+	recovery       RecoveryRecord
+	event          RuntimeEvent
+	claim          ClaimTaskCommand
+	heartbeat      HeartbeatAttemptCommand
+	start          StartAttemptCommand
+	dispatch       DispatchModelCallCommand
+	resolve        ResolveModelCallCommand
+	unknown        MarkModelCallUnknownCommand
+	commit         CommitAttemptCommand
+	fail           FailAttemptCommand
+	child          RequestChildTaskCommand
 }
 
 func TestContractsValidate(t *testing.T) {
 	value := validFixture()
 	tests := map[string]interface{ Validate() error }{
-		"policy":       value.policy,
-		"registration": value.registration,
-		"occurrence":   value.occurrence,
-		"run":          value.run,
-		"task":         value.task,
-		"dependency":   value.dependency,
-		"session":      value.session,
-		"attempt":      value.attempt,
-		"turn":         value.turn,
-		"manifest":     value.manifest,
-		"result":       value.result,
-		"artifact":     value.artifact,
-		"publication":  value.publication,
-		"checkpoint":   value.checkpoint,
-		"ledger":       value.ledger,
-		"cancellation": value.cancellation,
-		"recovery":     value.recovery,
-		"event":        value.event,
-		"claim":        value.claim,
-		"heartbeat":    value.heartbeat,
-		"start":        value.start,
-		"dispatch":     value.dispatch,
-		"resolve":      value.resolve,
-		"unknown":      value.unknown,
-		"commit":       value.commit,
-		"fail":         value.fail,
-		"child":        value.child,
+		"output_contract": value.outputContract,
+		"policy":          value.policy,
+		"registration":    value.registration,
+		"occurrence":      value.occurrence,
+		"run":             value.run,
+		"task":            value.task,
+		"dependency":      value.dependency,
+		"session":         value.session,
+		"attempt":         value.attempt,
+		"turn":            value.turn,
+		"manifest":        value.manifest,
+		"result":          value.result,
+		"artifact":        value.artifact,
+		"publication":     value.publication,
+		"checkpoint":      value.checkpoint,
+		"ledger":          value.ledger,
+		"cancellation":    value.cancellation,
+		"recovery":        value.recovery,
+		"event":           value.event,
+		"claim":           value.claim,
+		"heartbeat":       value.heartbeat,
+		"start":           value.start,
+		"dispatch":        value.dispatch,
+		"resolve":         value.resolve,
+		"unknown":         value.unknown,
+		"commit":          value.commit,
+		"fail":            value.fail,
+		"child":           value.child,
 	}
 	for name, contract := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -79,7 +81,48 @@ func TestContractsValidate(t *testing.T) {
 	}
 }
 
+func TestOutputContractRevisionRef(t *testing.T) {
+	value := validFixture().outputContract
+	ref, err := value.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Owner != contracts.OwnerAgentControl || ref.RecordType != "output_contract_revision" ||
+		ref.RecordID != value.RevisionID || ref.Generation != value.Generation || len(ref.RecordDigest) != 64 {
+		t.Fatalf("unexpected output contract ref: %+v", ref)
+	}
+}
+
 func TestContractsFailClosed(t *testing.T) {
+	t.Run("output contract is control-authored and non-effectful", func(t *testing.T) {
+		value := validFixture().outputContract
+		value.Author.Audience = contracts.AudienceWorker
+		if value.Validate() == nil {
+			t.Fatal("worker-authored output contract passed")
+		}
+		value = validFixture().outputContract
+		value.EffectClass = contracts.EffectExternalRead
+		if value.Validate() == nil {
+			t.Fatal("effectful output contract passed")
+		}
+	})
+
+	t.Run("output contract cannot reference future schema", func(t *testing.T) {
+		value := validFixture().outputContract
+		value.Schema.CommittedAt = value.CreatedAt.Add(time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("future output schema passed")
+		}
+	})
+
+	t.Run("output contract requires json schema bytes", func(t *testing.T) {
+		value := validFixture().outputContract
+		value.Schema.MediaType = "text/plain"
+		if value.Validate() == nil {
+			t.Fatal("non-json output schema passed")
+		}
+	})
+
 	t.Run("artifact cannot emit operation intent", func(t *testing.T) {
 		value := validFixture().artifact
 		value.EffectClass = contracts.EffectOperationIntent
@@ -326,7 +369,17 @@ func validFixture() fixture {
 	control := contracts.AuditActor{PrincipalID: "control-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI}
 	ownerPolicy := revision(contracts.OwnerPlatformGovernance, "owner_policy_revision", "owner-policy-1", 1, 'a')
 	runtimePolicy := revision(contracts.OwnerAgentControl, "runtime_policy", "runtime-policy-1", 1, 'b')
-	outputContract := revision(contracts.OwnerAgentControl, "output_contract_revision", "output-contract-1", 1, '3')
+	outputContractRevision := OutputContractRevision{
+		SchemaRevision: 1, RevisionID: "output-contract-1", Generation: 1,
+		ArtifactType: "decision_draft",
+		Schema:       runtimeBlob("output_contract_schema", "output-contract-schema-1", '3', t0),
+		EffectClass:  contracts.EffectNone, Author: control,
+		ReasonCode: "initial_decision_contract", CreatedAt: t1,
+	}
+	outputContract, err := outputContractRevision.Ref()
+	if err != nil {
+		panic(err)
+	}
 	registrationRef := revision(contracts.OwnerAgentControl, "trigger_registration", "trigger-1", 1, 'c')
 	occurrenceRef := record(contracts.OwnerAgentControl, "trigger_occurrence", "occurrence-1", 'd')
 	originSource := record(contracts.OwnerAgentControl, "schedule_occurrence", "schedule-occurrence-1", 'e')
@@ -362,7 +415,7 @@ func validFixture() fixture {
 		SchemaRevision: 1, ArtifactID: "artifact-1", RunID: "run-1", TaskID: "task-1",
 		SessionID: "session-1", AttemptID: "attempt-1", SourceResult: resultRef,
 		ArtifactType:         "decision_draft",
-		OutputContractDigest: digest('3'), EffectClass: contracts.EffectNone,
+		OutputContractDigest: outputContract.RecordDigest, EffectClass: contracts.EffectNone,
 		Sections: []ArtifactSection{{Name: "result", Required: true, Content: output}}, CreatedAt: t3,
 	}
 	envelope := func(commandType string, marker byte) contracts.CommandEnvelope {
@@ -376,7 +429,7 @@ func validFixture() fixture {
 	artifactRef := record(contracts.OwnerAgentControl, "artifact", "artifact-1", '9')
 	manifestCandidate := ModelCallManifestCandidate{
 		CallID: "call-1", IdempotencyKey: "call-key-1", Provider: "anthropic", Model: "claude-sonnet",
-		PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: digest('3'),
+		PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: outputContract.RecordDigest,
 		RequestDigest: digest('2'), MaxOutputTokens: 2000, ReservedInputTokens: 500,
 		ReservedExternalCostMicroUSD: 5000, TimeoutMS: 60000, TemperatureMicros: 200000,
 	}
@@ -386,11 +439,12 @@ func validFixture() fixture {
 		WallTimeMS: 500, FinishReason: FinishStop,
 	}
 	artifactCandidate := ArtifactCandidate{
-		ArtifactType: "decision_draft", OutputContractDigest: digest('3'), EffectClass: contracts.EffectNone,
+		ArtifactType: "decision_draft", OutputContractDigest: outputContract.RecordDigest, EffectClass: contracts.EffectNone,
 		Sections: []ArtifactSection{{Name: "result", Required: true, Content: output}},
 	}
 	failure := contracts.Failure{Code: "provider_timeout", Message: "provider outcome unavailable", Retryable: true}
 	return fixture{
+		outputContract: outputContractRevision,
 		policy: RuntimePolicy{
 			SchemaRevision: 1, PolicyID: "runtime-policy-1", Generation: 1, DefaultRunLimit: limit,
 			MaxLeaseSeconds: 300, MaxHeartbeatExtensionSecs: 60, MaxClaimBatch: 20,
@@ -444,7 +498,7 @@ func validFixture() fixture {
 		manifest: ModelCallManifest{
 			SchemaRevision: 1, CallID: "call-1", TurnID: "turn-1", AttemptID: "attempt-1",
 			IdempotencyKey: "call-key-1", Provider: "anthropic", Model: "claude-sonnet",
-			PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: digest('3'),
+			PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: outputContract.RecordDigest,
 			RequestDigest: digest('2'), MaxOutputTokens: 2000, ReservedInputTokens: 500,
 			ReservedExternalCostMicroUSD: 5000, TimeoutMS: 60000, TemperatureMicros: 200000,
 			CreatedAt: t2,

@@ -62,6 +62,153 @@ func TestGovernanceContractsAndReferences(t *testing.T) {
 	}
 }
 
+func TestOwnerPolicyBindsExactNonMoneyOrigin(t *testing.T) {
+	principal := "scheduler-1"
+	policy := OwnerPolicyRevision{
+		SchemaRevision:        SchemaRevisionV1,
+		PolicyID:              "scheduled-research",
+		RevisionID:            "50000000-0000-4000-8000-000000000001",
+		Generation:            1,
+		OriginKind:            contracts.OriginSchedule,
+		SourceOwner:           contracts.OwnerAgentControl,
+		SourceRecordType:      "schedule_occurrence",
+		InitiatingKind:        contracts.PrincipalWorkload,
+		InitiatingAudience:    contracts.AudienceControlAPI,
+		InitiatingPrincipalID: &principal,
+		EffectCeiling:         contracts.EffectNone,
+		Author:                testUser, ReasonCode: "register_schedule", CreatedAt: testNow,
+	}
+	ref, err := policy.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := contracts.RunOrigin{
+		SchemaRevision: contracts.SchemaRevisionV1,
+		Kind:           contracts.OriginSchedule,
+		Source: contracts.RecordRef{
+			Owner: contracts.OwnerAgentControl, RecordType: "schedule_occurrence", RecordID: "occurrence-1",
+			SchemaRevision: contracts.SchemaRevisionV1, RecordDigest: digest('a'),
+		},
+		InitiatingActor: contracts.AuditActor{
+			PrincipalID: principal, Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI,
+		},
+		OwnerPolicy: ref, OccurredAt: testNow, ObservedAt: testNow, CommittedAt: testNow,
+	}
+	if !policy.MatchesRunOrigin(origin) {
+		t.Fatal("exact registered schedule origin did not match")
+	}
+
+	wrong := origin
+	wrong.InitiatingActor.PrincipalID = "scheduler-2"
+	if policy.MatchesRunOrigin(wrong) {
+		t.Fatal("policy matched a different exact principal")
+	}
+	wildcard := policy
+	wildcard.InitiatingPrincipalID = nil
+	wildcardRef, err := wildcard.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong.OwnerPolicy = wildcardRef
+	if !wildcard.MatchesRunOrigin(wrong) {
+		t.Fatal("policy without an exact principal rejected matching authenticated kind and audience")
+	}
+	recovery := origin
+	recovery.Kind = contracts.OriginSystemRecovery
+	recovery.Source = contracts.RecordRef{
+		Owner: contracts.OwnerAgentControl, RecordType: "recovery_occurrence", RecordID: "recovery-1",
+		SchemaRevision: contracts.SchemaRevisionV1, RecordDigest: digest('b'),
+	}
+	recovery.InitiatingActor = contracts.AuditActor{
+		PrincipalID: "recovery-worker-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI,
+	}
+	recovery.OwnerPolicy = ref
+	recovery.Recovery = &contracts.RecoveryLineage{
+		OriginalCausationID: "cause-1", OriginalIdempotencyKey: "idempotency-1",
+		OriginalAuthority: contracts.RecordRef{
+			Owner: contracts.OwnerPlatformGovernance, RecordType: "effective_run_authority", RecordID: "authority-1",
+			SchemaRevision: contracts.SchemaRevisionV1, RecordDigest: digest('c'),
+		},
+		OriginalEffect: contracts.RecordRef{
+			Owner: contracts.OwnerWorker, RecordType: "tool_effect", RecordID: "effect-1",
+			SchemaRevision: contracts.SchemaRevisionV1, RecordDigest: digest('d'),
+		},
+	}
+	if !policy.MatchesRunOrigin(recovery) {
+		t.Fatal("recovery did not reuse the original schedule owner policy")
+	}
+	recovery.OwnerPolicy.RecordID = "different-revision"
+	if policy.MatchesRunOrigin(recovery) {
+		t.Fatal("recovery matched a different owner policy revision")
+	}
+
+	mutations := map[string]func(*OwnerPolicyRevision){
+		"money effect":         func(value *OwnerPolicyRevision) { value.EffectCeiling = contracts.EffectExternalRead },
+		"wrong source type":    func(value *OwnerPolicyRevision) { value.SourceRecordType = "external_event" },
+		"wrong principal kind": func(value *OwnerPolicyRevision) { value.InitiatingKind = contracts.PrincipalUser },
+		"unknown origin":       func(value *OwnerPolicyRevision) { value.OriginKind = "timer" },
+		"recovery registration": func(value *OwnerPolicyRevision) {
+			value.OriginKind = contracts.OriginSystemRecovery
+		},
+		"blank exact principal": func(value *OwnerPolicyRevision) {
+			blank := " "
+			value.InitiatingPrincipalID = &blank
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			candidate := policy
+			mutate(&candidate)
+			if candidate.Validate() == nil {
+				t.Fatal("invalid owner policy accepted")
+			}
+		})
+	}
+}
+
+func TestOwnerPolicyHeadAndEventBindExactRevision(t *testing.T) {
+	policy := ownerPolicyRevision(1, "owner-policy-1")
+	ref, err := policy.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := OwnerPolicyHead{
+		SchemaRevision: SchemaRevisionV1, HeadID: policy.PolicyID, Generation: 1,
+		Revision: ref, ActivatedBy: testActor, ActivatedAt: testNow,
+	}
+	if err := (OwnerPolicyBinding{Revision: policy, Head: head}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	badHead := head
+	badHead.HeadID = "different-policy"
+	if (OwnerPolicyBinding{Revision: policy, Head: badHead}).Validate() == nil {
+		t.Fatal("head selected a revision from another policy")
+	}
+
+	event := OwnerPolicyEvent{
+		SchemaRevision: SchemaRevisionV1, EventID: "owner-policy-event-1", PolicyID: policy.PolicyID,
+		Generation: 1, CurrentRevision: ref, Actor: testActor, ReasonCode: "activate_policy", OccurredAt: testNow,
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	event.Generation = 2
+	if event.Validate() == nil {
+		t.Fatal("successor event without previous revision accepted")
+	}
+	previous := ref
+	event.PreviousRevision = &previous
+	policy2 := ownerPolicyRevision(2, policy.PolicyID)
+	current, err := policy2.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.CurrentRevision = current
+	if err := event.Validate(); err != nil {
+		t.Fatalf("valid successor event: %v", err)
+	}
+}
+
 func TestResolveAllowsExactCurrentIntersection(t *testing.T) {
 	snapshot := liveSnapshot(t)
 	decision := Resolve(snapshot, ResolveRequest{
@@ -201,6 +348,17 @@ func effectRevision(generation int64, effect contracts.EffectClass, state GateSt
 func switchRevision(generation int64, switchID SwitchID, state GateState) KillSwitchRevision {
 	return KillSwitchRevision{SchemaRevision: 1, RevisionID: "40000000-0000-4000-8000-00000000000" + string(rune('0'+generation)), Generation: generation,
 		SwitchID: switchID, State: state, Author: testUser, ReasonCode: "test_revision", CreatedAt: testNow}
+}
+
+func ownerPolicyRevision(generation int64, policyID string) OwnerPolicyRevision {
+	return OwnerPolicyRevision{
+		SchemaRevision: SchemaRevisionV1, PolicyID: policyID,
+		RevisionID: "50000000-0000-4000-8000-00000000000" + string(rune('0'+generation)), Generation: generation,
+		OriginKind: contracts.OriginSchedule, SourceOwner: contracts.OwnerAgentControl,
+		SourceRecordType: "schedule_occurrence", InitiatingKind: contracts.PrincipalWorkload,
+		InitiatingAudience: contracts.AudienceControlAPI, EffectCeiling: contracts.EffectNone,
+		Author: testUser, ReasonCode: "test_revision", CreatedAt: testNow,
+	}
 }
 
 func digest(char byte) string {

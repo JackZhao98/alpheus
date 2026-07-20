@@ -1,0 +1,29 @@
+{
+  "schema_revision": 1,
+  "revision_id": "output-contract-1",
+  "generation": 1,
+  "artifact_type": "decision_draft",
+  "schema": {
+    "schema_revision": 1,
+    "blob_id": "20000000-0000-4000-8000-333333333333",
+    "content_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+    "media_type": "application/json",
+    "size_bytes": 256,
+    "origin": {
+      "owner": "agent_control",
+      "record_type": "output_contract_schema",
+      "record_id": "output-contract-schema-1",
+      "schema_revision": 1,
+      "record_digest": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "committed_at": "2026-07-20T12:00:00Z"
+  },
+  "effect_class": "none",
+  "author": {
+    "principal_id": "control-1",
+    "kind": "workload",
+    "audience": "control_api"
+  },
+  "reason_code": "initial_decision_contract",
+  "created_at": "2026-07-20T12:01:00Z"
+}

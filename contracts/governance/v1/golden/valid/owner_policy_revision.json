@@ -1,0 +1,16 @@
+{
+  "schema_revision": 1,
+  "policy_id": "scheduled-research",
+  "revision_id": "50000000-0000-4000-8000-000000000001",
+  "generation": 1,
+  "origin_kind": "schedule",
+  "source_owner": "agent_control",
+  "source_record_type": "schedule_occurrence",
+  "initiating_kind": "workload",
+  "initiating_audience": "control_api",
+  "initiating_principal_id": "scheduler-1",
+  "effect_ceiling": "none",
+  "author": {"principal_id": "owner-1", "kind": "user", "audience": "activator"},
+  "reason_code": "register_schedule",
+  "created_at": "2026-07-19T18:00:00Z"
+}

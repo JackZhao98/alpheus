@@ -63,6 +63,9 @@ var governanceTypes = map[string]func() validatable{
 	"governance_event":       func() validatable { return &governance.GovernanceEvent{} },
 	"kill_switch_head":       func() validatable { return &governance.KillSwitchHead{} },
 	"kill_switch_revision":   func() validatable { return &governance.KillSwitchRevision{} },
+	"owner_policy_event":     func() validatable { return &governance.OwnerPolicyEvent{} },
+	"owner_policy_head":      func() validatable { return &governance.OwnerPolicyHead{} },
+	"owner_policy_revision":  func() validatable { return &governance.OwnerPolicyRevision{} },
 	"platform_mode_head":     func() validatable { return &governance.PlatformModeHead{} },
 	"platform_mode_revision": func() validatable { return &governance.PlatformModeRevision{} },
 }
@@ -85,6 +88,7 @@ var runtimeTypes = map[string]func() validatable{
 	},
 	"model_call_manifest":        func() validatable { return &runtimecontract.ModelCallManifest{} },
 	"model_call_result":          func() validatable { return &runtimecontract.ModelCallResult{} },
+	"output_contract_revision":   func() validatable { return &runtimecontract.OutputContractRevision{} },
 	"recovery_record":            func() validatable { return &runtimecontract.RecoveryRecord{} },
 	"request_child_task_command": func() validatable { return &runtimecontract.RequestChildTaskCommand{} },
 	"resolve_model_call_command": func() validatable { return &runtimecontract.ResolveModelCallCommand{} },

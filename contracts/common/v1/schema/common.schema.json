@@ -136,7 +136,7 @@
             "owner_policy": {
               "allOf": [
                 {"$ref": "#/$defs/RevisionRef"},
-                {"properties": {"owner": {"const": "platform_governance"}}}
+                {"properties": {"owner": {"const": "platform_governance"}, "record_type": {"const": "owner_policy_revision"}}}
               ]
             }
           }
@@ -207,7 +207,7 @@
         "owner_policy": {
           "allOf": [
             {"$ref": "#/$defs/RevisionRef"},
-            {"properties": {"owner": {"const": "platform_governance"}}}
+            {"properties": {"owner": {"const": "platform_governance"}, "record_type": {"const": "owner_policy_revision"}}}
           ]
         },
         "mode": {"$ref": "#/$defs/PlatformMode"},

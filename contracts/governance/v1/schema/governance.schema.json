@@ -9,6 +9,9 @@
     {"$ref": "#/$defs/EffectClassHead"},
     {"$ref": "#/$defs/KillSwitchRevision"},
     {"$ref": "#/$defs/KillSwitchHead"},
+    {"$ref": "#/$defs/OwnerPolicyRevision"},
+    {"$ref": "#/$defs/OwnerPolicyHead"},
+    {"$ref": "#/$defs/OwnerPolicyEvent"},
     {"$ref": "#/$defs/ActivationReceipt"},
     {"$ref": "#/$defs/GovernanceEvent"}
   ],
@@ -19,6 +22,10 @@
     "Timestamp": {"type": "string", "format": "date-time", "pattern": "Z$"},
     "PlatformMode": {"enum": ["disabled", "live_autonomous", "live_confirmed", "read_only", "shadow"]},
     "EffectClass": {"enum": ["broker_mutation", "exact_confirmation", "external_read", "none", "operation_intent"]},
+    "OwnerPolicyOriginKind": {"enum": ["external_event", "kernel_event", "schedule", "system_maintenance", "user_request"]},
+    "Owner": {"enum": ["agent_control", "blob", "delegation", "grace", "kernel", "platform_governance", "research_gateway", "worker"]},
+    "PrincipalKind": {"enum": ["kernel", "user", "workload"]},
+    "Audience": {"enum": ["activator", "control_api", "delegation_engine", "grace_engine", "grace_intake", "kernel", "kernel_admin", "research_gateway", "validator", "worker"]},
     "GovernedEffectClass": {"enum": ["broker_mutation", "exact_confirmation", "external_read", "operation_intent"]},
     "GateState": {"enum": ["enabled", "halted"]},
     "SwitchID": {"enum": [
@@ -37,6 +44,18 @@
         "kind": {"enum": ["kernel", "user", "workload"]},
         "audience": {"enum": ["activator", "control_api", "delegation_engine", "grace_engine", "grace_intake", "kernel", "kernel_admin", "research_gateway", "validator", "worker"]}
       }
+    },
+    "ActivatorActor": {
+      "allOf": [
+        {"$ref": "#/$defs/AuditActor"},
+        {"type": "object", "properties": {"kind": {"enum": ["user", "workload"]}, "audience": {"const": "activator"}}}
+      ]
+    },
+    "UserActivatorActor": {
+      "allOf": [
+        {"$ref": "#/$defs/AuditActor"},
+        {"type": "object", "properties": {"kind": {"const": "user"}, "audience": {"const": "activator"}}}
+      ]
     },
     "RecordRef": {
       "type": "object", "additionalProperties": false,
@@ -61,13 +80,19 @@
         "generation": {"type": "integer", "minimum": 1}
       }
     },
+    "OwnerPolicyRevisionRef": {
+      "allOf": [
+        {"$ref": "#/$defs/RevisionRef"},
+        {"type": "object", "properties": {"owner": {"const": "platform_governance"}, "record_type": {"const": "owner_policy_revision"}}}
+      ]
+    },
     "PlatformModeRevision": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_revision", "revision_id", "generation", "mode", "author", "reason_code", "created_at"],
       "properties": {
         "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "mode": {"$ref": "#/$defs/PlatformMode"},
-        "author": {"$ref": "#/$defs/AuditActor"}, "reason_code": {"$ref": "#/$defs/Name"},
+        "author": {"$ref": "#/$defs/ActivatorActor"}, "reason_code": {"$ref": "#/$defs/Name"},
         "created_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
@@ -77,7 +102,7 @@
       "properties": {
         "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "effect_class": {"$ref": "#/$defs/GovernedEffectClass"},
-        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/AuditActor"},
+        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/ActivatorActor"},
         "reason_code": {"$ref": "#/$defs/Name"}, "created_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
@@ -87,9 +112,36 @@
       "properties": {
         "schema_revision": {"const": 1}, "revision_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "switch_id": {"$ref": "#/$defs/SwitchID"},
-        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/AuditActor"},
+        "state": {"$ref": "#/$defs/GateState"}, "author": {"$ref": "#/$defs/ActivatorActor"},
         "reason_code": {"$ref": "#/$defs/Name"}, "created_at": {"$ref": "#/$defs/Timestamp"}
       }
+    },
+    "OwnerPolicyRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "policy_id", "revision_id", "generation", "origin_kind", "source_owner", "source_record_type", "initiating_kind", "initiating_audience", "effect_ceiling", "author", "reason_code", "created_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "policy_id": {"$ref": "#/$defs/Identifier"},
+        "revision_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1},
+        "origin_kind": {"$ref": "#/$defs/OwnerPolicyOriginKind"},
+        "source_owner": {"$ref": "#/$defs/Owner"},
+        "source_record_type": {"$ref": "#/$defs/Name"},
+        "initiating_kind": {"$ref": "#/$defs/PrincipalKind"},
+        "initiating_audience": {"$ref": "#/$defs/Audience"},
+        "initiating_principal_id": {"$ref": "#/$defs/Identifier"},
+        "effect_ceiling": {"enum": ["none"]},
+        "author": {"$ref": "#/$defs/ActivatorActor"},
+        "reason_code": {"$ref": "#/$defs/Name"},
+        "created_at": {"$ref": "#/$defs/Timestamp"}
+      },
+      "allOf": [
+        {"if": {"properties": {"origin_kind": {"const": "user_request"}}}, "then": {"properties": {"source_owner": {"const": "agent_control"}, "source_record_type": {"const": "user_request"}, "initiating_kind": {"const": "user"}, "initiating_audience": {"const": "control_api"}}}},
+        {"if": {"properties": {"origin_kind": {"const": "schedule"}}}, "then": {"properties": {"source_owner": {"const": "agent_control"}, "source_record_type": {"const": "schedule_occurrence"}, "initiating_kind": {"const": "workload"}, "initiating_audience": {"const": "control_api"}}}},
+        {"if": {"properties": {"origin_kind": {"const": "kernel_event"}}}, "then": {"properties": {"source_owner": {"const": "kernel"}, "source_record_type": {"const": "kernel_event"}, "initiating_kind": {"const": "kernel"}, "initiating_audience": {"const": "kernel"}}}},
+        {"if": {"properties": {"origin_kind": {"const": "external_event"}}}, "then": {"properties": {"source_owner": {"const": "agent_control"}, "source_record_type": {"const": "external_event"}, "initiating_kind": {"const": "workload"}, "initiating_audience": {"const": "control_api"}}}},
+        {"if": {"properties": {"origin_kind": {"const": "system_maintenance"}}}, "then": {"properties": {"source_owner": {"const": "agent_control"}, "source_record_type": {"const": "maintenance_occurrence"}, "initiating_kind": {"const": "workload"}, "initiating_audience": {"const": "control_api"}}}}
+      ]
     },
     "PlatformModeHead": {
       "type": "object", "additionalProperties": false,
@@ -98,7 +150,7 @@
         "schema_revision": {"const": 1}, "head_id": {"const": "global"},
         "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
         "mode": {"$ref": "#/$defs/PlatformMode"}, "activation_receipt": {"$ref": "#/$defs/RecordRef"},
-        "activated_by": {"$ref": "#/$defs/AuditActor"}, "activated_at": {"$ref": "#/$defs/Timestamp"}
+        "activated_by": {"$ref": "#/$defs/ActivatorActor"}, "activated_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
     "EffectClassHead": {
@@ -108,7 +160,7 @@
         "schema_revision": {"const": 1}, "head_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
         "effect_class": {"$ref": "#/$defs/GovernedEffectClass"}, "state": {"$ref": "#/$defs/GateState"},
-        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/AuditActor"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/ActivatorActor"},
         "activated_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
@@ -119,7 +171,19 @@
         "schema_revision": {"const": 1}, "head_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "revision": {"$ref": "#/$defs/RevisionRef"},
         "switch_id": {"$ref": "#/$defs/SwitchID"}, "state": {"$ref": "#/$defs/GateState"},
-        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/AuditActor"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "activated_by": {"$ref": "#/$defs/ActivatorActor"},
+        "activated_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "OwnerPolicyHead": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "head_id", "generation", "revision", "activated_by", "activated_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "head_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1},
+        "revision": {"$ref": "#/$defs/OwnerPolicyRevisionRef"},
+        "activated_by": {"$ref": "#/$defs/ActivatorActor"},
         "activated_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
@@ -130,7 +194,7 @@
         "schema_revision": {"const": 1}, "receipt_id": {"$ref": "#/$defs/Identifier"},
         "target_kind": {"$ref": "#/$defs/SubjectKind"}, "target_id": {"$ref": "#/$defs/Identifier"},
         "target_revision": {"$ref": "#/$defs/RevisionRef"}, "expected_head_generation": {"type": "integer", "minimum": 0},
-        "transition": {"$ref": "#/$defs/Transition"}, "actor": {"$ref": "#/$defs/AuditActor"},
+        "transition": {"$ref": "#/$defs/Transition"}, "actor": {"$ref": "#/$defs/UserActivatorActor"},
         "deployment_mode_ceiling": {"$ref": "#/$defs/PlatformMode"},
         "deployment_effect_ceiling": {"$ref": "#/$defs/EffectClass"},
         "request_digest": {"$ref": "#/$defs/Digest"}, "reason_code": {"$ref": "#/$defs/Name"},
@@ -145,8 +209,23 @@
         "subject_kind": {"$ref": "#/$defs/SubjectKind"}, "subject_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1}, "transition": {"$ref": "#/$defs/Transition"},
         "previous_revision": {"$ref": "#/$defs/RevisionRef"}, "current_revision": {"$ref": "#/$defs/RevisionRef"},
-        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "actor": {"$ref": "#/$defs/AuditActor"},
+        "activation_receipt": {"$ref": "#/$defs/RecordRef"}, "actor": {"$ref": "#/$defs/ActivatorActor"},
         "occurred_at": {"$ref": "#/$defs/Timestamp"}, "reason_code": {"$ref": "#/$defs/Name"}
+      }
+    },
+    "OwnerPolicyEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "event_id", "policy_id", "generation", "current_revision", "actor", "reason_code", "occurred_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "event_id": {"$ref": "#/$defs/Identifier"},
+        "policy_id": {"$ref": "#/$defs/Identifier"},
+        "generation": {"type": "integer", "minimum": 1},
+        "previous_revision": {"$ref": "#/$defs/OwnerPolicyRevisionRef"},
+        "current_revision": {"$ref": "#/$defs/OwnerPolicyRevisionRef"},
+        "actor": {"$ref": "#/$defs/ActivatorActor"},
+        "reason_code": {"$ref": "#/$defs/Name"},
+        "occurred_at": {"$ref": "#/$defs/Timestamp"}
       }
     }
   }

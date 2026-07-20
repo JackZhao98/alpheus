@@ -1,7 +1,7 @@
 // Package governance defines AP0's immutable platform-mode, effect-class,
-// kill-switch, and activation contracts. It also provides a deterministic
-// resolver for cached governance snapshots. The resolver grants no authority:
-// malformed, missing, stale, or incompatible state fails closed.
+// kill-switch, owner-policy, and activation contracts. It also provides a
+// deterministic resolver for cached governance snapshots. The resolver grants
+// no authority: malformed, missing, stale, or incompatible state fails closed.
 package governance
 
 import (
@@ -101,6 +101,26 @@ type KillSwitchRevision struct {
 	CreatedAt      time.Time            `json:"created_at"`
 }
 
+// OwnerPolicyRevision identifies one exact non-money runtime origin. It does
+// not declare Skills, Tools, scopes, or later delegation semantics; AP1 may use
+// it only to bind authenticated RunOrigin identity with effect ceiling none.
+type OwnerPolicyRevision struct {
+	SchemaRevision        uint16                  `json:"schema_revision"`
+	PolicyID              string                  `json:"policy_id"`
+	RevisionID            string                  `json:"revision_id"`
+	Generation            int64                   `json:"generation"`
+	OriginKind            contracts.RunOriginKind `json:"origin_kind"`
+	SourceOwner           contracts.Owner         `json:"source_owner"`
+	SourceRecordType      string                  `json:"source_record_type"`
+	InitiatingKind        contracts.PrincipalKind `json:"initiating_kind"`
+	InitiatingAudience    contracts.Audience      `json:"initiating_audience"`
+	InitiatingPrincipalID *string                 `json:"initiating_principal_id,omitempty"`
+	EffectCeiling         contracts.EffectClass   `json:"effect_ceiling"`
+	Author                contracts.AuditActor    `json:"author"`
+	ReasonCode            string                  `json:"reason_code"`
+	CreatedAt             time.Time               `json:"created_at"`
+}
+
 type PlatformModeHead struct {
 	SchemaRevision    uint16                 `json:"schema_revision"`
 	HeadID            string                 `json:"head_id"`
@@ -136,6 +156,17 @@ type KillSwitchHead struct {
 	ActivatedAt       time.Time             `json:"activated_at"`
 }
 
+// OwnerPolicyHead is the compare-and-swap selected revision for one policy.
+// The head grants no effect beyond the exact immutable revision it references.
+type OwnerPolicyHead struct {
+	SchemaRevision uint16                `json:"schema_revision"`
+	HeadID         string                `json:"head_id"`
+	Generation     int64                 `json:"generation"`
+	Revision       contracts.RevisionRef `json:"revision"`
+	ActivatedBy    contracts.AuditActor  `json:"activated_by"`
+	ActivatedAt    time.Time             `json:"activated_at"`
+}
+
 type ActivationReceipt struct {
 	SchemaRevision          uint16                 `json:"schema_revision"`
 	ReceiptID               string                 `json:"receipt_id"`
@@ -166,6 +197,19 @@ type GovernanceEvent struct {
 	Actor             contracts.AuditActor   `json:"actor"`
 	OccurredAt        time.Time              `json:"occurred_at"`
 	ReasonCode        string                 `json:"reason_code"`
+}
+
+// OwnerPolicyEvent is the append-only audit edge for an OwnerPolicyHead CAS.
+type OwnerPolicyEvent struct {
+	SchemaRevision   uint16                 `json:"schema_revision"`
+	EventID          string                 `json:"event_id"`
+	PolicyID         string                 `json:"policy_id"`
+	Generation       int64                  `json:"generation"`
+	PreviousRevision *contracts.RevisionRef `json:"previous_revision,omitempty"`
+	CurrentRevision  contracts.RevisionRef  `json:"current_revision"`
+	Actor            contracts.AuditActor   `json:"actor"`
+	ReasonCode       string                 `json:"reason_code"`
+	OccurredAt       time.Time              `json:"occurred_at"`
 }
 
 func (value PlatformModeRevision) Validate() error {
@@ -202,6 +246,47 @@ func (value KillSwitchRevision) Validate() error {
 
 func (value KillSwitchRevision) Ref() (contracts.RevisionRef, error) {
 	return revisionRef("kill_switch_revision", value.RevisionID, value.Generation, value)
+}
+
+func (value OwnerPolicyRevision) Validate() error {
+	if !baseRevisionValid(value.SchemaRevision, value.RevisionID, value.Generation, value.Author, value.ReasonCode, value.CreatedAt) ||
+		!validID(value.PolicyID) || contracts.ValidateOwner(value.SourceOwner) != nil ||
+		!validName(value.SourceRecordType) || contracts.ValidateEffectClass(value.EffectCeiling) != nil ||
+		value.EffectCeiling != contracts.EffectNone || !ownerPolicyOriginValid(value) {
+		return ErrInvalidGovernance
+	}
+	if value.InitiatingPrincipalID != nil && !validID(*value.InitiatingPrincipalID) {
+		return ErrInvalidGovernance
+	}
+	return nil
+}
+
+func (value OwnerPolicyRevision) Ref() (contracts.RevisionRef, error) {
+	return revisionRef("owner_policy_revision", value.RevisionID, value.Generation, value)
+}
+
+// MatchesRunOrigin verifies both the exact revision binding and every
+// authority-bearing origin field. Missing or malformed values never match.
+func (value OwnerPolicyRevision) MatchesRunOrigin(origin contracts.RunOrigin) bool {
+	if value.Validate() != nil || origin.Validate() != nil {
+		return false
+	}
+	ref, err := value.Ref()
+	if err != nil || origin.OwnerPolicy != ref {
+		return false
+	}
+	// Recovery reuses the original policy and causal authority; it never gets a
+	// separately registrable recovery policy or a fresh origin match.
+	if origin.Kind == contracts.OriginSystemRecovery {
+		return true
+	}
+	if origin.Kind != value.OriginKind ||
+		origin.Source.Owner != value.SourceOwner || origin.Source.RecordType != value.SourceRecordType ||
+		origin.InitiatingActor.Kind != value.InitiatingKind ||
+		origin.InitiatingActor.Audience != value.InitiatingAudience {
+		return false
+	}
+	return value.InitiatingPrincipalID == nil || origin.InitiatingActor.PrincipalID == *value.InitiatingPrincipalID
 }
 
 func (value PlatformModeHead) Validate() error {
@@ -242,6 +327,15 @@ func (value KillSwitchHead) Validate() error {
 	return nil
 }
 
+func (value OwnerPolicyHead) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.HeadID) || value.Generation <= 0 ||
+		!validRevision(value.Revision, "owner_policy_revision", value.Generation) ||
+		!validActivator(value.ActivatedBy) || !validUTC(value.ActivatedAt) {
+		return ErrInvalidGovernance
+	}
+	return nil
+}
+
 func (value ActivationReceipt) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ReceiptID) || !knownSubject(value.TargetKind) ||
 		!validID(value.TargetID) || value.ExpectedHeadGeneration < 0 || value.TargetRevision.Generation != value.ExpectedHeadGeneration+1 ||
@@ -276,6 +370,33 @@ func (value GovernanceEvent) Validate() error {
 		value.Generation > 1 && value.PreviousRevision == nil || !validOptionalReceipt(value.ActivationReceipt) ||
 		(value.Transition == TransitionRaise || value.Transition == TransitionResume) && value.ActivationReceipt == nil ||
 		!validActivator(value.Actor) || !validUTC(value.OccurredAt) || !validName(value.ReasonCode) {
+		return ErrInvalidGovernance
+	}
+	return nil
+}
+
+func (value OwnerPolicyEvent) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.EventID) || !validID(value.PolicyID) ||
+		value.Generation <= 0 || !validRevision(value.CurrentRevision, "owner_policy_revision", value.Generation) ||
+		value.PreviousRevision != nil && (!validRevision(*value.PreviousRevision, "owner_policy_revision", value.Generation-1) || value.Generation <= 1) ||
+		value.Generation > 1 && value.PreviousRevision == nil || !validActivator(value.Actor) ||
+		!validName(value.ReasonCode) || !validUTC(value.OccurredAt) {
+		return ErrInvalidGovernance
+	}
+	return nil
+}
+
+type OwnerPolicyBinding struct {
+	Revision OwnerPolicyRevision
+	Head     OwnerPolicyHead
+}
+
+func (value OwnerPolicyBinding) Validate() error {
+	if value.Revision.Validate() != nil || value.Head.Validate() != nil || value.Head.HeadID != value.Revision.PolicyID {
+		return ErrInvalidGovernance
+	}
+	ref, err := value.Revision.Ref()
+	if err != nil || ref != value.Head.Revision {
 		return ErrInvalidGovernance
 	}
 	return nil
@@ -572,6 +693,40 @@ func recordTypeFor(kind SubjectKind) string {
 	default:
 		return ""
 	}
+}
+
+func ownerPolicyOriginValid(value OwnerPolicyRevision) bool {
+	type identity struct {
+		owner      contracts.Owner
+		recordType string
+		kind       contracts.PrincipalKind
+		audience   contracts.Audience
+	}
+	expected := map[contracts.RunOriginKind]identity{
+		contracts.OriginUserRequest: {
+			owner: contracts.OwnerAgentControl, recordType: "user_request",
+			kind: contracts.PrincipalUser, audience: contracts.AudienceControlAPI,
+		},
+		contracts.OriginSchedule: {
+			owner: contracts.OwnerAgentControl, recordType: "schedule_occurrence",
+			kind: contracts.PrincipalWorkload, audience: contracts.AudienceControlAPI,
+		},
+		contracts.OriginKernelEvent: {
+			owner: contracts.OwnerKernel, recordType: "kernel_event",
+			kind: contracts.PrincipalKernel, audience: contracts.AudienceKernel,
+		},
+		contracts.OriginExternalEvent: {
+			owner: contracts.OwnerAgentControl, recordType: "external_event",
+			kind: contracts.PrincipalWorkload, audience: contracts.AudienceControlAPI,
+		},
+		contracts.OriginSystemMaintenance: {
+			owner: contracts.OwnerAgentControl, recordType: "maintenance_occurrence",
+			kind: contracts.PrincipalWorkload, audience: contracts.AudienceControlAPI,
+		},
+	}[value.OriginKind]
+	return expected.recordType != "" && value.SourceOwner == expected.owner &&
+		value.SourceRecordType == expected.recordType && value.InitiatingKind == expected.kind &&
+		value.InitiatingAudience == expected.audience
 }
 
 func knownSwitch(value SwitchID) bool {

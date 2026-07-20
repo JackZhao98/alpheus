@@ -49,6 +49,7 @@ func TestRunOriginRejectsFabricatedAuthority(t *testing.T) {
 		"wrong source owner": func(value *RunOrigin) { value.Source.Owner = OwnerWorker },
 		"wrong audience":     func(value *RunOrigin) { value.InitiatingActor.Audience = AudienceActivator },
 		"wrong policy owner": func(value *RunOrigin) { value.OwnerPolicy.Owner = OwnerAgentControl },
+		"wrong policy type":  func(value *RunOrigin) { value.OwnerPolicy.RecordType = "owner_policy" },
 		"missing conversation": func(value *RunOrigin) {
 			value.Conversation = nil
 		},
@@ -199,6 +200,11 @@ func TestEffectiveAuthorityFailsClosed(t *testing.T) {
 	malformed.EffectCeiling = "new_effect"
 	if err := malformed.Validate(); err == nil {
 		t.Fatal("unknown effect class accepted")
+	}
+	malformed = value
+	malformed.OwnerPolicy.RecordType = "policy_revision"
+	if err := malformed.Validate(); err == nil {
+		t.Fatal("authority with non-canonical owner policy type accepted")
 	}
 	malformed = value
 	malformed.SourceHeads = nil

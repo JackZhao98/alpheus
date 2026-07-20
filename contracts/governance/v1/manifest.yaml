@@ -13,12 +13,15 @@
     "governance_event",
     "kill_switch_head",
     "kill_switch_revision",
+    "owner_policy_event",
+    "owner_policy_head",
+    "owner_policy_revision",
     "platform_mode_head",
     "platform_mode_revision"
   ],
   "commands": [],
   "events": [],
-  "state_machines": ["governance_head"],
+  "state_machines": ["governance_head", "owner_policy_head"],
   "assets": {
     "schemas": ["schema/governance.schema.json"],
     "api": "api/openapi.yaml",
@@ -36,10 +39,14 @@
       "golden/valid/governance_event.json",
       "golden/valid/kill_switch_head.json",
       "golden/valid/kill_switch_revision.json",
+      "golden/valid/owner_policy_event.json",
+      "golden/valid/owner_policy_head.json",
+      "golden/valid/owner_policy_revision.json",
       "golden/valid/platform_mode_head.json",
       "golden/valid/platform_mode_revision.json"
     ],
     "invalid": [
+      "golden/invalid/owner_policy_money_effect.json",
       "golden/invalid/receipt_stale_generation.json",
       "golden/invalid/switch_unknown.json"
     ],
@@ -50,6 +57,9 @@
       "golden/digest/governance_event.sha256",
       "golden/digest/kill_switch_head.sha256",
       "golden/digest/kill_switch_revision.sha256",
+      "golden/digest/owner_policy_event.sha256",
+      "golden/digest/owner_policy_head.sha256",
+      "golden/digest/owner_policy_revision.sha256",
       "golden/digest/platform_mode_head.sha256",
       "golden/digest/platform_mode_revision.sha256"
     ]

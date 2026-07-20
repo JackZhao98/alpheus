@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"alpheus/agentplatform/blob"
+	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
 )
 
@@ -192,6 +193,41 @@ type BudgetUsage struct {
 	ActiveTasks           int64 `json:"active_tasks"`
 	InvalidOutputRetries  int64 `json:"invalid_output_retries"`
 	InfrastructureRetries int64 `json:"infrastructure_retries"`
+}
+
+// OutputContractRevision freezes the schema an AP1 Task must satisfy. It is a
+// deliberately small data contract: Control owns the immutable schema bytes,
+// and AP1 cannot use it to authorize any external effect.
+type OutputContractRevision struct {
+	SchemaRevision uint16                `json:"schema_revision"`
+	RevisionID     string                `json:"revision_id"`
+	Generation     int64                 `json:"generation"`
+	ArtifactType   string                `json:"artifact_type"`
+	Schema         blob.BlobRef          `json:"schema"`
+	EffectClass    contracts.EffectClass `json:"effect_class"`
+	Author         contracts.AuditActor  `json:"author"`
+	ReasonCode     string                `json:"reason_code"`
+	CreatedAt      time.Time             `json:"created_at"`
+}
+
+func (value OutputContractRevision) Ref() (contracts.RevisionRef, error) {
+	if value.Validate() != nil {
+		return contracts.RevisionRef{}, ErrInvalidRuntime
+	}
+	digest, err := canonical.Digest("agent-platform.contract.output_contract_revision.v1", value)
+	if err != nil {
+		return contracts.RevisionRef{}, err
+	}
+	return contracts.RevisionRef{
+		RecordRef: contracts.RecordRef{
+			Owner:          contracts.OwnerAgentControl,
+			RecordType:     "output_contract_revision",
+			RecordID:       value.RevisionID,
+			SchemaRevision: SchemaRevisionV1,
+			RecordDigest:   digest,
+		},
+		Generation: value.Generation,
+	}, nil
 }
 
 type RuntimePolicy struct {

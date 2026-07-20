@@ -1,0 +1,17 @@
+{
+  "schema_revision": 1,
+  "event_id": "owner-policy-event-1",
+  "policy_id": "scheduled-research",
+  "generation": 1,
+  "current_revision": {
+    "owner": "platform_governance",
+    "record_type": "owner_policy_revision",
+    "record_id": "50000000-0000-4000-8000-000000000001",
+    "schema_revision": 1,
+    "record_digest": "2f7abe5fe604ac966aac5ba7343381464b7da265048fb81c6d6b3f6374c3d5f5",
+    "generation": 1
+  },
+  "actor": {"principal_id": "activator-1", "kind": "workload", "audience": "activator"},
+  "reason_code": "activate_policy",
+  "occurred_at": "2026-07-19T18:01:00Z"
+}

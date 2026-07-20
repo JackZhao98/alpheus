@@ -52,6 +52,21 @@ func (value BudgetUsage) Validate() error {
 	return nil
 }
 
+func (value OutputContractRevision) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.RevisionID) ||
+		value.Generation <= 0 || !namePattern.MatchString(value.ArtifactType) ||
+		!validRuntimeBlob(value.Schema, "output_contract_schema") ||
+		value.Schema.MediaType != "application/json" ||
+		value.EffectClass != contracts.EffectNone || value.Author.Validate() != nil ||
+		value.Author.Kind != contracts.PrincipalWorkload ||
+		value.Author.Audience != contracts.AudienceControlAPI ||
+		!namePattern.MatchString(value.ReasonCode) || !validUTC(value.CreatedAt) ||
+		value.Schema.CommittedAt.After(value.CreatedAt) {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
 func (value RuntimePolicy) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.PolicyID) ||
 		value.Generation <= 0 || value.DefaultRunLimit.Validate() != nil ||

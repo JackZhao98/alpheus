@@ -16,6 +16,7 @@
     "dependency",
     "model_call_manifest",
     "model_call_result",
+    "output_contract_revision",
     "recovery_record",
     "run",
     "runtime_policy",
@@ -49,6 +50,7 @@
     "valid": [
       "golden/valid/artifact_nonmoney.json",
       "golden/valid/claim_task_command.json",
+      "golden/valid/output_contract_revision.json",
       "golden/valid/publication_disabled.json",
       "golden/valid/recovery_reuse.json",
       "golden/valid/run_queued.json",
@@ -65,6 +67,7 @@
     "digests": [
       "golden/digest/artifact_nonmoney.sha256",
       "golden/digest/claim_task_command.sha256",
+      "golden/digest/output_contract_revision.sha256",
       "golden/digest/publication_disabled.sha256",
       "golden/digest/recovery_reuse.sha256",
       "golden/digest/run_queued.sha256",

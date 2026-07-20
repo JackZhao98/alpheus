@@ -30,6 +30,9 @@ func TestGovernanceGoFieldsMatchSchema(t *testing.T) {
 		"EffectClassHead":      reflect.TypeOf(governance.EffectClassHead{}),
 		"KillSwitchRevision":   reflect.TypeOf(governance.KillSwitchRevision{}),
 		"KillSwitchHead":       reflect.TypeOf(governance.KillSwitchHead{}),
+		"OwnerPolicyRevision":  reflect.TypeOf(governance.OwnerPolicyRevision{}),
+		"OwnerPolicyHead":      reflect.TypeOf(governance.OwnerPolicyHead{}),
+		"OwnerPolicyEvent":     reflect.TypeOf(governance.OwnerPolicyEvent{}),
 		"ActivationReceipt":    reflect.TypeOf(governance.ActivationReceipt{}),
 		"GovernanceEvent":      reflect.TypeOf(governance.GovernanceEvent{}),
 	}
@@ -58,6 +61,39 @@ func TestGovernanceEnumsMatchSchema(t *testing.T) {
 		string(governance.TransitionHalt), string(governance.TransitionLower),
 		string(governance.TransitionRaise), string(governance.TransitionResume),
 	})
+	assertEnum(t, schemaDefinition(t, schema, "OwnerPolicyOriginKind"), []string{
+		"external_event", "kernel_event", "schedule", "system_maintenance", "user_request",
+	})
+}
+
+func TestGovernanceAuthoritySchemaIsExact(t *testing.T) {
+	schema := readSchema(t, filepath.Join(governancePackRoot(t), "schema", "governance.schema.json"))
+	for _, definition := range []string{
+		"PlatformModeRevision", "EffectClassRevision", "KillSwitchRevision", "OwnerPolicyRevision",
+	} {
+		properties := schemaDefinition(t, schema, definition)["properties"].(map[string]any)
+		if got := properties["author"].(map[string]any)["$ref"]; got != "#/$defs/ActivatorActor" {
+			t.Fatalf("%s.author ref=%v", definition, got)
+		}
+	}
+	for _, definition := range []string{
+		"PlatformModeHead", "EffectClassHead", "KillSwitchHead", "OwnerPolicyHead",
+	} {
+		properties := schemaDefinition(t, schema, definition)["properties"].(map[string]any)
+		if got := properties["activated_by"].(map[string]any)["$ref"]; got != "#/$defs/ActivatorActor" {
+			t.Fatalf("%s.activated_by ref=%v", definition, got)
+		}
+	}
+	ownerHead := schemaDefinition(t, schema, "OwnerPolicyHead")["properties"].(map[string]any)
+	if got := ownerHead["revision"].(map[string]any)["$ref"]; got != "#/$defs/OwnerPolicyRevisionRef" {
+		t.Fatalf("OwnerPolicyHead.revision ref=%v", got)
+	}
+	ownerEvent := schemaDefinition(t, schema, "OwnerPolicyEvent")["properties"].(map[string]any)
+	for _, property := range []string{"previous_revision", "current_revision"} {
+		if got := ownerEvent[property].(map[string]any)["$ref"]; got != "#/$defs/OwnerPolicyRevisionRef" {
+			t.Fatalf("OwnerPolicyEvent.%s ref=%v", property, got)
+		}
+	}
 }
 
 func TestGovernanceGoldens(t *testing.T) {
@@ -74,8 +110,12 @@ func TestGovernanceGoldens(t *testing.T) {
 		{"valid", "effect_class_head.json", "effect_class_head.sha256", "effect_class_head", true},
 		{"valid", "kill_switch_head.json", "kill_switch_head.sha256", "kill_switch_head", true},
 		{"valid", "governance_event.json", "governance_event.sha256", "governance_event", true},
+		{"valid", "owner_policy_revision.json", "owner_policy_revision.sha256", "owner_policy_revision", true},
+		{"valid", "owner_policy_head.json", "owner_policy_head.sha256", "owner_policy_head", true},
+		{"valid", "owner_policy_event.json", "owner_policy_event.sha256", "owner_policy_event", true},
 		{"invalid", "receipt_stale_generation.json", "", "activation_receipt", false},
 		{"invalid", "switch_unknown.json", "", "kill_switch_revision", false},
+		{"invalid", "owner_policy_money_effect.json", "", "owner_policy_revision", false},
 	}
 	for _, test := range tests {
 		t.Run(test.class+"/"+test.file, func(t *testing.T) {

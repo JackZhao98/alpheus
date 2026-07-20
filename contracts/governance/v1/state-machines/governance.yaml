@@ -7,6 +7,13 @@
         {"from": "absent", "to": "active", "guard": "receipt expected generation zero or emergency halt"},
         {"from": "active", "to": "active", "guard": "exact generation compare-and-swap"}
       ]
+    },
+    "owner_policy_head": {
+      "states": ["absent", "active"],
+      "transitions": [
+        {"from": "absent", "to": "active", "guard": "exact expected generation zero"},
+        {"from": "active", "to": "active", "guard": "exact generation compare-and-swap"}
+      ]
     }
   },
   "failure": "missing, malformed, stale, or incompatible state resolves disabled or halted"

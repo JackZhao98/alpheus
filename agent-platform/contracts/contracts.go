@@ -257,7 +257,7 @@ func (value HeadRef) Validate() error {
 func (value RunOrigin) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || value.Source.Validate() != nil ||
 		value.InitiatingActor.Validate() != nil || value.OwnerPolicy.Validate() != nil ||
-		value.OwnerPolicy.Owner != OwnerPlatformGovernance ||
+		value.OwnerPolicy.Owner != OwnerPlatformGovernance || value.OwnerPolicy.RecordType != "owner_policy_revision" ||
 		!orderedUTC(value.OccurredAt, value.ObservedAt, value.CommittedAt) {
 		return ErrInvalidContract
 	}
@@ -315,7 +315,7 @@ func (value RecoveryLineage) Validate() error {
 func (value EffectiveRunAuthority) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validSHA256(value.OriginDigest) ||
 		value.Actor.Validate() != nil || value.OwnerPolicy.Validate() != nil ||
-		value.OwnerPolicy.Owner != OwnerPlatformGovernance ||
+		value.OwnerPolicy.Owner != OwnerPlatformGovernance || value.OwnerPolicy.RecordType != "owner_policy_revision" ||
 		ValidatePlatformMode(value.Mode) != nil || ValidateEffectClass(value.EffectCeiling) != nil ||
 		!validUTC(value.IssuedAt) || !validUTC(value.ValidUntil) || !value.IssuedAt.Before(value.ValidUntil) ||
 		len(value.SourceHeads) == 0 || len(value.SourceHeads) > 64 {

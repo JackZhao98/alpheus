@@ -1,0 +1,15 @@
+{
+  "schema_revision": 1,
+  "policy_id": "scheduled-research",
+  "revision_id": "50000000-0000-4000-8000-000000000001",
+  "generation": 1,
+  "origin_kind": "schedule",
+  "source_owner": "agent_control",
+  "source_record_type": "schedule_occurrence",
+  "initiating_kind": "workload",
+  "initiating_audience": "control_api",
+  "effect_ceiling": "external_read",
+  "author": {"principal_id": "owner-1", "kind": "user", "audience": "activator"},
+  "reason_code": "unsafe_effect",
+  "created_at": "2026-07-19T18:00:00Z"
+}
