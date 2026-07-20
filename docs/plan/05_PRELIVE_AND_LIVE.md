@@ -76,6 +76,13 @@ at first session. A context exceeding the budget refuses the session. A
 `lessons` row containing instruction-shaped text does not change the operation
 the kernel receives.
 
+**Implementation note:** the frozen acceptance behavior is provider-neutral in
+the completed runtime. `LLM_PROVIDER=openai` uses the OpenAI Responses API and
+its exact input-token counter; `LLM_PROVIDER=anthropic` retains the original
+Anthropic SDK path. Both transports use the same forced single-contract call,
+local validation, one-retry ceiling, budget gate, and telemetry. The current
+OpenAI model setting is `gpt-5.6-sol` for both model tiers.
+
 ---
 
 ## Milestone 11 — Robinhood live adapter + canary
