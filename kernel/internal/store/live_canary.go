@@ -14,6 +14,7 @@ import (
 const (
 	liveCanaryLegacyAuthorityVersion = 1
 	liveCanaryAuthorityVersion       = 2
+	liveCanaryOwnerOverrideVersion   = 3
 )
 
 var (
@@ -60,7 +61,8 @@ type RecordLiveCanaryRevisionInput struct {
 // Initial bootstrap and tightening remain immediate. K1C permits widening only
 // when the same transaction validates the required immutable completed-day
 // attestations; day_open alone is never evidence. Every change serializes with
-// Live grant admission on the stable Live ledger lock.
+// Live grant admission on the stable Live ledger lock. Authority version 3 is
+// load-only support for an audited one-time owner-directed policy revision.
 func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*LiveCanaryRevision, error) {
 	input.AccountID = strings.TrimSpace(input.AccountID)
 	input.RecordedBy = strings.TrimSpace(input.RecordedBy)
@@ -293,7 +295,15 @@ func latestLiveCanaryRevision(ctx context.Context, tx *sql.Tx) (*LiveCanaryRevis
 			WHERE e.kind='live_canary_revision_recorded'
 			  AND e.payload->>'revision_id'=r.id::text
 			  AND e.payload->>'generation'=r.id::text
-			  AND e.payload->>'change'=r.change_class)
+			  AND e.payload->>'change'=r.change_class
+			  AND (r.authority_version <> 3 OR (
+			    e.payload->>'authority_version'='3'
+			    AND e.payload->>'owner_override'='true'
+			    AND char_length(btrim(COALESCE(e.payload->>'account_id',''))) BETWEEN 1 AND 200
+			    AND char_length(btrim(COALESCE(e.payload->>'previous_revision_id',''))) > 0
+			    AND e.payload->>'recorded_by'=r.recorded_by
+			    AND e.payload->>'reason'=r.reason))
+			)
 		FROM live_canary_revision r
 		WHERE r.authority_version IS NOT NULL
 		ORDER BY r.id DESC LIMIT 1`).Scan(
@@ -320,7 +330,8 @@ func latestLiveCanaryRevision(ctx context.Context, tx *sql.Tx) (*LiveCanaryRevis
 func validateLiveCanaryAuthority(revision *LiveCanaryRevision, marketDay time.Time) error {
 	if revision == nil || revision.ID <= 0 || revision.Generation != revision.ID ||
 		(revision.AuthorityVersion != liveCanaryLegacyAuthorityVersion &&
-			revision.AuthorityVersion != liveCanaryAuthorityVersion) ||
+			revision.AuthorityVersion != liveCanaryAuthorityVersion &&
+			revision.AuthorityVersion != liveCanaryOwnerOverrideVersion) ||
 		revision.DailyAuthorizedRiskCapUSD <= 0 || revision.CleanDaysBeforeRaise <= 0 ||
 		revision.EffectiveMarketDay.IsZero() || revision.RecordedAt.IsZero() ||
 		strings.TrimSpace(revision.RecordedBy) == "" || strings.TrimSpace(revision.Reason) == "" ||
@@ -338,7 +349,11 @@ func validateLiveCanaryAuthority(revision *LiveCanaryRevision, marketDay time.Ti
 			return ErrLiveCanaryAuthorityInvalid
 		}
 	case revision.ChangeClass == "widen":
-		if revision.RequiredAttestations <= 0 ||
+		if revision.AuthorityVersion == liveCanaryOwnerOverrideVersion {
+			if revision.RequiredAttestations != 0 || len(revision.AttestationIDs) != 0 {
+				return ErrLiveCanaryAuthorityInvalid
+			}
+		} else if revision.RequiredAttestations <= 0 ||
 			len(revision.AttestationIDs) != revision.RequiredAttestations ||
 			strings.TrimSpace(revision.WideningAccountID) == "" {
 			return ErrLiveCanaryAuthorityInvalid
