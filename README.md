@@ -144,6 +144,11 @@ http://127.0.0.1:8100/
 http://127.0.0.1:8100/cockpit
 ```
 
+Cockpit 现在还带一个最小的 `Ask Scout` 预览入口：输入股票代码和问题后，
+Kernel 拉取最新标准化报价与 30 日 bars，Runtime 返回严格类型化的 Scout
+结果。`POST /agent/query` 是只读路径，不能创建 operation；默认 `stub`
+只返回 `PASS`，配置真实 cognition 后才会产生研究内容。
+
 它显示运行模式、Provider/snapshot 状态、脱敏账户、资金、live/shadow
 双账本、持仓、行情、外部订单/成交诊断，以及带 `(ts,id)` 游标的最近操作。
 Live MCP Tool Lab 另外列出 34 个经审阅的无状态变更工具（32 个数据查询和
