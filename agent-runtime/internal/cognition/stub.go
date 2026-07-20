@@ -27,7 +27,7 @@ func (Stub) Run(role roles.Role, _ map[string]json.RawMessage) (contracts.Output
 			}},
 		}, nil
 	case "scout":
-		return contracts.OpportunityBrief{Action: "PASS"}, nil
+		return contracts.OpportunityBrief{Action: "PASS", Candidates: []map[string]any{}, StructuralNotes: []string{}}, nil
 	case "position_manager":
 		return contracts.ExitAction{Blotter: "stub: flat"}, nil
 	case "coach":

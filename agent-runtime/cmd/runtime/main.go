@@ -60,8 +60,21 @@ func main() {
 	for _, role := range rs {
 		roleByName[role.Role] = role
 	}
-	wakeHandler := newWakeHandler(kernelToken, roleByName, func(role roles.Role, trigger, occurrenceID string) {
+	wakeHandler := newRuntimeHandler(kernelToken, roleByName, func(role roles.Role, trigger, occurrenceID string) {
 		go runSession(client, cog, role, trigger, occurrenceID)
+	}, func(role roles.Role, symbol, question string) (contracts.Output, error) {
+		ctx, err := client.AssembleQuery(role, symbol, question)
+		if err != nil {
+			return nil, err
+		}
+		out, err := cog.Run(role, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := out.Validate(); err != nil {
+			return nil, err
+		}
+		return out, nil
 	})
 	log.Printf("agent-runtime up: roles=%v cognition=%s kernel=%s", names, env("COGNITION", "stub"), kernel)
 	if tick > 0 {

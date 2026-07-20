@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"alpheus/agentruntime/internal/roles"
@@ -19,6 +21,49 @@ type Client struct {
 	Kernel string
 	Token  string
 	HTTP   *http.Client
+}
+
+// AssembleQuery adds the minimum live market context needed by the read-only
+// Scout query path. The query never receives broker credentials and cannot
+// submit an operation.
+func (c *Client) AssembleQuery(role roles.Role, symbol, query string) (map[string]json.RawMessage, error) {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	query = strings.TrimSpace(query)
+	if !safeSymbol(symbol) || query == "" {
+		return nil, fmt.Errorf("symbol and query are required")
+	}
+	ctx, err := c.Assemble(role)
+	if err != nil {
+		return nil, err
+	}
+	queryJSON, _ := json.Marshal(query)
+	symbolJSON, _ := json.Marshal(symbol)
+	ctx["user_query"] = queryJSON
+	ctx["symbol"] = symbolJSON
+	for key, path := range map[string]string{
+		"market_quote": "/market/quote/" + url.PathEscape(symbol),
+		"market_bars":  "/market/bars/" + url.PathEscape(symbol) + "?days=30",
+	} {
+		raw, err := c.getJSON(path)
+		if err != nil {
+			return nil, err
+		}
+		ctx[key] = raw
+	}
+	return ctx, nil
+}
+
+func safeSymbol(symbol string) bool {
+	if len(symbol) == 0 || len(symbol) > 16 {
+		return false
+	}
+	for _, char := range symbol {
+		if (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '.' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func New(kernelURL, token string) *Client {

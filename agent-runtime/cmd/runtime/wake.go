@@ -12,11 +12,15 @@ import (
 	"sync"
 	"time"
 
+	"alpheus/agentruntime/internal/contracts"
 	"alpheus/agentruntime/internal/roles"
 )
 
 const maxWakeBodyBytes int64 = 1 << 20
+const maxQueryBodyBytes int64 = 16 << 10
 const maxWakeDedupEntries = 4096
+
+type queryRunner func(roles.Role, string, string) (contracts.Output, error)
 
 type wakeDeduper struct {
 	mu   sync.Mutex
@@ -69,6 +73,10 @@ func wakeBearerToken(r *http.Request) string {
 }
 
 func newWakeHandler(token string, roleByName map[string]roles.Role, run func(roles.Role, string, string)) http.Handler {
+	return newRuntimeHandler(token, roleByName, run, nil)
+}
+
+func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(roles.Role, string, string), query queryRunner) http.Handler {
 	deduper := newWakeDeduper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /wake", func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +138,51 @@ func newWakeHandler(token string, roleByName map[string]roles.Role, run func(rol
 			"accepted": true, "deduplicated": !accepted,
 			"role": role.Role, "occurrence_id": occurrenceID,
 		})
+	})
+	mux.HandleFunc("POST /query", func(w http.ResponseWriter, r *http.Request) {
+		if !wakeTokenMatches(wakeBearerToken(r), token) {
+			wakeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if query == nil {
+			wakeJSON(w, http.StatusNotFound, map[string]string{"error": "query unavailable"})
+			return
+		}
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mediaType != "application/json" {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "content-type must be application/json"})
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxQueryBodyBytes)
+		var in struct {
+			Symbol string `json:"symbol"`
+			Query  string `json:"query"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&in); err != nil {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain exactly one JSON value"})
+			return
+		}
+		if len(strings.TrimSpace(in.Query)) == 0 || len(in.Query) > 4000 {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "query must contain 1-4000 bytes"})
+			return
+		}
+		role, ok := roleByName["scout"]
+		if !ok {
+			wakeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "scout unavailable"})
+			return
+		}
+		output, err := query(role, in.Symbol, in.Query)
+		if err != nil {
+			wakeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent query failed"})
+			return
+		}
+		wakeJSON(w, http.StatusOK, map[string]any{"role": role.Role, "output": output})
 	})
 	return mux
 }

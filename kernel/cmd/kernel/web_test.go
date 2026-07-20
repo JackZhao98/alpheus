@@ -26,7 +26,7 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	if strings.Contains(page.Body.String(), "<script>") {
 		t.Fatal("cockpit contains an inline script")
 	}
-	for _, required := range []string{"query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "provider-cash", "mutation-gate", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak", "control-actions hidden", "admin-auth-form", "pending-list", "warning-list", "halt-form", "Broker coexistence", "reconciliation-state", "external-change-list", "invalidation-list", "Completed Live canary days", "canary-attestation-list", "Exposure", "Broker origin"} {
+	for _, required := range []string{"agent-query-form", "Ask Scout", "query-form", "Option chain", "Provider status", "mcp-form", "LIVE MCP TOOL LAB", "34 SAFE / 15 BLOCKED", "provider-cash", "mutation-gate", "live-pnl", "shadow-pnl", "live-streak", "shadow-streak", "control-actions hidden", "admin-auth-form", "pending-list", "warning-list", "halt-form", "Broker coexistence", "reconciliation-state", "external-change-list", "invalidation-list", "Completed Live canary days", "canary-attestation-list", "Exposure", "Broker origin"} {
 		if !strings.Contains(page.Body.String(), required) {
 			t.Fatalf("cockpit query lab missing %q", required)
 		}
@@ -42,6 +42,9 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	}
 	if !strings.Contains(script.Body.String(), `method:"POST"`) || !strings.Contains(script.Body.String(), "/mcp/read-query") {
 		t.Fatal("read-only cockpit is missing the allowlisted MCP query POST")
+	}
+	if !strings.Contains(script.Body.String(), "/agent/query") {
+		t.Fatal("cockpit is missing the read-only Agent query bridge")
 	}
 	for _, safePath := range []string{"/market/quote/", "/market/bars/", "/market/expirations/", "/market/chain/", "/provider/status"} {
 		if !strings.Contains(script.Body.String(), safePath) {

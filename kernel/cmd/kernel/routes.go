@@ -30,6 +30,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /provider/status", s.authorize(permissionRead, s.getProviderStatus))
 	mux.HandleFunc("GET /mcp/read-tools", s.authorize(permissionRead, s.getMCPReadTools))
 	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))
+	mux.HandleFunc("POST /agent/query", s.authorize(permissionRead, s.postAgentQuery))
 
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)

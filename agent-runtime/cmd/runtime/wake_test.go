@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"alpheus/agentruntime/internal/contracts"
 	"alpheus/agentruntime/internal/roles"
 )
 
@@ -127,6 +128,33 @@ func TestWakeResponseMarksDuplicate(t *testing.T) {
 		if response["deduplicated"] != wantDuplicate {
 			t.Fatalf("request %d response=%v, want deduplicated=%v", i+1, response, wantDuplicate)
 		}
+	}
+}
+
+func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
+	var gotSymbol, gotQuery string
+	handler := newRuntimeHandler("kernel-secret", map[string]roles.Role{
+		"scout": {Role: "scout"},
+	}, func(roles.Role, string, string) {
+		t.Fatal("query must not run the operation session path")
+	}, func(role roles.Role, symbol, query string) (contracts.Output, error) {
+		gotSymbol, gotQuery = symbol, query
+		return contracts.OpportunityBrief{Action: "PASS"}, nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(`{"symbol":"SOFI","query":"值得研究吗？"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer kernel-secret")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || gotSymbol != "SOFI" || gotQuery != "值得研究吗？" {
+		t.Fatalf("status=%d symbol=%q query=%q body=%s", w.Code, gotSymbol, gotQuery, w.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["role"] != "scout" {
+		t.Fatalf("response=%v", response)
 	}
 }
 

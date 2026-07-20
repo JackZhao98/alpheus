@@ -185,6 +185,22 @@
       </article>
     </section>
 
+    <section class="panel query-lab" aria-labelledby="agent-query-title">
+      <div class="panel-head">
+        <div><p class="eyebrow">AGENT MVP PREVIEW</p><h2 id="agent-query-title">Ask Scout</h2></div>
+        <span class="source">READ ONLY · NO ORDERS</span>
+      </div>
+      <p class="query-intro">Scout receives your question plus the latest normalized quote and 30-day bars from Kernel. This path cannot submit an operation.</p>
+      <form id="agent-query-form" class="query-form">
+        <label class="query-control" for="agent-symbol"><span>Symbol</span><input id="agent-symbol" value="SOFI" maxlength="16" autocomplete="off" spellcheck="false"></label>
+        <label class="query-control" for="agent-question"><span>Question</span><textarea id="agent-question" rows="3" maxlength="4000" autocomplete="off" spellcheck="false">What is worth investigating in the current price action?</textarea></label>
+        <div class="query-actions"><button id="agent-query-run" type="submit">Ask Scout</button></div>
+      </form>
+      <div class="query-request"><span>Request</span><code>POST /agent/query</code><strong id="agent-query-status">READY</strong></div>
+      <pre id="agent-query-result" class="query-result" aria-live="polite">Run a query to see the typed Scout result.</pre>
+      <p id="agent-query-error" class="panel-error hidden" role="alert"></p>
+    </section>
+
     <section class="panel query-lab" aria-labelledby="query-title">
       <div class="panel-head">
         <div><p class="eyebrow">READ-ONLY QUERY LAB</p><h2 id="query-title">Test normalized MCP data</h2></div>

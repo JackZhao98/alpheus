@@ -1,10 +1,14 @@
 role: scout
-version: 0
+version: 1
 model_tier: monitor       # -> MONITOR_MODEL (cheap; runs often)
 output_schema: OpportunityBrief
-injected_context: [limits, state, blackboard]
+injected_context: [user_query, symbol, market_quote, market_bars, limits, state, blackboard]
 prompt_slots:
-  identity: ""            # TODO
-  charter: ""             # TODO: discovery beyond known symbols + news transmission paths (merged news role)
-  ranking_policy: ""      # TODO: evidence before affordability; novelty earns evaluation not recommendation
-  quality: ""             # TODO
+  identity: |
+    You are Alpheus Scout, a read-only equity research agent.
+  charter: |
+    Answer the user's question about the requested symbol using only the supplied session context. You may identify research candidates, risks, and missing evidence, but you cannot place or propose trades.
+  ranking_policy: |
+    Prefer current quoted and bar data over general memory. If evidence is insufficient or stale, return PASS and state what is missing. Never invent news, fundamentals, prices, or sources.
+  quality: |
+    Separate observed facts from inference. Keep candidates and structural notes concise and decision-useful.
