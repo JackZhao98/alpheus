@@ -40,15 +40,16 @@ func (c *Client) AssembleQuery(role roles.Role, symbol, query string) (map[strin
 	symbolJSON, _ := json.Marshal(symbol)
 	ctx["user_query"] = queryJSON
 	ctx["symbol"] = symbolJSON
-	for key, path := range map[string]string{
-		"market_quote": "/market/quote/" + url.PathEscape(symbol),
-		"market_bars":  "/market/bars/" + url.PathEscape(symbol) + "?days=30",
-	} {
-		raw, err := c.getJSON(path)
-		if err != nil {
-			return nil, err
-		}
-		ctx[key] = raw
+	bars, err := c.getJSON("/market/bars/" + url.PathEscape(symbol) + "?days=30")
+	if err != nil {
+		return nil, err
+	}
+	ctx["market_bars"] = bars
+	quote, err := c.getJSON("/market/quote/" + url.PathEscape(symbol))
+	if err != nil {
+		ctx["market_quote"] = json.RawMessage(`{"available":false,"reason":"unavailable_or_stale"}`)
+	} else {
+		ctx["market_quote"] = quote
 	}
 	return ctx, nil
 }
