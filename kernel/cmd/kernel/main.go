@@ -1548,6 +1548,12 @@ func minQty(left, right units.Qty) units.Qty {
 
 func executionLimit(op risk.Operation, quote *broker.Quote, maxAgeSec int) (units.Micros, error) {
 	if op.Action == "open" {
+		if op.OrderType == "market" {
+			if op.ApprovedPriceCap <= 0 {
+				return 0, fmt.Errorf("no authorized risk bound for market open")
+			}
+			return op.ApprovedPriceCap, nil
+		}
 		if op.WorkingPrice <= 0 {
 			return 0, fmt.Errorf("no executable price for open")
 		}
@@ -1784,7 +1790,7 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 	if attempt.Intent == "cancel" {
 		result, err = execution.CancelOrder(brokerCtx, attempt.TargetBrokerOrderID)
 	} else {
-		result, err = execution.PlaceLimitOrder(brokerCtx, placeRequest)
+		result, err = execution.PlaceOrder(brokerCtx, placeRequest)
 	}
 	cancel()
 	if err != nil {
@@ -1851,23 +1857,34 @@ func persistedPlaceRequest(op risk.Operation, attempt *store.ExecutionAttempt) b
 	if op.Action == "close" {
 		positionEffect = "close"
 	}
+	orderType := op.OrderType
+	if orderType == "" {
+		orderType = "limit"
+	}
 	return broker.PlaceRequest{
 		ClientOrderID: attempt.ClientOrderID, Symbol: operationSymbol(op), Side: op.Side,
-		PositionEffect: positionEffect, Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
+		PositionEffect: positionEffect, OrderType: orderType,
+		Qty: attempt.Qty, Limit: attempt.Limit, Kind: op.Kind,
 	}
 }
 
 func canonicalProviderIntent(req broker.PlaceRequest, instrumentID string) (json.RawMessage, []byte, error) {
 	intent := broker.ProviderPlaceIntent{
 		Kind: req.Kind, InstrumentID: strings.TrimSpace(instrumentID), Symbol: req.Symbol,
-		Side: req.Side, PositionEffect: req.PositionEffect, Qty: req.Qty, Limit: req.Limit,
-		OrderType: "limit", Trigger: "immediate", TimeInForce: "gfd", MarketHours: "regular_hours",
+		Side: req.Side, PositionEffect: req.PositionEffect, Qty: req.Qty,
+		OrderType: req.OrderType, Trigger: "immediate", TimeInForce: "gfd", MarketHours: "regular_hours",
+	}
+	if intent.OrderType == "limit" {
+		intent.Limit = req.Limit
 	}
 	if intent.InstrumentID == "" || strings.TrimSpace(intent.Symbol) == "" ||
 		(intent.Kind != "equity" && intent.Kind != "option") ||
 		(intent.Side != "buy" && intent.Side != "sell") ||
 		(intent.PositionEffect != "open" && intent.PositionEffect != "close") ||
-		intent.Qty <= 0 || intent.Limit <= 0 {
+		intent.Qty <= 0 ||
+		(intent.OrderType == "limit" && intent.Limit <= 0) ||
+		(intent.OrderType == "market" && (intent.Kind != "equity" || intent.Side != "buy" || intent.Limit != 0)) ||
+		(intent.OrderType != "limit" && intent.OrderType != "market") {
 		return nil, nil, fmt.Errorf("provider place intent is incomplete")
 	}
 	canonical, err := json.Marshal(intent)
@@ -2042,6 +2059,7 @@ type proposeRequest struct {
 	Underlying        string            `json:"underlying"`
 	Symbol            string            `json:"symbol"`
 	Side              string            `json:"side"`
+	OrderType         string            `json:"order_type"`
 	Qty               units.Qty         `json:"qty"`
 	Limit             *units.Micros     `json:"limit"`
 	MaxRiskUSD        *units.Micros     `json:"max_risk_usd"`
@@ -2078,7 +2096,8 @@ func hashClientIntent(op risk.Operation) ([sha256.Size]byte, error) {
 	intent := proposeRequest{
 		Proposer: op.Proposer, Action: op.Action, Kind: op.Kind,
 		Underlying: op.Underlying, Symbol: op.Symbol, Side: op.Side,
-		Qty: op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
+		OrderType: op.OrderType,
+		Qty:       op.Qty, Limit: op.Limit, MaxRiskUSD: op.MaxRiskUSD,
 		Short: op.Short, Plan: op.Plan, Thesis: op.Thesis, Setup: op.Setup,
 		Shadow: op.Shadow, BrokerOrderID: op.BrokerOrderID, PositionID: op.PositionID,
 		ClosesOperationID: op.ClosesOperationID,
@@ -2094,7 +2113,8 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 	op := risk.Operation{
 		Proposer: request.Proposer, Action: request.Action, Kind: request.Kind,
 		Underlying: request.Underlying, Symbol: request.Symbol, Side: request.Side,
-		Qty: request.Qty, Limit: request.Limit, MaxRiskUSD: request.MaxRiskUSD,
+		OrderType: request.OrderType,
+		Qty:       request.Qty, Limit: request.Limit, MaxRiskUSD: request.MaxRiskUSD,
 		Short: request.Short, Plan: request.Plan, Thesis: request.Thesis,
 		Setup: request.Setup, Shadow: request.Shadow,
 		BrokerOrderID:     request.BrokerOrderID,
@@ -2108,6 +2128,9 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 
 	switch op.Action {
 	case "open":
+		if op.OrderType == "" {
+			op.OrderType = "limit"
+		}
 		if strings.TrimSpace(op.Underlying) == "" {
 			return op, fmt.Errorf("open requires underlying")
 		}
@@ -2126,7 +2149,28 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 		if op.Kind == "option" && op.Qty%units.Qty(units.Scale) != 0 {
 			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
+		switch op.OrderType {
+		case "limit":
+		case "market":
+			if op.Kind != "equity" || op.Side != "buy" {
+				return op, fmt.Errorf("market orders currently support equity buys only")
+			}
+			if op.Qty%units.Qty(units.Scale) != 0 {
+				return op, fmt.Errorf("market orders require a whole number of shares")
+			}
+			if op.Limit != nil {
+				return op, fmt.Errorf("market orders must not include limit")
+			}
+			if op.MaxRiskUSD == nil || *op.MaxRiskUSD <= 0 {
+				return op, fmt.Errorf("market orders require positive max_risk_usd")
+			}
+		default:
+			return op, fmt.Errorf("bad order_type %q", op.OrderType)
+		}
 	case "close":
+		if op.OrderType != "" {
+			return op, fmt.Errorf("order_type is currently supported only for open")
+		}
 		op.PositionID = strings.TrimSpace(op.PositionID)
 		if strings.TrimSpace(symbol) == "" {
 			return op, fmt.Errorf("close requires symbol or underlying")
@@ -2145,11 +2189,17 @@ func validateAndBuildOperation(request proposeRequest) (risk.Operation, error) {
 			return op, fmt.Errorf("option qty must be a whole number of contracts")
 		}
 	case "cancel":
+		if op.OrderType != "" {
+			return op, fmt.Errorf("order_type is currently supported only for open")
+		}
 		op.BrokerOrderID = strings.TrimSpace(op.BrokerOrderID)
 		if op.BrokerOrderID == "" {
 			return op, fmt.Errorf("cancel requires broker_order_id")
 		}
 	case "tighten_stop":
+		if op.OrderType != "" {
+			return op, fmt.Errorf("order_type is currently supported only for open")
+		}
 		if strings.TrimSpace(symbol) == "" {
 			return op, fmt.Errorf("tighten_stop requires symbol or underlying")
 		}
@@ -2227,12 +2277,40 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 		return op
 	}
 
+	op.WorkingPrice = quote.Ask
+	if op.OrderType == "market" {
+		// A true market order has no provider-visible price. The explicit client
+		// declaration remains the durable cash/risk authorization; this bound is
+		// never sent to Robinhood as a limit price.
+		wholeShares := int64(op.Qty) / units.Scale
+		if wholeShares <= 0 || op.MaxRiskUSD == nil {
+			op.RejectReason = "risk_not_computed"
+			return op
+		}
+		fees, err := units.MulQtyPrice(op.Qty, limits.ExecutionPolicy.FeePerShare, 1, true)
+		if err != nil || *op.MaxRiskUSD <= fees {
+			op.RejectReason = "risk_overflow"
+			return op
+		}
+		priceBudget := *op.MaxRiskUSD - fees
+		op.ApprovedPriceCap = units.Micros(int64(priceBudget) / wholeShares)
+		estimated, err := units.MulQtyPrice(op.Qty, quote.Ask, 1, true)
+		if err == nil {
+			estimated, err = units.Add(estimated, fees)
+		}
+		if err != nil || estimated > *op.MaxRiskUSD || op.ApprovedPriceCap <= 0 {
+			op.RejectReason = "market_risk_cap_below_quote"
+			return op
+		}
+		op.RequiredCash = *op.MaxRiskUSD
+		op.DerivedMaxRisk = *op.MaxRiskUSD
+		return op
+	}
 	if op.Limit != nil {
 		op.ApprovedPriceCap = *op.Limit
 	} else {
 		op.ApprovedPriceCap = quote.Ask
 	}
-	op.WorkingPrice = quote.Ask
 	if limits.ExecutionPolicy.StartAt == "mid" {
 		op.WorkingPrice = quote.Mid()
 	}
@@ -2297,6 +2375,7 @@ func addRiskFacts(response map[string]any, op risk.Operation) {
 	if op.Action != "open" {
 		return
 	}
+	response["order_type"] = op.OrderType
 	response["derived_max_risk"] = op.DerivedMaxRisk
 	response["required_cash"] = op.RequiredCash
 	response["approved_price_cap"] = op.ApprovedPriceCap

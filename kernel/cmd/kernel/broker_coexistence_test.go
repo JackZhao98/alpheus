@@ -160,7 +160,7 @@ func TestExternalWorkingCloseConsumesClosableQuantityWithoutReversal(t *testing.
 func TestExternalOpeningOrderCancelCreatesNewAuditedLifecycle(t *testing.T) {
 	venue := newFake("300")
 	setQuote(venue, "EXTCANCEL", "9.90", "10", 1_000)
-	target, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+	target, err := venue.PlaceOrder(context.Background(), broker.PlaceRequest{
 		ClientOrderID: "manual-ref", Symbol: "EXTCANCEL", Side: "buy",
 		PositionEffect: "open", Qty: units.MustQty("1"), Limit: units.MustMicros("9"), Kind: "equity",
 	})
@@ -196,7 +196,7 @@ func TestProtectiveExternalOrderCancelIsRejectedWithoutProviderEffect(t *testing
 	if opened, err := placeOrder(venue, "PROTECT", "buy", "1", "10", "equity"); err != nil || opened.State != "filled" {
 		t.Fatalf("seed position: order=%+v err=%v", opened, err)
 	}
-	target, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+	target, err := venue.PlaceOrder(context.Background(), broker.PlaceRequest{
 		ClientOrderID: "protective-ref", Symbol: "PROTECT", Side: "sell",
 		PositionEffect: "close", Qty: units.MustQty("1"), Limit: units.MustMicros("11"), Kind: "equity",
 	})

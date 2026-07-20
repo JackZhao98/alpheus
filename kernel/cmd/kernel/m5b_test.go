@@ -35,7 +35,7 @@ func newRepriceExecution(initialID string) *repriceExecution {
 	}
 }
 
-func (e *repriceExecution) PlaceLimitOrder(_ context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
+func (e *repriceExecution) PlaceOrder(_ context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, result := range e.orders {

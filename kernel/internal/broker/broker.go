@@ -137,13 +137,16 @@ type ReadFill struct {
 }
 
 type PlaceRequest struct {
-	ClientOrderID  string       `json:"client_order_id"`
-	Symbol         string       `json:"symbol"`
-	Side           string       `json:"side"`
-	PositionEffect string       `json:"position_effect"`
-	Qty            units.Qty    `json:"qty"`
-	Limit          units.Micros `json:"limit"`
-	Kind           string       `json:"kind"`
+	ClientOrderID  string    `json:"client_order_id"`
+	Symbol         string    `json:"symbol"`
+	Side           string    `json:"side"`
+	PositionEffect string    `json:"position_effect"`
+	OrderType      string    `json:"order_type"`
+	Qty            units.Qty `json:"qty"`
+	// Limit is the provider limit for limit orders and the Kernel-authorized
+	// per-share risk bound for market orders. Market providers must not send it.
+	Limit units.Micros `json:"limit"`
+	Kind  string       `json:"kind"`
 }
 
 // ProviderPlaceIntent is the canonical, provider-visible identity of one
@@ -222,7 +225,7 @@ type RealizedPnLProvider interface {
 }
 
 type ExecutionProvider interface {
-	PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
+	PlaceOrder(ctx context.Context, req PlaceRequest) (OrderResult, error)
 	CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
 	GetOrder(ctx context.Context, brokerOrderID string) (OrderResult, error)
 }

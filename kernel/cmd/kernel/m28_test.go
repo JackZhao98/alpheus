@@ -15,7 +15,7 @@ import (
 
 type rejectingExecution struct{}
 
-func (rejectingExecution) PlaceLimitOrder(_ context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
+func (rejectingExecution) PlaceOrder(_ context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
 	return broker.OrderResult{
 		ClientOrderID: request.ClientOrderID, State: "rejected", Reason: "injected rejection",
 	}, nil
@@ -32,7 +32,7 @@ func (rejectingExecution) FindOrderByClientID(context.Context, string) (broker.O
 
 type timeoutExecution struct{ base *broker.Fake }
 
-func (e timeoutExecution) PlaceLimitOrder(ctx context.Context, _ broker.PlaceRequest) (broker.OrderResult, error) {
+func (e timeoutExecution) PlaceOrder(ctx context.Context, _ broker.PlaceRequest) (broker.OrderResult, error) {
 	<-ctx.Done()
 	return broker.OrderResult{}, ctx.Err()
 }
@@ -59,7 +59,7 @@ func newFirstBlockingExecution(base *broker.Fake) *firstBlockingExecution {
 	return &firstBlockingExecution{base: base, started: make(chan struct{}), release: make(chan struct{})}
 }
 
-func (e *firstBlockingExecution) PlaceLimitOrder(ctx context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
+func (e *firstBlockingExecution) PlaceOrder(ctx context.Context, request broker.PlaceRequest) (broker.OrderResult, error) {
 	e.mu.Lock()
 	e.calls++
 	call := e.calls
@@ -74,7 +74,7 @@ func (e *firstBlockingExecution) PlaceLimitOrder(ctx context.Context, request br
 			return broker.OrderResult{}, ctx.Err()
 		}
 	}
-	return e.base.PlaceLimitOrder(ctx, request)
+	return e.base.PlaceOrder(ctx, request)
 }
 func (e *firstBlockingExecution) CancelOrder(ctx context.Context, id string) (broker.OrderResult, error) {
 	return e.base.CancelOrder(ctx, id)
@@ -671,7 +671,7 @@ func TestReconcilerHandlesThreeCrashWindows(t *testing.T) {
 				attempt.ClaimedAt = time.Now().Add(-time.Second)
 			}
 			if crashPoint == "accepted" {
-				if _, err := b.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+				if _, err := b.PlaceOrder(context.Background(), broker.PlaceRequest{
 					ClientOrderID: clientID, Symbol: op.Symbol, Side: op.Side,
 					Qty: op.Qty, Limit: op.WorkingPrice, Kind: op.Kind,
 				}); err != nil {

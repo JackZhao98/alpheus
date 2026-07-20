@@ -37,7 +37,10 @@ func (r *RobinhoodExecution) SupportsOrderKind(kind string) bool {
 	return kind == "equity" || (kind == "option" && r.allowOption)
 }
 
-func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceRequest) (OrderResult, error) {
+func (r *RobinhoodExecution) PlaceOrder(ctx context.Context, req PlaceRequest) (OrderResult, error) {
+	if req.OrderType == "" {
+		req.OrderType = "limit"
+	}
 	if !r.SupportsOrderKind(req.Kind) {
 		return OrderResult{}, fmt.Errorf("provider order kind is not certified for live mutation")
 	}
@@ -51,7 +54,7 @@ func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceReque
 	args := map[string]any{
 		"account_number": r.read.accountID,
 		"side":           req.Side,
-		"type":           "limit",
+		"type":           req.OrderType,
 		"time_in_force":  "gfd",
 		"market_hours":   "regular_hours",
 		"ref_id":         req.ClientOrderID,
@@ -60,7 +63,9 @@ func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceReque
 	if req.Kind == "equity" {
 		args["symbol"] = req.Symbol
 		args["quantity"] = req.Qty.String()
-		args["limit_price"] = req.Limit.String()
+		if req.OrderType == "limit" {
+			args["limit_price"] = req.Limit.String()
+		}
 	} else {
 		tool = "place_option_order"
 		args["quantity"] = req.Qty.String()
@@ -91,10 +96,14 @@ func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceReque
 			return OrderResult{}, fmt.Errorf("canonical equity placement unavailable")
 		}
 		order := orders[0]
+		priceMatches := req.OrderType == "market" && order.Price == nil
+		if req.OrderType == "limit" {
+			priceMatches = order.Price != nil && *order.Price == req.Limit
+		}
 		if order.Symbol != req.Symbol || order.InstrumentID != instrument.InstrumentID ||
 			order.Side != req.Side || order.Quantity == nil || *order.Quantity != req.Qty ||
-			order.DollarBasedAmount != nil || order.Price == nil || *order.Price != req.Limit ||
-			!order.StopPrice.Present || order.StopPrice.Known || order.Type != "limit" ||
+			order.DollarBasedAmount != nil || !priceMatches ||
+			!order.StopPrice.Present || order.StopPrice.Known || order.Type != req.OrderType ||
 			order.Trigger != "immediate" || order.TimeInForce != "gfd" ||
 			order.MarketHours != "regular_hours" || order.PlacedAgent != "agentic" {
 			return OrderResult{}, robinhoodSchemaError(r.mutation, "canonical equity placement drift")
@@ -131,7 +140,10 @@ func (r *RobinhoodExecution) PlaceLimitOrder(ctx context.Context, req PlaceReque
 func (r *RobinhoodExecution) validatePlaceRequest(ctx context.Context, req PlaceRequest) (Instrument, error) {
 	if !looksLikeCanonicalUUID(req.ClientOrderID) || strings.TrimSpace(req.Symbol) == "" ||
 		(req.Side != "buy" && req.Side != "sell") || (req.PositionEffect != "open" && req.PositionEffect != "close") ||
-		(req.Kind != "equity" && req.Kind != "option") || req.Qty <= 0 || req.Limit <= 0 {
+		(req.Kind != "equity" && req.Kind != "option") || req.Qty <= 0 || req.Limit <= 0 ||
+		(req.OrderType != "limit" && req.OrderType != "market") ||
+		(req.OrderType == "market" && (req.Kind != "equity" || req.Side != "buy" || req.PositionEffect != "open" ||
+			req.Qty%units.Qty(units.Scale) != 0)) {
 		return Instrument{}, fmt.Errorf("invalid persisted order request")
 	}
 	instrument, err := r.instruments.Instrument(ctx, req.Symbol)
@@ -205,8 +217,10 @@ func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query
 		return nil, fmt.Errorf("exact option candidate recovery is not enabled")
 	}
 	if intent.InstrumentID == "" || strings.TrimSpace(intent.Symbol) == "" ||
-		(intent.Side != "buy" && intent.Side != "sell") || intent.Qty <= 0 || intent.Limit <= 0 ||
-		intent.OrderType != "limit" || intent.Trigger != "immediate" ||
+		(intent.Side != "buy" && intent.Side != "sell") || intent.Qty <= 0 ||
+		(intent.OrderType == "limit" && intent.Limit <= 0) ||
+		(intent.OrderType == "market" && (intent.Limit != 0 || intent.Side != "buy")) ||
+		(intent.OrderType != "limit" && intent.OrderType != "market") || intent.Trigger != "immediate" ||
 		intent.TimeInForce != "gfd" || intent.MarketHours != "regular_hours" {
 		return nil, fmt.Errorf("unsupported exact equity candidate intent")
 	}
@@ -225,10 +239,14 @@ func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query
 			order.MarketHours == "" || order.Trigger == "" || order.PlacedAgent == "" {
 			return nil, robinhoodSchemaError(r.read.caller, "equity candidate schema drift")
 		}
+		priceMatches := intent.OrderType == "market" && order.Price == nil
+		if intent.OrderType == "limit" {
+			priceMatches = order.Price != nil && *order.Price == intent.Limit
+		}
 		if createdAt.Before(query.WindowStart) || createdAt.After(query.WindowEnd) ||
 			order.InstrumentID != intent.InstrumentID || order.Symbol != intent.Symbol || order.Side != intent.Side ||
 			order.Quantity == nil || *order.Quantity != intent.Qty || order.DollarBasedAmount != nil ||
-			order.Price == nil || *order.Price != intent.Limit ||
+			!priceMatches ||
 			order.StopPrice.Known || order.Type != intent.OrderType || order.Trigger != intent.Trigger ||
 			order.TimeInForce != intent.TimeInForce || order.MarketHours != intent.MarketHours ||
 			order.PlacedAgent != "agentic" {
@@ -315,10 +333,14 @@ func (r *RobinhoodExecution) readOptionOrder(ctx context.Context, brokerOrderID 
 }
 
 func normalizeEquityOrder(caller rhmcp.Caller, order equityReadOrder) (OrderResult, error) {
+	priceSane := order.Type == "market" && order.Trigger == "immediate" && order.Price == nil
+	if order.Type == "limit" && order.Trigger == "immediate" {
+		priceSane = order.Price != nil && *order.Price > 0
+	}
 	if !looksLikeCanonicalUUID(order.ID) || order.InstrumentID == "" || order.Symbol == "" ||
 		(order.Side != "buy" && order.Side != "sell") || order.Quantity == nil || order.CumulativeQuantity == nil ||
 		*order.Quantity <= 0 || *order.CumulativeQuantity < 0 || *order.CumulativeQuantity > *order.Quantity ||
-		order.Price == nil || *order.Price <= 0 {
+		!priceSane {
 		return OrderResult{}, robinhoodSchemaError(caller, "equity order schema drift")
 	}
 	state, err := normalizeRobinhoodOrderState(order.State)

@@ -30,6 +30,7 @@ type fakeOrder struct {
 	side           string
 	kind           string
 	positionEffect string
+	orderType      string
 	qty            units.Qty
 	limit          units.Micros
 	multiplier     int64
@@ -88,7 +89,7 @@ func (f *Fake) SetQuote(q Quote) error {
 	f.quotes[q.Symbol] = q
 	for _, order := range f.orders {
 		if order.symbol != q.Symbol || order.result.State != "submitted" ||
-			!marketable(order.side, order.limit, q) {
+			(order.orderType != "market" && !marketable(order.side, order.limit, q)) {
 			continue
 		}
 		if err := f.fillOrder(order, q); err != nil {
@@ -212,13 +213,16 @@ func (f *Fake) GetInstrument(symbol string) (Instrument, error) {
 	return instrument, nil
 }
 
-func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult, error) {
+func (f *Fake) PlaceOrder(_ context.Context, req PlaceRequest) (OrderResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if req.OrderType == "" {
+		req.OrderType = "limit"
+	}
 	for _, existing := range f.orders {
 		if req.ClientOrderID != "" && existing.result.ClientOrderID == req.ClientOrderID {
 			if existing.symbol != req.Symbol || existing.side != req.Side || existing.qty != req.Qty ||
-				existing.limit != req.Limit || existing.kind != req.Kind {
+				existing.limit != req.Limit || existing.kind != req.Kind || existing.orderType != req.OrderType {
 				return OrderResult{}, fmt.Errorf("client order id reused with different order intent")
 			}
 			return existing.result, nil
@@ -232,7 +236,7 @@ func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult
 	if positionEffect != "open" && positionEffect != "close" && positionEffect != "unknown" {
 		return OrderResult{}, fmt.Errorf("unsupported position effect %q", positionEffect)
 	}
-	if qty <= 0 || limit <= 0 {
+	if qty <= 0 || limit <= 0 || (req.OrderType != "limit" && req.OrderType != "market") {
 		return OrderResult{}, fmt.Errorf("quantity and limit must be positive")
 	}
 	if side != "buy" && side != "sell" {
@@ -257,9 +261,13 @@ func (f *Fake) PlaceLimitOrder(_ context.Context, req PlaceRequest) (OrderResult
 	order := &fakeOrder{
 		result: OrderResult{BrokerOrderID: id, ClientOrderID: req.ClientOrderID, State: "submitted"},
 		symbol: symbol, side: side, kind: kind, positionEffect: positionEffect, qty: qty, limit: limit,
-		multiplier: multiplier, updatedAt: time.Now().UTC(),
+		orderType: req.OrderType, multiplier: multiplier, updatedAt: time.Now().UTC(),
 	}
-	if marketable(side, limit, quote) {
+	executionLimit := limit
+	if req.OrderType == "market" {
+		executionLimit = quote.Ask
+	}
+	if marketable(side, executionLimit, quote) {
 		if err := f.fillOrder(order, quote); err != nil {
 			return OrderResult{}, err
 		}

@@ -64,6 +64,12 @@ func (s *server) repriceOrder(ctx context.Context, order *store.Order) error {
 	if err := json.Unmarshal(row.Payload, &op); err != nil {
 		return fmt.Errorf("decode persisted operation: %w", err)
 	}
+	// Market orders have no replaceable price. The ordinary working-order
+	// reconciler polls them to terminal state; the repricer must never convert
+	// one into a cancel-and-replace limit lifecycle.
+	if op.OrderType == "market" {
+		return nil
+	}
 	if err := validateOrderPolicyBinding(row, order); err != nil {
 		return err
 	}

@@ -2320,7 +2320,7 @@ func placeOrder(b *broker.Fake, symbol, side, qty, limit, kind string) (broker.O
 		Symbol: symbol, InstrumentID: "fake-instrument-" + symbol,
 		Kind: kind, Multiplier: multiplier,
 	})
-	return b.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+	return b.PlaceOrder(context.Background(), broker.PlaceRequest{
 		Symbol: symbol, Side: side, Qty: units.MustQty(qty), Limit: units.MustMicros(limit), Kind: kind,
 	})
 }
@@ -2811,6 +2811,69 @@ func TestProposeRequiresJSONAndRejectsUnknownFields(t *testing.T) {
 	w, body := postOperation(t, s, `{"action":"cancel","broker_order_id":"x","surprise":true}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field: status=%d body=%v", w.Code, body)
+	}
+}
+
+func TestEquityMarketOpenUsesExplicitRiskAuthorityAndNoClientLimit(t *testing.T) {
+	b := newFake("300")
+	setQuote(b, "SOFI", "17.11", "17.12", 0)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	plan := `{"stop":"test stop","invalidation":"test invalidation","time_stop":"test time stop","target":"test target"}`
+
+	w, body := postOperation(t, s, `{"proposer":"market-test","action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":1,"max_risk_usd":50,"plan":`+plan+`}`)
+	if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "executed" ||
+		body["order_type"] != "market" || body["derived_max_risk"] != 50.0 ||
+		body["required_cash"] != 50.0 || body["approved_price_cap"] != 50.0 {
+		t.Fatalf("market open: status=%d body=%v", w.Code, body)
+	}
+	positions, err := b.Positions(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].Symbol != "SOFI" || positions[0].Qty != units.MustQty("1") {
+		t.Fatalf("market positions=%+v err=%v", positions, err)
+	}
+
+	for name, payload := range map[string]string{
+		"client limit": `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":1,"limit":17.12,"max_risk_usd":50}`,
+		"missing risk": `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":1}`,
+		"fractional":   `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":0.5,"max_risk_usd":50}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, _ := postOperation(t, s, payload)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestEquityMarketOpenRejectsRiskAuthorityBelowCurrentAsk(t *testing.T) {
+	b := newFake("300")
+	setQuote(b, "SOFI", "17.11", "17.12", 0)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	plan := `{"stop":"test stop","invalidation":"test invalidation","time_stop":"test time stop","target":"test target"}`
+	w, body := postOperation(t, s, `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"market","qty":1,"max_risk_usd":17.11,"plan":`+plan+`}`)
+	if w.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
+		t.Fatalf("status=%d body=%v", w.Code, body)
+	}
+	reasons := body["reasons"].([]any)
+	if len(reasons) == 0 || reasons[0] != "market_risk_cap_below_quote" {
+		t.Fatalf("reasons=%v", reasons)
+	}
+}
+
+func TestCanonicalMarketIntentExcludesKernelRiskBound(t *testing.T) {
+	canonical, fingerprint, err := canonicalProviderIntent(broker.PlaceRequest{
+		ClientOrderID: store.NewID(), Symbol: "SOFI", Side: "buy", PositionEffect: "open",
+		OrderType: "market", Qty: units.MustQty("1"), Limit: units.MustMicros("50"), Kind: "equity",
+	}, "instrument-sofi")
+	if err != nil || len(fingerprint) != sha256.Size {
+		t.Fatalf("canonical intent err=%v fingerprint=%x", err, fingerprint)
+	}
+	var intent broker.ProviderPlaceIntent
+	if err := json.Unmarshal(canonical, &intent); err != nil {
+		t.Fatal(err)
+	}
+	if intent.OrderType != "market" || intent.Limit != 0 || intent.Symbol != "SOFI" || intent.Qty != units.MustQty("1") {
+		t.Fatalf("intent=%+v", intent)
 	}
 }
 

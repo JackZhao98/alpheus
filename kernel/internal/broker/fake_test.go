@@ -16,7 +16,7 @@ func TestShortSaleProceedsDoNotInflateEquity(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := broker.PlaceLimitOrder(context.Background(), PlaceRequest{
+	if result, err := broker.PlaceOrder(context.Background(), PlaceRequest{
 		Symbol: "X", Side: "sell", Qty: units.MustQty("1"), Limit: units.MustMicros("99.90"), Kind: "equity",
 	}); err != nil || result.State != "filled" {
 		t.Fatalf("seed short: result=%+v err=%v", result, err)
@@ -38,7 +38,7 @@ func TestRecentFillsUseDurableFillTimestamp(t *testing.T) {
 	if err := b.SetQuote(Quote{Symbol: "FILL", Bid: units.MustMicros("9.9"), Ask: units.MustMicros("10")}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := b.PlaceLimitOrder(context.Background(), PlaceRequest{
+	result, err := b.PlaceOrder(context.Background(), PlaceRequest{
 		Symbol: "FILL", Side: "buy", Qty: units.MustQty("1"), Limit: units.MustMicros("10"), Kind: "equity",
 	})
 	if err != nil || result.State != "filled" {
@@ -65,7 +65,7 @@ func TestMissingPositionMarkDegradesEquity(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := broker.PlaceLimitOrder(context.Background(), PlaceRequest{
+	if result, err := broker.PlaceOrder(context.Background(), PlaceRequest{
 		Symbol: "A", Side: "buy", Qty: units.MustQty("1"), Limit: units.MustMicros("10"), Kind: "equity",
 	}); err != nil || result.State != "filled" {
 		t.Fatalf("seed long: result=%+v err=%v", result, err)
@@ -87,7 +87,7 @@ func TestRestingLimitFillsWhenQuoteTradesThrough(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	order, err := b.PlaceLimitOrder(context.Background(), PlaceRequest{
+	order, err := b.PlaceOrder(context.Background(), PlaceRequest{
 		Symbol: "X", Side: "buy", Qty: units.MustQty("1"), Limit: units.MustMicros("100.05"), Kind: "equity",
 	})
 	if err != nil || order.State != "submitted" {
@@ -108,17 +108,17 @@ func TestRestingLimitFillsWhenQuoteTradesThrough(t *testing.T) {
 	}
 }
 
-func TestPlaceLimitOrderDeduplicatesClientOrderID(t *testing.T) {
+func TestPlaceOrderDeduplicatesClientOrderID(t *testing.T) {
 	b := NewFake(units.MustMicros("300"))
 	request := PlaceRequest{
 		ClientOrderID: "stable-client-id", Symbol: "SPY", Side: "buy",
 		Qty: units.MustQty("1"), Limit: units.MustMicros("0.35"), Kind: "option",
 	}
-	first, err := b.PlaceLimitOrder(context.Background(), request)
+	first, err := b.PlaceOrder(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := b.PlaceLimitOrder(context.Background(), request)
+	second, err := b.PlaceOrder(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestPlaceLimitOrderDeduplicatesClientOrderID(t *testing.T) {
 	}
 	conflict := request
 	conflict.Qty = units.MustQty("2")
-	if _, err := b.PlaceLimitOrder(context.Background(), conflict); err == nil {
+	if _, err := b.PlaceOrder(context.Background(), conflict); err == nil {
 		t.Fatal("conflicting order intent reused the client order id")
 	}
 	fills, err := b.RecentFills(context.Background(), time.Time{})

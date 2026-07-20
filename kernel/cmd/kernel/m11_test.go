@@ -36,7 +36,7 @@ type equityOnlyExecution struct{ broker.ExecutionProvider }
 
 func (equityOnlyExecution) SupportsOrderKind(kind string) bool { return kind == "equity" }
 
-func (c *candidateExecution) PlaceLimitOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
+func (c *candidateExecution) PlaceOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.placeCalls++
@@ -522,7 +522,7 @@ func TestSameRefReplayStopsWhenCandidateAppearsInPreEffectSnapshot(t *testing.T)
 	if !ok {
 		t.Fatal("fixture account provider is not FakeBroker")
 	}
-	result, err := venue.PlaceLimitOrder(context.Background(), broker.PlaceRequest{
+	result, err := venue.PlaceOrder(context.Background(), broker.PlaceRequest{
 		ClientOrderID: attempt.ClientOrderID, Symbol: "EQ", Side: "buy", PositionEffect: "open",
 		Qty: units.MustQty("1"), Limit: units.MustMicros("1"), Kind: "equity",
 	})
@@ -950,7 +950,7 @@ func TestRepeatedHaltReturnsOriginalCut(t *testing.T) {
 
 type failingExecution struct{}
 
-func (failingExecution) PlaceLimitOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
+func (failingExecution) PlaceOrder(context.Context, broker.PlaceRequest) (broker.OrderResult, error) {
 	return broker.OrderResult{}, fmt.Errorf("injected placement failure")
 }
 func (failingExecution) CancelOrder(context.Context, string) (broker.OrderResult, error) {

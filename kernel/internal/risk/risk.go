@@ -18,6 +18,7 @@ type Operation struct {
 	Underlying        string            `json:"underlying,omitempty"`
 	Symbol            string            `json:"symbol,omitempty"`
 	Side              string            `json:"side,omitempty"`
+	OrderType         string            `json:"order_type,omitempty"`
 	Qty               units.Qty         `json:"qty,omitempty"`
 	Limit             *units.Micros     `json:"limit,omitempty"`
 	MaxRiskUSD        *units.Micros     `json:"max_risk_usd,omitempty"`
