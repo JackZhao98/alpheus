@@ -22,6 +22,7 @@ type Operation struct {
 	ExecutionStyle    string            `json:"execution_style,omitempty"`
 	Qty               units.Qty         `json:"qty,omitempty"`
 	Limit             *units.Micros     `json:"limit,omitempty"`
+	StopPrice         *units.Micros     `json:"stop_price,omitempty"`
 	MaxRiskUSD        *units.Micros     `json:"max_risk_usd,omitempty"`
 	Short             bool              `json:"short,omitempty"`
 	Plan              map[string]string `json:"plan,omitempty"`

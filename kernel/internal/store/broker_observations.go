@@ -327,6 +327,9 @@ type observedOrderIdentity struct {
 	FilledQty       units.Qty    `json:"filled_qty"`
 	LimitPrice      units.Micros `json:"limit_price"`
 	LimitPriceKnown bool         `json:"limit_price_known"`
+	StopPrice       units.Micros `json:"stop_price"`
+	StopPriceKnown  bool         `json:"stop_price_known"`
+	OrderType       string       `json:"order_type"`
 }
 
 type observedFillIdentity struct {
@@ -407,7 +410,7 @@ func classifyObservedOrder(ctx context.Context, tx *sql.Tx, accountID string, ca
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT o.id,a.id,a.provider_account_id,o.broker_order_id,
 		o.client_order_id,o.symbol,o.side,o.kind,o.qty,o.limit_micros,
-		COALESCE(a.provider_intent->>'position_effect','')
+		COALESCE(a.provider_intent->>'position_effect',''),COALESCE(a.provider_intent::text,'')
 		FROM orders o JOIN execution_attempt a ON a.id=o.execution_attempt_id
 		WHERE o.broker_order_id=$1 OR ($2<>'' AND o.client_order_id=$2)`,
 		observed.BrokerOrderID, observed.ClientOrderID)
@@ -419,13 +422,14 @@ func classifyObservedOrder(ctx context.Context, tx *sql.Tx, accountID string, ca
 		orderID, attemptID, accountID, brokerID, clientID, symbol, side, kind, positionEffect string
 		qty                                                                                   units.Qty
 		limit                                                                                 units.Micros
+		providerIntent                                                                        string
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
 		var providerAccount sql.NullString
 		if err := rows.Scan(&c.orderID, &c.attemptID, &providerAccount, &c.brokerID, &c.clientID,
-			&c.symbol, &c.side, &c.kind, &c.qty, &c.limit, &c.positionEffect); err != nil {
+			&c.symbol, &c.side, &c.kind, &c.qty, &c.limit, &c.positionEffect, &c.providerIntent); err != nil {
 			return brokerOrigin{}, err
 		}
 		c.accountID = providerAccount.String
@@ -444,7 +448,32 @@ func classifyObservedOrder(ctx context.Context, tx *sql.Tx, accountID string, ca
 	brokerMatch := c.brokerID != "" && c.brokerID == observed.BrokerOrderID
 	clientMatch := observed.ClientOrderID != "" && c.clientID == observed.ClientOrderID
 	semanticsMatch := c.accountID == accountID && c.symbol == observed.Symbol && c.side == observed.Side &&
-		c.kind == observed.Kind && c.qty == observed.Qty && observed.LimitPriceKnown && c.limit == observed.LimitPrice
+		c.kind == observed.Kind && c.qty == observed.Qty
+	type providerIntent struct {
+		Limit     units.Micros `json:"limit"`
+		StopPrice units.Micros `json:"stop_price"`
+		OrderType string       `json:"order_type"`
+		Trigger   string       `json:"trigger"`
+	}
+	var intent providerIntent
+	if c.providerIntent != "" && json.Unmarshal([]byte(c.providerIntent), &intent) == nil && intent.OrderType != "" {
+		observedType, observedTrigger := "", ""
+		switch observed.OrderType {
+		case "limit":
+			observedType, observedTrigger = "limit", "immediate"
+		case "market":
+			observedType, observedTrigger = "market", "immediate"
+		case "stop_limit":
+			observedType, observedTrigger = "limit", "stop"
+		case "stop_market":
+			observedType, observedTrigger = "market", "stop"
+		}
+		semanticsMatch = semanticsMatch && observedType == intent.OrderType && observedTrigger == intent.Trigger &&
+			observed.StopPriceKnown == (intent.StopPrice > 0) && observed.StopPrice == intent.StopPrice &&
+			observed.LimitPriceKnown == (intent.Limit > 0) && observed.LimitPrice == intent.Limit
+	} else {
+		semanticsMatch = semanticsMatch && observed.LimitPriceKnown && c.limit == observed.LimitPrice
+	}
 	if observed.PositionEffect != "" && observed.PositionEffect != "unknown" {
 		semanticsMatch = semanticsMatch && c.positionEffect == observed.PositionEffect
 	}

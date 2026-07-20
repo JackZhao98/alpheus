@@ -572,6 +572,21 @@ func isOpenOrderState(state string) bool {
 	}
 }
 
+func userFacingOrderType(providerType, trigger string) (string, bool) {
+	switch {
+	case providerType == "limit" && trigger == "immediate":
+		return "limit", true
+	case providerType == "market" && trigger == "immediate":
+		return "market", true
+	case providerType == "limit" && trigger == "stop":
+		return "stop_limit", true
+	case providerType == "market" && trigger == "stop":
+		return "stop_market", true
+	default:
+		return "", false
+	}
+}
+
 func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 	equities, err := r.equityOrders(ctx)
 	if err != nil {
@@ -599,11 +614,28 @@ func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 		if priceKnown {
 			price = *order.Price
 		}
+		orderType, typeKnown := userFacingOrderType(order.Type, order.Trigger)
+		if !typeKnown && order.Type == "" && order.Trigger == "" {
+			switch {
+			case order.StopPrice.Known && priceKnown:
+				orderType, typeKnown = "stop_limit", true
+			case order.StopPrice.Known:
+				orderType, typeKnown = "stop_market", true
+			case priceKnown:
+				orderType, typeKnown = "limit", true
+			default:
+				orderType, typeKnown = "market", true
+			}
+		}
+		if !typeKnown {
+			return nil, robinhoodSchemaError(r.caller, "equity order type schema drift")
+		}
 		out = append(out, ReadOrder{
 			BrokerOrderID: order.ID,
 			InstrumentID:  order.InstrumentID, Symbol: order.Symbol, Side: order.Side,
 			Kind: "equity", PositionEffect: "unknown", State: order.State,
 			Qty: *order.Quantity, FilledQty: *order.CumulativeQuantity, LimitPrice: price, LimitPriceKnown: priceKnown,
+			StopPrice: order.StopPrice.Value, StopPriceKnown: order.StopPrice.Known, OrderType: orderType,
 			Source: robinhoodSource, AsOf: asOf,
 		})
 	}
@@ -627,12 +659,30 @@ func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 		if !order.Price.Present {
 			return nil, robinhoodSchemaError(r.caller, "option order price schema drift")
 		}
+		orderType, typeKnown := userFacingOrderType(order.Type, order.Trigger)
+		if !typeKnown && order.Type == "" && order.Trigger == "" {
+			switch {
+			case order.StopPrice.Known && order.Price.Known:
+				orderType, typeKnown = "stop_limit", true
+			case order.StopPrice.Known:
+				orderType, typeKnown = "stop_market", true
+			case order.Price.Known:
+				orderType, typeKnown = "limit", true
+			default:
+				orderType, typeKnown = "market", true
+			}
+		}
+		if !typeKnown {
+			return nil, robinhoodSchemaError(r.caller, "option order type schema drift")
+		}
 		leg := order.Legs[0]
 		out = append(out, ReadOrder{
 			BrokerOrderID: order.ID, InstrumentID: leg.OptionID, Symbol: order.ChainSymbol,
 			Side: leg.Side, Kind: "option", PositionEffect: leg.PositionEffect,
 			State: order.State, Qty: *order.Quantity, FilledQty: *order.ProcessedQuantity,
-			LimitPrice: order.Price.Value, LimitPriceKnown: order.Price.Known, Source: robinhoodSource, AsOf: asOf,
+			LimitPrice: order.Price.Value, LimitPriceKnown: order.Price.Known,
+			StopPrice: order.StopPrice.Value, StopPriceKnown: order.StopPrice.Known, OrderType: orderType,
+			Source: robinhoodSource, AsOf: asOf,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].BrokerOrderID < out[j].BrokerOrderID })

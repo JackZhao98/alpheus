@@ -119,6 +119,9 @@ type ReadOrder struct {
 	FilledQty       units.Qty    `json:"filled_qty"`
 	LimitPrice      units.Micros `json:"limit_price"`
 	LimitPriceKnown bool         `json:"limit_price_known"`
+	StopPrice       units.Micros `json:"stop_price"`
+	StopPriceKnown  bool         `json:"stop_price_known"`
+	OrderType       string       `json:"order_type"`
 	Source          string       `json:"source"`
 	AsOf            time.Time    `json:"as_of"`
 }
@@ -144,9 +147,12 @@ type PlaceRequest struct {
 	OrderType      string    `json:"order_type"`
 	Qty            units.Qty `json:"qty"`
 	// Limit is the provider limit for limit orders and the Kernel-authorized
-	// per-share risk bound for market orders. Market providers must not send it.
+	// per-share risk bound for market and stop-market orders. Providers must not
+	// send that risk bound as an order price.
 	Limit units.Micros `json:"limit"`
-	Kind  string       `json:"kind"`
+	// StopPrice is provider-visible only for stop-market and stop-limit orders.
+	StopPrice units.Micros `json:"stop_price"`
+	Kind      string       `json:"kind"`
 }
 
 // ProviderPlaceIntent is the canonical, provider-visible identity of one
@@ -160,6 +166,7 @@ type ProviderPlaceIntent struct {
 	PositionEffect string       `json:"position_effect"`
 	Qty            units.Qty    `json:"qty"`
 	Limit          units.Micros `json:"limit"`
+	StopPrice      units.Micros `json:"stop_price,omitempty"`
 	OrderType      string       `json:"order_type"`
 	Trigger        string       `json:"trigger"`
 	TimeInForce    string       `json:"time_in_force"`

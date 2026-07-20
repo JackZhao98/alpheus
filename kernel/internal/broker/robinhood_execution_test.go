@@ -158,6 +158,11 @@ func equityMarketOrdersFixture() json.RawMessage {
 		executionOrderID, executionEquity, executionFillID))
 }
 
+func equityStopMarketOrdersFixture() json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":null,"stop_price":"18","average_price":null,"reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"market","time_in_force":"gfd","market_hours":"regular_hours","trigger":"stop","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
+		executionOrderID, executionEquity))
+}
+
 func equityWorkingSellOrdersFixture() json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SOFI","side":"sell","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":"18.00","stop_price":null,"average_price":null,"reject_reason":"","created_at":"2026-07-20T19:48:09.301Z","last_transaction_at":"2026-07-20T19:48:09.301Z","type":"limit","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
 		executionOrderID, executionEquity))
@@ -341,6 +346,43 @@ func TestRobinhoodEquityMarketPlaceOmitsProviderPrice(t *testing.T) {
 	}
 	if _, exists := mutation.calls[0].args["limit_price"]; exists {
 		t.Fatalf("market order leaked limit_price: calls=%+v", mutation.calls)
+	}
+}
+
+func TestRobinhoodEquityStopMarketUsesNativeProviderShape(t *testing.T) {
+	mutation := &recordingMutation{responses: map[string]json.RawMessage{
+		"place_equity_order": equityOrderFixture(),
+	}}
+	adapter, read := newExecutionFixture(t, mutation, "filled")
+	read.caller = fixtureCaller{
+		"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": equityStopMarketOrdersFixture(),
+	}
+	adapter.instruments = executionInstrument{instrument: Instrument{
+		Symbol: "SPY", InstrumentID: executionEquity, Kind: "equity", Multiplier: 1,
+		PriceTick: units.MustMicros("0.01"), QtyIncrement: units.MustQty("1"),
+		Source: robinhoodSource, AsOf: time.Now().UTC(),
+	}}
+	result, err := adapter.PlaceOrder(context.Background(), PlaceRequest{
+		ClientOrderID: executionRefID, Symbol: "SPY", Side: "buy", PositionEffect: "open",
+		OrderType: "stop_market", Qty: units.MustQty("1"), Limit: units.MustMicros("18.5"),
+		StopPrice: units.MustMicros("18"), Kind: "equity",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != "submitted" || result.FilledQty != 0 || len(result.Fills) != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	mutation.mu.Lock()
+	defer mutation.mu.Unlock()
+	if len(mutation.calls) != 1 || mutation.calls[0].tool != "place_equity_order" ||
+		mutation.calls[0].args["type"] != "stop_market" || mutation.calls[0].args["stop_price"] != "18" ||
+		mutation.calls[0].args["quantity"] != "1" {
+		t.Fatalf("calls=%+v", mutation.calls)
+	}
+	if _, exists := mutation.calls[0].args["limit_price"]; exists {
+		t.Fatalf("stop-market order leaked limit_price: calls=%+v", mutation.calls)
 	}
 }
 
@@ -602,6 +644,34 @@ func TestRobinhoodExactMarketCandidateMatchesWithoutPrice(t *testing.T) {
 			Kind: "equity", InstrumentID: executionEquity, Symbol: "SPY", Side: "buy",
 			PositionEffect: "open", Qty: units.MustQty("1"), OrderType: "market",
 			Trigger: "immediate", TimeInForce: "gfd", MarketHours: "regular_hours",
+		},
+	})
+	if err != nil || len(candidates) != 1 || candidates[0].BrokerOrderID != executionOrderID {
+		t.Fatalf("candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestRobinhoodExactStopMarketCandidateMatchesTriggerAndStop(t *testing.T) {
+	caller := &recordingReadCaller{responses: map[string]json.RawMessage{
+		"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": equityStopMarketOrdersFixture(),
+	}}
+	read, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewRobinhoodExecution(read, &recordingMutation{}, executionInstrument{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, _ := time.Parse(time.RFC3339, "2026-07-17T19:59:30Z")
+	end, _ := time.Parse(time.RFC3339, "2026-07-17T20:02:00Z")
+	candidates, err := adapter.FindExactPlaceCandidates(context.Background(), ExactPlaceCandidateQuery{
+		AccountID: "wanted", ClientOrderID: executionRefID, WindowStart: start, WindowEnd: end,
+		Intent: ProviderPlaceIntent{
+			Kind: "equity", InstrumentID: executionEquity, Symbol: "SPY", Side: "buy",
+			PositionEffect: "open", Qty: units.MustQty("1"), StopPrice: units.MustMicros("18"),
+			OrderType: "market", Trigger: "stop", TimeInForce: "gfd", MarketHours: "regular_hours",
 		},
 	})
 	if err != nil || len(candidates) != 1 || candidates[0].BrokerOrderID != executionOrderID {

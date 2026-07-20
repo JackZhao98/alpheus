@@ -33,6 +33,8 @@ type fakeOrder struct {
 	orderType      string
 	qty            units.Qty
 	limit          units.Micros
+	stopPrice      units.Micros
+	stopTriggered  bool
 	multiplier     int64
 	updatedAt      time.Time
 	filledAt       time.Time
@@ -88,8 +90,7 @@ func (f *Fake) SetQuote(q Quote) error {
 	}
 	f.quotes[q.Symbol] = q
 	for _, order := range f.orders {
-		if order.symbol != q.Symbol || order.result.State != "submitted" ||
-			(order.orderType != "market" && !marketable(order.side, order.limit, q)) {
+		if order.symbol != q.Symbol || order.result.State != "submitted" || !fakeOrderMarketable(order, q) {
 			continue
 		}
 		if err := f.fillOrder(order, q); err != nil {
@@ -222,7 +223,8 @@ func (f *Fake) PlaceOrder(_ context.Context, req PlaceRequest) (OrderResult, err
 	for _, existing := range f.orders {
 		if req.ClientOrderID != "" && existing.result.ClientOrderID == req.ClientOrderID {
 			if existing.symbol != req.Symbol || existing.side != req.Side || existing.qty != req.Qty ||
-				existing.limit != req.Limit || existing.kind != req.Kind || existing.orderType != req.OrderType {
+				existing.limit != req.Limit || existing.stopPrice != req.StopPrice ||
+				existing.kind != req.Kind || existing.orderType != req.OrderType {
 				return OrderResult{}, fmt.Errorf("client order id reused with different order intent")
 			}
 			return existing.result, nil
@@ -236,7 +238,10 @@ func (f *Fake) PlaceOrder(_ context.Context, req PlaceRequest) (OrderResult, err
 	if positionEffect != "open" && positionEffect != "close" && positionEffect != "unknown" {
 		return OrderResult{}, fmt.Errorf("unsupported position effect %q", positionEffect)
 	}
-	if qty <= 0 || limit <= 0 || (req.OrderType != "limit" && req.OrderType != "market") {
+	if qty <= 0 || limit <= 0 ||
+		(req.OrderType != "limit" && req.OrderType != "market" && req.OrderType != "stop_market" && req.OrderType != "stop_limit") ||
+		((req.OrderType == "stop_market" || req.OrderType == "stop_limit") && req.StopPrice <= 0) ||
+		((req.OrderType == "limit" || req.OrderType == "market") && req.StopPrice != 0) {
 		return OrderResult{}, fmt.Errorf("quantity and limit must be positive")
 	}
 	if side != "buy" && side != "sell" {
@@ -261,19 +266,37 @@ func (f *Fake) PlaceOrder(_ context.Context, req PlaceRequest) (OrderResult, err
 	order := &fakeOrder{
 		result: OrderResult{BrokerOrderID: id, ClientOrderID: req.ClientOrderID, State: "submitted"},
 		symbol: symbol, side: side, kind: kind, positionEffect: positionEffect, qty: qty, limit: limit,
-		orderType: req.OrderType, multiplier: multiplier, updatedAt: time.Now().UTC(),
+		orderType: req.OrderType, stopPrice: req.StopPrice, multiplier: multiplier, updatedAt: time.Now().UTC(),
 	}
-	executionLimit := limit
-	if req.OrderType == "market" {
-		executionLimit = quote.Ask
-	}
-	if marketable(side, executionLimit, quote) {
+	if fakeOrderMarketable(order, quote) {
 		if err := f.fillOrder(order, quote); err != nil {
 			return OrderResult{}, err
 		}
 	}
 	f.orders[id] = order
 	return order.result, nil
+}
+
+func fakeOrderMarketable(order *fakeOrder, quote Quote) bool {
+	if !quote.Sane() {
+		return false
+	}
+	if order.orderType == "stop_market" || order.orderType == "stop_limit" {
+		triggered := (order.side == "buy" && quote.Ask >= order.stopPrice) ||
+			(order.side == "sell" && quote.Bid <= order.stopPrice)
+		order.stopTriggered = order.stopTriggered || triggered
+		if !order.stopTriggered {
+			return false
+		}
+	}
+	switch order.orderType {
+	case "market", "stop_market":
+		return true
+	case "limit", "stop_limit":
+		return marketable(order.side, order.limit, quote)
+	default:
+		return false
+	}
 }
 
 func marketable(side string, limit units.Micros, quote Quote) bool {
@@ -400,7 +423,9 @@ func (f *Fake) OpenOrders(_ context.Context) ([]ReadOrder, error) {
 			InstrumentID:  "fake-instrument-" + order.symbol,
 			Symbol:        order.symbol, Side: order.side, Kind: order.kind,
 			PositionEffect: order.positionEffect, State: order.result.State,
-			Qty: order.qty, FilledQty: order.result.FilledQty, LimitPrice: order.limit, LimitPriceKnown: true,
+			Qty: order.qty, FilledQty: order.result.FilledQty,
+			LimitPrice: order.limit, LimitPriceKnown: order.orderType == "limit" || order.orderType == "stop_limit",
+			StopPrice: order.stopPrice, StopPriceKnown: order.stopPrice > 0, OrderType: order.orderType,
 			Source: "fake", AsOf: order.updatedAt,
 		})
 	}

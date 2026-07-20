@@ -132,11 +132,15 @@ func cancelTargetFingerprint(order broker.ReadOrder) string {
 		FilledQty      units.Qty    `json:"filled_qty"`
 		LimitPrice     units.Micros `json:"limit_price"`
 		LimitKnown     bool         `json:"limit_price_known"`
+		StopPrice      units.Micros `json:"stop_price"`
+		StopKnown      bool         `json:"stop_price_known"`
+		OrderType      string       `json:"order_type"`
 	}{
 		BrokerOrderID: order.BrokerOrderID, InstrumentID: order.InstrumentID,
 		Symbol: order.Symbol, Side: order.Side, Kind: order.Kind,
 		PositionEffect: order.PositionEffect, State: order.State, Qty: order.Qty,
 		FilledQty: order.FilledQty, LimitPrice: order.LimitPrice, LimitKnown: order.LimitPriceKnown,
+		StopPrice: order.StopPrice, StopKnown: order.StopPriceKnown, OrderType: order.OrderType,
 	}
 	encoded, err := json.Marshal(semantic)
 	if err != nil {
@@ -372,6 +376,30 @@ func brokerOrdersValid(orders []broker.ReadOrder, source string, completedAt tim
 			return false
 		}
 		if order.LimitPriceKnown && order.LimitPrice <= 0 {
+			return false
+		}
+		if order.StopPriceKnown && order.StopPrice <= 0 {
+			return false
+		}
+		switch order.OrderType {
+		case "":
+		case "limit":
+			if !order.LimitPriceKnown || order.StopPriceKnown {
+				return false
+			}
+		case "market":
+			if order.StopPriceKnown {
+				return false
+			}
+		case "stop_limit":
+			if !order.LimitPriceKnown || !order.StopPriceKnown {
+				return false
+			}
+		case "stop_market":
+			if order.LimitPriceKnown || !order.StopPriceKnown {
+				return false
+			}
+		default:
 			return false
 		}
 		seen[order.BrokerOrderID] = true
@@ -906,10 +934,11 @@ func earlierTime(left, right time.Time) time.Time {
 }
 
 func preEffectInstrumentMatches(op risk.Operation, attempt *store.ExecutionAttempt, instrument broker.Instrument) bool {
+	stopMatches := op.StopPrice == nil || instrument.SupportsPrice(*op.StopPrice)
 	return instrument.InstrumentID != "" && instrument.InstrumentID == op.InstrumentID &&
 		instrument.Kind == op.Kind && instrument.Multiplier == op.Multiplier &&
 		instrument.Source != "" && !instrument.AsOf.IsZero() && !instrument.AsOf.After(time.Now().UTC()) &&
-		instrument.PrecisionSane() && instrument.SupportsPrice(attempt.Limit) &&
+		instrument.PrecisionSane() && instrument.SupportsPrice(attempt.Limit) && stopMatches &&
 		instrument.QtyIncrement > 0 && attempt.Qty%instrument.QtyIncrement == 0
 }
 

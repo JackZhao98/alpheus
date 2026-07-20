@@ -2899,6 +2899,53 @@ func TestEquityMarketOpenRejectsRiskAuthorityBelowCurrentAsk(t *testing.T) {
 	}
 }
 
+func TestEquityBuyStopMarketRestsUntilTrigger(t *testing.T) {
+	b := newFake("300")
+	setQuote(b, "SOFI", "17.10", "17.11", 0)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	plan := `{"stop":"test stop","invalidation":"test invalidation","time_stop":"test time stop","target":"test target"}`
+
+	w, body := postOperation(t, s, `{"proposer":"stop-test","action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"stop_market","stop_price":18,"qty":1,"max_risk_usd":18.5,"plan":`+plan+`}`)
+	if w.Code != http.StatusOK || body["class"] != "B" || body["status"] != "auto_approved" ||
+		body["order_type"] != "stop_market" || body["stop_price"] != 18.0 || body["approved_price_cap"] != 18.5 {
+		t.Fatalf("stop open: status=%d body=%v", w.Code, body)
+	}
+	positions, err := b.Positions(context.Background())
+	if err != nil || len(positions) != 0 {
+		t.Fatalf("stop filled before trigger: positions=%+v err=%v", positions, err)
+	}
+	orders, err := b.OpenOrders(context.Background())
+	if err != nil || len(orders) != 1 || orders[0].OrderType != "stop_market" ||
+		!orders[0].StopPriceKnown || orders[0].StopPrice != units.MustMicros("18") || orders[0].LimitPriceKnown {
+		t.Fatalf("resting stop orders=%+v err=%v", orders, err)
+	}
+
+	setQuote(b, "SOFI", "17.99", "18.00", 0)
+	positions, err = b.Positions(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].Qty != units.MustQty("1") {
+		t.Fatalf("stop did not fill at trigger: positions=%+v err=%v", positions, err)
+	}
+}
+
+func TestEquityBuyStopMarketFailsClosedBelowMarketOrRiskCap(t *testing.T) {
+	b := newFake("300")
+	setQuote(b, "SOFI", "17.10", "17.11", 0)
+	s := &server{limits: dualLedgerLimits(), broker: b, store: newMemoryStore()}
+	plan := `{"stop":"test stop","invalidation":"test invalidation","time_stop":"test time stop","target":"test target"}`
+
+	for name, payload := range map[string]string{
+		"below market":   `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"stop_market","stop_price":17,"qty":1,"max_risk_usd":18.5,"plan":` + plan + `}`,
+		"cap below stop": `{"action":"open","kind":"equity","underlying":"SOFI","symbol":"SOFI","side":"buy","order_type":"stop_market","stop_price":18,"qty":1,"max_risk_usd":17.5,"plan":` + plan + `}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, body := postOperation(t, s, payload)
+			if w.Code != http.StatusOK || body["class"] != "REJECT" || body["status"] != "rejected" {
+				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+		})
+	}
+}
+
 func TestExecutionStyleIsStaticByDefaultAndManagedOnlyByRequest(t *testing.T) {
 	base := proposeRequest{
 		Action: "open", Kind: "equity", Underlying: "SOFI", Symbol: "SOFI",
@@ -2971,6 +3018,28 @@ func TestCanonicalMarketIntentExcludesKernelRiskBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	if intent.OrderType != "market" || intent.Limit != 0 || intent.Symbol != "SOFI" || intent.Qty != units.MustQty("1") {
+		t.Fatalf("intent=%+v", intent)
+	}
+	if bytes.Contains(canonical, []byte(`"stop_price"`)) {
+		t.Fatalf("legacy market canonical intent changed: %s", canonical)
+	}
+}
+
+func TestCanonicalStopMarketIntentSeparatesTriggerFromRiskBound(t *testing.T) {
+	canonical, fingerprint, err := canonicalProviderIntent(broker.PlaceRequest{
+		ClientOrderID: store.NewID(), Symbol: "SOFI", Side: "buy", PositionEffect: "open",
+		OrderType: "stop_market", Qty: units.MustQty("1"), Limit: units.MustMicros("18.5"),
+		StopPrice: units.MustMicros("18"), Kind: "equity",
+	}, "instrument-sofi")
+	if err != nil || len(fingerprint) != sha256.Size {
+		t.Fatalf("canonical intent err=%v fingerprint=%x", err, fingerprint)
+	}
+	var intent broker.ProviderPlaceIntent
+	if err := json.Unmarshal(canonical, &intent); err != nil {
+		t.Fatal(err)
+	}
+	if intent.OrderType != "market" || intent.Trigger != "stop" || intent.Limit != 0 ||
+		intent.StopPrice != units.MustMicros("18") {
 		t.Fatalf("intent=%+v", intent)
 	}
 }

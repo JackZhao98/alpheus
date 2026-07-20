@@ -63,8 +63,11 @@ func (r *RobinhoodExecution) PlaceOrder(ctx context.Context, req PlaceRequest) (
 	if req.Kind == "equity" {
 		args["symbol"] = req.Symbol
 		args["quantity"] = req.Qty.String()
-		if req.OrderType == "limit" {
+		if req.OrderType == "limit" || req.OrderType == "stop_limit" {
 			args["limit_price"] = req.Limit.String()
+		}
+		if req.OrderType == "stop_market" || req.OrderType == "stop_limit" {
+			args["stop_price"] = req.StopPrice.String()
 		}
 	} else {
 		tool = "place_option_order"
@@ -99,15 +102,20 @@ func (r *RobinhoodExecution) PlaceOrder(ctx context.Context, req PlaceRequest) (
 		// Robinhood omits price while a market order is working, then may
 		// backfill it with the execution price once terminal. Price is therefore
 		// result data, not part of a market-order intent match.
-		priceMatches := req.OrderType == "market"
-		if req.OrderType == "limit" {
+		providerType, providerTrigger := providerOrderShape(req.OrderType)
+		priceMatches := providerType == "market"
+		if providerType == "limit" {
 			priceMatches = order.Price != nil && *order.Price == req.Limit
+		}
+		stopMatches := req.StopPrice == 0 && order.StopPrice.Present && !order.StopPrice.Known
+		if req.StopPrice > 0 {
+			stopMatches = order.StopPrice.Present && order.StopPrice.Known && order.StopPrice.Value == req.StopPrice
 		}
 		if order.Symbol != req.Symbol || order.InstrumentID != instrument.InstrumentID ||
 			order.Side != req.Side || order.Quantity == nil || *order.Quantity != req.Qty ||
 			order.DollarBasedAmount != nil || !priceMatches ||
-			!order.StopPrice.Present || order.StopPrice.Known || order.Type != req.OrderType ||
-			order.Trigger != "immediate" || order.TimeInForce != "gfd" ||
+			!stopMatches || order.Type != providerType ||
+			order.Trigger != providerTrigger || order.TimeInForce != "gfd" ||
 			order.MarketHours != "regular_hours" || order.PlacedAgent != "agentic" {
 			return OrderResult{}, robinhoodSchemaError(r.mutation, "canonical equity placement drift")
 		}
@@ -144,9 +152,14 @@ func (r *RobinhoodExecution) validatePlaceRequest(ctx context.Context, req Place
 	if !looksLikeCanonicalUUID(req.ClientOrderID) || strings.TrimSpace(req.Symbol) == "" ||
 		(req.Side != "buy" && req.Side != "sell") || (req.PositionEffect != "open" && req.PositionEffect != "close") ||
 		(req.Kind != "equity" && req.Kind != "option") || req.Qty <= 0 || req.Limit <= 0 ||
-		(req.OrderType != "limit" && req.OrderType != "market") ||
+		(req.OrderType != "limit" && req.OrderType != "market" && req.OrderType != "stop_market" && req.OrderType != "stop_limit") ||
 		(req.OrderType == "market" && (req.Kind != "equity" || req.Side != "buy" || req.PositionEffect != "open" ||
-			req.Qty%units.Qty(units.Scale) != 0)) {
+			req.Qty%units.Qty(units.Scale) != 0 || req.StopPrice != 0)) ||
+		(req.OrderType == "limit" && req.StopPrice != 0) ||
+		((req.OrderType == "stop_market" || req.OrderType == "stop_limit") &&
+			(req.Kind != "equity" || req.Side != "buy" || req.PositionEffect != "open" ||
+				req.Qty%units.Qty(units.Scale) != 0 || req.StopPrice <= 0)) ||
+		(req.OrderType == "stop_limit" && req.Limit < req.StopPrice) {
 		return Instrument{}, fmt.Errorf("invalid persisted order request")
 	}
 	instrument, err := r.instruments.Instrument(ctx, req.Symbol)
@@ -158,12 +171,28 @@ func (r *RobinhoodExecution) validatePlaceRequest(ctx context.Context, req Place
 		identityMatches = strings.EqualFold(instrument.InstrumentID, req.Symbol)
 	}
 	if !identityMatches || instrument.Kind != req.Kind || !instrument.PrecisionSane() ||
-		!instrument.SupportsPrice(req.Limit) || req.Qty%instrument.QtyIncrement != 0 ||
+		!instrument.SupportsPrice(req.Limit) || (req.StopPrice > 0 && !instrument.SupportsPrice(req.StopPrice)) ||
+		req.Qty%instrument.QtyIncrement != 0 ||
 		(req.Kind == "equity" && instrument.Multiplier != 1) ||
 		(req.Kind == "option" && instrument.Multiplier != 100) {
 		return Instrument{}, fmt.Errorf("persisted order does not match provider instrument metadata")
 	}
 	return instrument, nil
+}
+
+func providerOrderShape(orderType string) (string, string) {
+	switch orderType {
+	case "limit":
+		return "limit", "immediate"
+	case "market":
+		return "market", "immediate"
+	case "stop_limit":
+		return "limit", "stop"
+	case "stop_market":
+		return "market", "stop"
+	default:
+		return "", ""
+	}
 }
 
 func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error) {
@@ -223,7 +252,10 @@ func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query
 		(intent.Side != "buy" && intent.Side != "sell") || intent.Qty <= 0 ||
 		(intent.OrderType == "limit" && intent.Limit <= 0) ||
 		(intent.OrderType == "market" && (intent.Limit != 0 || intent.Side != "buy")) ||
-		(intent.OrderType != "limit" && intent.OrderType != "market") || intent.Trigger != "immediate" ||
+		(intent.OrderType != "limit" && intent.OrderType != "market") ||
+		(intent.Trigger == "immediate" && intent.StopPrice != 0) ||
+		(intent.Trigger == "stop" && intent.StopPrice <= 0) ||
+		(intent.Trigger != "immediate" && intent.Trigger != "stop") ||
 		intent.TimeInForce != "gfd" || intent.MarketHours != "regular_hours" {
 		return nil, fmt.Errorf("unsupported exact equity candidate intent")
 	}
@@ -246,11 +278,15 @@ func (r *RobinhoodExecution) FindExactPlaceCandidates(ctx context.Context, query
 		if intent.OrderType == "limit" {
 			priceMatches = order.Price != nil && *order.Price == intent.Limit
 		}
+		stopMatches := intent.StopPrice == 0 && order.StopPrice.Present && !order.StopPrice.Known
+		if intent.StopPrice > 0 {
+			stopMatches = order.StopPrice.Present && order.StopPrice.Known && order.StopPrice.Value == intent.StopPrice
+		}
 		if createdAt.Before(query.WindowStart) || createdAt.After(query.WindowEnd) ||
 			order.InstrumentID != intent.InstrumentID || order.Symbol != intent.Symbol || order.Side != intent.Side ||
 			order.Quantity == nil || *order.Quantity != intent.Qty || order.DollarBasedAmount != nil ||
-			!priceMatches ||
-			order.StopPrice.Known || order.Type != intent.OrderType || order.Trigger != intent.Trigger ||
+			!priceMatches || !stopMatches ||
+			order.Type != intent.OrderType || order.Trigger != intent.Trigger ||
 			order.TimeInForce != intent.TimeInForce || order.MarketHours != intent.MarketHours ||
 			order.PlacedAgent != "agentic" {
 			continue
@@ -336,10 +372,18 @@ func (r *RobinhoodExecution) readOptionOrder(ctx context.Context, brokerOrderID 
 }
 
 func normalizeEquityOrder(caller rhmcp.Caller, order equityReadOrder) (OrderResult, error) {
-	priceSane := order.Type == "market" && order.Trigger == "immediate" &&
-		(order.Price == nil || *order.Price > 0)
-	if order.Type == "limit" && order.Trigger == "immediate" {
-		priceSane = order.Price != nil && *order.Price > 0
+	priceSane := false
+	switch {
+	case order.Type == "market" && order.Trigger == "immediate":
+		priceSane = (order.Price == nil || *order.Price > 0) && order.StopPrice.Present && !order.StopPrice.Known
+	case order.Type == "limit" && order.Trigger == "immediate":
+		priceSane = order.Price != nil && *order.Price > 0 && order.StopPrice.Present && !order.StopPrice.Known
+	case order.Type == "market" && order.Trigger == "stop":
+		priceSane = (order.Price == nil || *order.Price > 0) && order.StopPrice.Present &&
+			order.StopPrice.Known && order.StopPrice.Value > 0
+	case order.Type == "limit" && order.Trigger == "stop":
+		priceSane = order.Price != nil && *order.Price > 0 && order.StopPrice.Present &&
+			order.StopPrice.Known && order.StopPrice.Value > 0
 	}
 	if !looksLikeCanonicalUUID(order.ID) || order.InstrumentID == "" || order.Symbol == "" ||
 		(order.Side != "buy" && order.Side != "sell") || order.Quantity == nil || order.CumulativeQuantity == nil ||
