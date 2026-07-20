@@ -68,8 +68,8 @@ All of the following are required:
 - the historical M11 non-money gate in
   [`../plan/08_DEFERRED_CANARY.md`](../plan/08_DEFERRED_CANARY.md) was complete
   before AP0 began; v1.9.3 later landed the scoped Canary, and v1.9.4 reopened
-  execution acceptance while production remains read-only and Agent Live
-  remains closed;
+  execution acceptance; v1.9.5 recertified the minimal equity lifecycle while
+  production remains read-only and Agent Live remains closed;
 - Kernel policy migration K1 is landed and no migrated business/risk value
   falls back to YAML;
 - Kernel broker-coexistence amendment B0 is landed, so external/manual broker

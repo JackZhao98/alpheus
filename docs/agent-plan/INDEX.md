@@ -1,7 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
 > Status: **LEAN V1 FROZEN — AP0 NON-MONEY ACCEPTED; AP1-1 CONTRACTS COMPLETE,
-> AP1 NOT ACCEPTED; M11 IN PROGRESS; AGENT LIVE BLOCKED**
+> AP1 NOT ACCEPTED; M11 LANDED; AGENT LIVE NOT ACTIVATED**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
 > Platform work. It does not amend the M1-M11 trading-kernel specifications in
@@ -90,10 +90,10 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Next planning work
 
-1. Amendment v1.9.4 reopened M11 after the first working close exposed implicit
-   same-price cancel/replace and a read-only startup panic. Keep production
-   read-only and global Halt committed. AP13, Option Live and autonomous broker
-   effects remain closed until M11 is recertified and separately activated.
+1. Amendment v1.9.5 recertified M11 after the working-close incident. Keep
+   production read-only and global Halt committed. Option Live and autonomous
+   broker effects remain closed; AP13 still requires its own later-stage gates
+   and explicit activation.
 2. K1, B0, Lean v1, the Charter closeout, refreshed AP0 audit, and AP0-1
    through AP0-6 are complete. The accepted AP0 release is bound to source
    `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest

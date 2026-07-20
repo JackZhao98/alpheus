@@ -382,3 +382,24 @@ default but does not complete the remaining lifecycle matrix or reland M11.
 Production remains `read_only` with global Halt committed. AP13, autonomous
 Live, Option mutation and additional real-money probes remain closed pending a
 new owner decision after non-money certification.
+
+## Amendment v1.9.5 — minimal equity lifecycle recertified
+
+Commits `26a93f2` and `4f54331` complete the reopened non-money acceptance.
+Static execution is now the default for every open/close, including historical
+payloads without the new field. Managed repricing is explicit Limit-only
+intent and participates in the idempotency hash. Recorded and deterministic
+Provider fixtures cover working, partial fill, fill, cancel, partial-cancel,
+expiry and rejection. Equity Cancel produces exactly one mutation and a repeat
+against its terminal state is read-only. Existing durable fill, reservation and
+illegal-transition suites remain green.
+
+The full suite, race suite and vet pass. The current image was rebuilt and
+started healthy with `TRADING_MODE=read_only` and
+`LIVE_TRADING_ENABLED=false`; the authenticated Kernel API passed. The prior
+production Canary and incident facts remain unchanged, so no additional money
+probe is required. M11 returns to `LANDED` for the equity-only lifecycle.
+
+This does not certify Option mutation, high-frequency execution, automatic
+Robinhood replay, AP13 activation or autonomous Live. Global Halt remains
+committed and production remains read-only.

@@ -7,7 +7,7 @@
 > Status: **FROZEN ARCHITECTURE; amendment v1.9.1 permitted B0 after the M11
 > non-money gate and required it before AP0; v1.9.3 landed the scoped post-B0
 > Canary, and v1.9.4 subsequently reopened M11 execution acceptance without
-> activating AP13**
+> activating AP13; v1.9.5 recertified the equity lifecycle**
 >
 > Scope: coexistence with orders, fills, and positions changed outside Alpheus;
 > final Provider-fact refresh before a broker mutation; ownership and audit of

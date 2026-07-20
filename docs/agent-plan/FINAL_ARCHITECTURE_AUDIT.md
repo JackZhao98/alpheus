@@ -21,6 +21,10 @@
 > close exposed implicit same-price cancel/replace and a read-only startup
 > panic. M11 is `IN PROGRESS`; AP13 and all Agent Live effects remain blocked.
 
+> Post-audit status amendment v1.9.5: R-02 is closed again after static-default
+> execution and the deterministic equity lifecycle matrix passed. M11 is
+> `LANDED`; AP13 and Agent Live remain inactive under their own later gates.
+
 ## 1. Decision
 
 This document incorporates the previous full-topology audit and the focused
@@ -242,7 +246,7 @@ Closure evidence includes:
 The production Robinhood deployment remained read-only and was neither joined
 nor restarted. R-01 is no longer an open release blocker.
 
-### R-02 — REOPENED: M11 deterministic execution lifecycle
+### R-02 — CLOSED: M11 deterministic equity execution lifecycle
 
 Amendment v1.9.3 records the separately confirmed post-K1/B0 production
 acceptance. A one-share working SOFI limit was cancelled unfilled through the
@@ -260,6 +264,13 @@ first working explicit close limit was repeatedly cancelled and replaced at the
 same price by an implicitly enabled repricer, and read-only restart with that
 order panicked through a typed-nil Broker interface. M11 is `IN PROGRESS` until
 the minimal static-by-default lifecycle matrix passes. AP13 remains closed.
+
+Amendment v1.9.5 closes the reopened finding. `26a93f2` makes every open/close
+static by default and requires explicit managed Limit intent for repricing.
+`4f54331` certifies working, partial, filled, cancelled, partial-cancelled,
+expired and rejected Provider states plus exactly-once Equity Cancel and a
+read-only terminal replay. Full/race/vet and rebuilt read-only startup pass.
+M11 is again `LANDED`; this does not certify options or activate AP13.
 
 ### R-03 — CLOSED: Agent Platform Charter amendment
 
@@ -333,6 +344,6 @@ AP0 non-money implementation may begin from this frozen governance state and
 the explicit owner decision. M11 recovery/Halt, K0, K1 and B0 are committed and
 certified. Amendment v1.9.3 subsequently landed the one-share Canary and
 returned the target deployment to read-only with global Halt committed.
-Amendment v1.9.4 then reopened M11 execution acceptance. AP0 cannot emit
-operations or activate GRACE, Delegation or Live; AP13 remains blocked pending
-M11 recertification and all of its other gates.
+Amendment v1.9.4 then reopened M11 execution acceptance, and v1.9.5 recertified
+the minimal equity lifecycle. AP0 cannot emit operations or activate GRACE,
+Delegation or Live; AP13 remains blocked by all of its own later-stage gates.

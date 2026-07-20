@@ -1,6 +1,6 @@
 # M11 Robinhood provider gap
 
-Status: **EQUITY PROVIDER CONTRACT VERIFIED AND WIRED; DEPLOYMENT REMAINS READ-ONLY; OPTION MUTATIONS BLOCKED**
+Status: **M11 EQUITY LIFECYCLE LANDED; DEPLOYMENT REMAINS READ-ONLY; OPTION MUTATIONS BLOCKED**
 (provider lookup absent; equity placement dedupe and exact limit precision
 verified under explicit owner authorization on 2026-07-17)
 
@@ -289,11 +289,34 @@ Commit `26a93f2` lands the first non-money recertification slice:
 The full unit suite, race suite and vet pass for this slice. It removes implicit
 repricing as the default but does not yet certify every terminal transition.
 
-M11 is therefore `IN PROGRESS`. Relanding requires the minimal deterministic
-submit/query/cancel/fill/partial-fill/expiry/restart matrix, static execution by
-default, explicit opt-in for any managed repricing, recorded real-shape Provider
-fixtures, and exactly one broker effect per authorization. AP13, Option Live,
-automatic Robinhood replay and additional production probes remain blocked.
+At v1.9.4 M11 was therefore `IN PROGRESS`. Relanding required the minimal
+deterministic submit/query/cancel/fill/partial-fill/expiry/restart matrix,
+static execution by default, explicit opt-in for any managed repricing,
+recorded real-shape Provider fixtures, and exactly one broker effect per
+authorization. AP13, Option Live, automatic Robinhood replay and additional
+production probes remained blocked.
+
+### v1.9.5 minimal equity lifecycle — recertified
+
+Commit `4f54331` completes the adapter half of the matrix begun by `26a93f2`.
+It normalizes working, partial, filled, cancelled, partial-cancelled, expired and
+rejected equity order shapes. The Equity Cancel fixture proves one accepted
+request causes exactly one mutation; repeating cancel after canonical terminal
+proof performs no mutation. The existing durable Store suites continue to
+cover partial-fill accounting, fill replay, reservation release and illegal
+state regression, while the static-order and typed-nil tests cover the two
+incident-specific restart paths.
+
+Full tests, race tests and vet pass. Kernel image
+`sha256:967282c46cc915729daf3b6a4bd5724a13eb01ec0d1787d1b401d258fa6012bd`
+was rebuilt from this code and started healthy with `TRADING_MODE=read_only`
+and `LIVE_TRADING_ENABLED=false`; its authenticated API passed. No production
+mutation was issued. Together with the still-valid v1.9.3 Canary facts, this
+relands M11 for the equity-only execution lifecycle.
+
+Option mutation, automatic Robinhood replay, high-frequency execution, AP13
+activation and autonomous Live remain uncertified. Production stays read-only
+with global Halt committed.
 
 ### M11 Canary Stop and Recovery Acceptance — landed 2026-07-20
 

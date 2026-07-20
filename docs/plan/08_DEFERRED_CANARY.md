@@ -4,7 +4,7 @@
 
 > Amendment: **v1.9.1**
 >
-> Status: **HISTORICAL — v1.9.3 ACCEPTANCE REOPENED BY v1.9.4**
+> Status: **HISTORICAL — v1.9.5 RECERTIFIED THE REOPENED ACCEPTANCE**
 >
 > Scope: defer the real one-share M11 Canary without treating it as passed, and
 > permit independently safe non-money Kernel and Agent Platform work to
@@ -14,7 +14,8 @@
 > Completion history: on 2026-07-20 the separately confirmed Alpheus-routed
 > Canary and stop/recovery acceptance passed against the post-K1/B0 Kernel.
 > Amendment v1.9.4 later reopened M11 after an uncovered working-close
-> lifecycle. See `../M11_PROVIDER_GAP.md`.
+> lifecycle; amendment v1.9.5 recertified the equity lifecycle without another
+> money probe. See `../M11_PROVIDER_GAP.md`.
 
 ## 1. Evidence and decision
 
@@ -175,3 +176,13 @@ a real close limit remained working. The first such lifecycle produced repeated
 same-price cancel/replace effects and a typed-nil Broker startup panic. Although
 no duplicate active order or fill occurred, M11 returns to `IN PROGRESS` until
 the minimal execution lifecycle is recertified. AP13 remains blocked.
+
+## 10. Reclosed acceptance — v1.9.5
+
+`26a93f2` and `4f54331` make execution static by default and complete the
+deterministic equity submit/query/cancel/fill/partial-fill/expiry/restart and
+read-only matrix. Full/race/vet pass, and the rebuilt target Kernel starts
+healthy in read-only mode with Live disabled. The v1.9.3 production facts remain
+valid, so M11 is again `LANDED` without another money probe. Options, automatic
+Robinhood replay, AP13 activation and autonomous Live remain outside this
+acceptance.
