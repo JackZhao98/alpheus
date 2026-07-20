@@ -53,7 +53,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-2 durable foundations are in place; Agent Lab has typed Auto routing, an asynchronous persisted read-only Scout -> Decision Desk workflow, and deterministic Robinhood price/technical/fundamental/financial/earnings context through `20ce09d`; canonical Worker recovery and external news remain open while all effects stay closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-2 durable foundations are in place; Agent Lab has typed Auto routing, an asynchronous persisted read-only Scout -> Decision Desk workflow, deterministic Robinhood price/technical/fundamental/financial/earnings context, and encrypted database-backed service credentials through `5759e04`; canonical Worker recovery and external news remain open while all effects stay closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
