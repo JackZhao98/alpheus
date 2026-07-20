@@ -26,10 +26,11 @@
   Worker claim, start, and heartbeat durable non-money Tasks and transact exact
   model-call and terminalization facts. No deployed Worker uses it yet; there
   is still no model adapter or network call, and child-task, cancellation, and
-  recovery commands remain absent. Custom OutputContract bytes are not yet
-  trusted-validated: a Control-service validation receipt is required before
-  any Artifact may be consumed downstream. The system cannot call a model or
-  produce an external effect.
+  recovery commands remain absent. A bounded, local-only OutputContract
+  validator and its future receipt command contracts landed at `f70388d`.
+  They are not yet wired into a deployed Control/Worker loop; database receipt
+  persistence is intentionally deferred until after the MVP loop. The system
+  cannot call a model or produce an external effect.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money
@@ -56,7 +57,7 @@ milestones and not independent authorization gates.
 | Packet | Status | Scope |
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
-| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; AP0 historical certification isolated at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Role-derived claim/start/heartbeat, model-call dispatch/unknown/resolve, and Attempt commit/fail transactions enforce strict raw JSON, exact idempotency and Blob lineage, current admission at dispatch, root-to-leaf budget reservation/settlement, final database-time fences, persistent Artifact Blob bindings, exact slot release, retry/dead-letter accounting, Worker-only grants, and canonical transition events. Trusted OutputContract byte-validation receipts, child-task, cancellation, and recovery commands remain in progress. |
+| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; AP0 historical certification isolated at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Role-derived claim/start/heartbeat, model-call dispatch/unknown/resolve, and Attempt commit/fail transactions enforce strict raw JSON, exact idempotency and Blob lineage, current admission at dispatch, root-to-leaf budget reservation/settlement, final database-time fences, persistent Artifact Blob bindings, exact slot release, retry/dead-letter accounting, Worker-only grants, and canonical transition events. Database validation-receipt persistence, child-task, cancellation, and recovery commands are deferred while the MVP Control/Worker loop is built. |
 | AP1-3 Control Plane and bounded Worker execution | Not started | Integrate the existing `agent-runtime` deployable with AP1 persistence; no second service, operation emission, Provider/broker access or Live effect. |
 | AP1-4 crash/concurrency acceptance and stage seal | Not started | Race, crash-window, duplicate-delivery, stale-lease, budget, cancellation, recovery and non-money acceptance evidence. |
 
