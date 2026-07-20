@@ -52,7 +52,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 complete; AP0 non-money release accepted at source `b026b87`, digest `cdf451e5...c385df1`; AP1 remains closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 complete; corrected AP0 non-money release accepted at source `6c276e9`, digest `0614bf77...932d1da2`; AP1 remains closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -95,8 +95,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    applicable post-K1/B0 Kernel; no non-money artifact substitutes for it.
 2. K1, B0, Lean v1, the Charter closeout, refreshed AP0 audit, and AP0-1
    through AP0-6 are complete. The accepted AP0 release is bound to source
-   `b026b87447d054717e6277ee925b126a17515bef` and manifest digest
-   `cdf451e5fe002dc7297a2e1c7aa05e6f0eb1b071a66cc9971edbda923c385df1`.
+   `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest
+   `0614bf7764e9d684e05e63c587f3fdf6c77c91589ce87e7d6ea5295c932d1da2`.
    Review and freeze AP1's detailed entry packet before implementing it.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.

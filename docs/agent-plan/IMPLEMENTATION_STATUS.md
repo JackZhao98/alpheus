@@ -6,10 +6,9 @@
 ## Current boundary
 
 - The frozen Lean v1 architecture remains authoritative.
-- Non-money AP0 is implemented with effect ceiling `none`. The prior AP0
-  release approval is superseded by the post-certification security correction
-  at `6c276e9`; a replacement digest is pending fresh certification and owner
-  approval.
+- Non-money AP0 is implemented and accepted with effect ceiling `none` at
+  corrected source `6c276e9`, evidence seal `628b717`, and release digest
+  `0614bf77...932d1da2`.
 - AP1 and later stages remain closed.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
@@ -25,7 +24,7 @@
 | AP0-3 service security and durable delivery scaffold | Complete at `83bce82`; identity/provenance hardening at `6c276e9` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
 | AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52`; identity/ownership hardening at `6c276e9` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
 | AP0-5 platform/effect governance registry | Complete at `f8f2e74`; authority/locking hardening at `6c276e9` | Frozen governance Schema Pack, immutable typed mode/effect/kill-switch revisions, fenced heads and append-only events, single-use bounded ActivationReceipts, separate owner/Activator/emergency-halt roles, stable-subject CAS, exact current-head projection, deterministic fail-closed Go resolver, and role/stale/malformed/concurrency probes |
-| AP0-6 integration and AP0 acceptance | Re-certification pending; corrected source `6c276e9`; replacement digest not yet approved | Full Kernel/Agent migration compatibility, complete common and AP0 threat probes, cross-language canonical digest validation, machine-readable certification evidence, bound release files, and exact owner-approved digest verification |
+| AP0-6 integration and AP0 acceptance | Complete; corrected source `6c276e9`; evidence seal `628b717`; release digest `0614bf77...932d1da2` | Full Kernel/Agent migration compatibility, complete common and AP0 threat probes, cross-language canonical digest validation, machine-readable certification evidence, bound release files, and exact owner-approved digest verification |
 
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
 criteria. These packets are implementation-sized units, not new architecture
@@ -59,9 +58,9 @@ activation record, never from the same untrusted manifest being checked.
 
 ## Verification
 
-The corrected AP0 implementation passes the individual code, contract, role,
-concurrency, and migration probes below. The protected aggregate stage command
-must be rerun against a newly sealed manifest before AP0 is accepted again:
+The corrected AP0 implementation and protected aggregate stage command pass the
+code, contract, role, concurrency, migration, and release-verification probes
+below:
 
 ```text
 gofmt
@@ -76,10 +75,8 @@ disposable PostgreSQL governance role/receipt/CAS probe
 full Kernel plus Agent migration compatibility and transactional rollback probe
 Docker Compose configuration validation
 static non-money boundary probe
+exact release-manifest document and evidence verification
 ```
-
-Exact release-manifest document and evidence verification is pending replacement
-manifest sealing and owner approval.
 
 The PostgreSQL probe exercises exact retry and conflicting identity behavior,
 stale lease rejection, inbox deduplication, quarantine/replay, dynamic-policy
