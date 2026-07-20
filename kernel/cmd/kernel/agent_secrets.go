@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,8 +15,9 @@ import (
 const agentSecretEnvelopeVersion byte = 1
 
 var agentSecretNames = map[string]bool{
-	"openai": true,
-	"brave":  true,
+	"openai":             true,
+	"brave":              true,
+	"robinhood_research": true,
 }
 
 func (s *server) getAgentSecrets(w http.ResponseWriter, _ *http.Request) {
@@ -24,7 +26,7 @@ func (s *server) getAgentSecrets(w http.ResponseWriter, _ *http.Request) {
 		writeStoreError(w, "list agent secrets", err)
 		return
 	}
-	configured := map[string]bool{"openai": false, "brave": false}
+	configured := map[string]bool{"openai": false, "brave": false, "robinhood_research": false}
 	for _, name := range names {
 		if agentSecretNames[name] {
 			configured[name] = true
@@ -46,11 +48,12 @@ func (s *server) putAgentSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Value = strings.TrimSpace(input.Value)
-	if !validAgentAPIKey(input.Value) || input.Value == "" {
+	canonical, ok := canonicalAgentSecretValue(name, input.Value)
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid credential"})
 		return
 	}
-	ciphertext, err := sealAgentSecret(s.mode.AgentWebSessionKey, name, input.Value)
+	ciphertext, err := sealAgentSecret(s.mode.AgentWebSessionKey, name, canonical)
 	if err != nil {
 		writeInternalError(w, "encrypt agent secret", err)
 		return
@@ -61,6 +64,22 @@ func (s *server) putAgentSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.Event("agent_secret_updated", map[string]string{"provider": name})
 	writeJSON(w, http.StatusOK, map[string]any{"provider": name, "configured": true})
+}
+
+func validAgentSecretValue(name, value string) bool {
+	_, ok := canonicalAgentSecretValue(name, value)
+	return ok
+}
+
+func canonicalAgentSecretValue(name, value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	if name != "robinhood_research" {
+		return value, validAgentAPIKey(value)
+	}
+	compact, err := compactRobinhoodResearchCredential(json.RawMessage(value))
+	return compact, err == nil && len(compact) <= 4000
 }
 
 func (s *server) deleteAgentSecret(w http.ResponseWriter, r *http.Request) {

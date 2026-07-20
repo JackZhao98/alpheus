@@ -36,6 +36,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /market/bars/{symbol}", s.authorize(permissionRead, s.getMarketBars))
 	mux.HandleFunc("GET /market/movers", s.authorize(permissionRead, s.getMarketMovers))
 	mux.HandleFunc("GET /market/hours", s.authorize(permissionRead, s.getMarketHours))
+	mux.HandleFunc("GET /research/news/{symbol}", s.authorize(permissionRead, s.getResearchNews))
 	mux.HandleFunc("GET /provider/status", s.authorize(permissionRead, s.getProviderStatus))
 	mux.HandleFunc("GET /mcp/read-tools", s.authorize(permissionRead, s.getMCPReadTools))
 	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))

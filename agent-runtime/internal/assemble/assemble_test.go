@@ -57,6 +57,8 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 				t.Fatalf("bars query=%s", r.URL.RawQuery)
 			}
 			body = `{"bars":[]}`
+		case "/research/news/SOFI":
+			body = `{"available":true,"source":"robinhood-private-api","symbol":"SOFI","items":[]}`
 		case "/mcp/read-query":
 			var input struct {
 				Tool string         `json:"tool"`
@@ -85,7 +87,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	client.HTTP.Transport = transport
 	context, err := client.AssembleQuery(roles.Role{InjectedContext: []string{
 		"state", "equity_fundamentals", "company_financials", "earnings_results",
-		"technical_rsi", "technical_macd", "technical_atr",
+		"technical_rsi", "technical_macd", "technical_atr", "news_headlines",
 	}}, "sofi", "现在值得研究吗？")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +95,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	for _, key := range []string{
 		"state", "market_quote", "market_bars", "symbol", "user_query",
 		"equity_fundamentals", "company_financials", "earnings_results",
-		"technical_rsi", "technical_macd", "technical_atr",
+		"technical_rsi", "technical_macd", "technical_atr", "news_headlines",
 	} {
 		if context[key] == nil {
 			t.Fatalf("missing context key %q: %v", key, context)

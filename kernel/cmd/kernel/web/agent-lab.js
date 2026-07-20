@@ -35,6 +35,7 @@ byId("login-form").addEventListener("submit", async (event) => {
     });
     byId("password").value = "";
     showAuthenticated(true);
+    await refreshCredentialStatus();
   } catch (_) {
     byId("login-error").textContent = "密码错误。";
   } finally {
@@ -46,6 +47,8 @@ async function refreshCredentialStatus() {
   const payload = await request("/agent/secrets");
   const configured = Boolean(payload?.configured?.openai);
   byId("openai-status").textContent = configured ? "已加密保存在数据库中。" : "尚未配置。";
+  const robinhoodConfigured = Boolean(payload?.configured?.robinhood_research);
+  byId("robinhood-research-status").textContent = robinhoodConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   return configured;
 }
 
@@ -71,9 +74,33 @@ byId("save-openai").addEventListener("click", async () => {
   }
 });
 
+byId("save-robinhood-research").addEventListener("click", async () => {
+  const file = byId("robinhood-research-token").files?.[0];
+  byId("query-error").textContent = "";
+  if (!file || file.size > 4000) {
+    byId("query-error").textContent = "请选择有效且小于 4KB 的 credentials.json。";
+    return;
+  }
+  byId("save-robinhood-research").disabled = true;
+  try {
+    const value = JSON.stringify(JSON.parse(await file.text()));
+    await request("/agent/secrets/robinhood_research", {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({value})
+    });
+    byId("robinhood-research-token").value = "";
+    await refreshCredentialStatus();
+  } catch (error) {
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("save-robinhood-research").disabled = false;
+  }
+});
+
 byId("logout").addEventListener("click", async () => {
   await request("/agent/auth/logout", {method:"POST"}).catch(() => null);
   byId("openai-token").value = "";
+  byId("robinhood-research-token").value = "";
   showAuthenticated(false);
 });
 

@@ -39,6 +39,12 @@
         </div>
         <input id="openai-token" type="password" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore>
         <p class="field-note">GPT-5.6 Sol · 保存后仅以 AES-256-GCM 密文写入数据库；明文不会写入 job、日志或浏览器存储。</p>
+        <div class="credential-row">
+          <div><label for="robinhood-research-token">Robinhood Research Credential</label><p id="robinhood-research-status" class="field-note">检查配置中…</p></div>
+          <button id="save-robinhood-research" class="secondary" type="button">加密导入</button>
+        </div>
+        <input id="robinhood-research-token" type="file" accept="application/json,.json">
+        <p class="field-note">选择 robinhood-cli 的 credentials.json。浏览器读取后直接加密写入数据库；文件内容不进入 job、日志或浏览器存储。</p>
         <label for="workflow">工作流</label>
         <select id="workflow"><option value="auto" selected>Auto route</option><option value="team">Scout → Decision Desk</option><option value="scout">Scout only</option></select>
         <label for="symbol">股票代码</label>

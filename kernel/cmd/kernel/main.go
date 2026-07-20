@@ -48,6 +48,8 @@ type server struct {
 	providerReplayWindowBoundVerified bool
 	runtimeURL                        string
 	runtimeHTTP                       *http.Client
+	researchURL                       string
+	researchHTTP                      *http.Client
 	consoleOrigin                     string
 	marketTZ                          string
 	haltMu                            sync.RWMutex
@@ -300,6 +302,7 @@ func main() {
 		// latency is not; automatic replay therefore remains fail-closed there.
 		providerReplayWindowBoundVerified: brokerName == "fake",
 		runtimeURL:                        config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		researchURL:                       config.Env("RESEARCH_URL", "http://research-gateway:8300"),
 		consoleOrigin:                     consoleOrigin,
 		marketTZ:                          marketTZ,
 	}

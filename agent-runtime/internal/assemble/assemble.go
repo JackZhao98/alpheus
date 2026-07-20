@@ -59,6 +59,7 @@ func (c *Client) AssembleQuery(role roles.Role, symbol, query string) (map[strin
 type queryEnrichment struct {
 	key  string
 	tool string
+	path string
 	args map[string]any
 }
 
@@ -69,6 +70,7 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 	}
 	indicatorStart := time.Now().UTC().AddDate(0, 0, -180).Format(time.RFC3339)
 	all := []queryEnrichment{
+		{key: "news_headlines", path: "/research/news/" + url.PathEscape(symbol)},
 		{key: "equity_fundamentals", tool: "get_equity_fundamentals", args: map[string]any{"symbols": []string{symbol}}},
 		{key: "company_financials", tool: "get_financials", args: map[string]any{"symbols": []string{symbol}, "period": "quarterly", "limit": 4}},
 		{key: "earnings_results", tool: "get_earnings_results", args: map[string]any{"symbol": symbol}},
@@ -94,7 +96,13 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 		wait.Add(1)
 		go func(task queryEnrichment) {
 			defer wait.Done()
-			raw, err := c.mcpReadQuery(task.tool, task.args)
+			var raw json.RawMessage
+			var err error
+			if task.path != "" {
+				raw, err = c.getJSON(task.path)
+			} else {
+				raw, err = c.mcpReadQuery(task.tool, task.args)
+			}
 			results <- result{key: task.key, tool: task.tool, raw: raw, err: err}
 		}(task)
 	}
@@ -102,8 +110,12 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 	close(results)
 	for result := range results {
 		if result.err != nil {
+			source := "robinhood-mcp"
+			if result.tool == "" {
+				source = "robinhood-private-api"
+			}
 			fallback, _ := json.Marshal(map[string]any{
-				"available": false, "source": "robinhood-mcp", "tool": result.tool,
+				"available": false, "source": source, "tool": result.tool,
 			})
 			ctx[result.key] = fallback
 			continue

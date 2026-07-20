@@ -30,6 +30,7 @@ services:
       AGENT_WEB_PASSWORD: ${AGENT_WEB_PASSWORD:-}
       AGENT_WEB_SESSION_KEY: ${AGENT_WEB_SESSION_KEY:-}
       RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
+      RESEARCH_URL: ${RESEARCH_URL:-http://research-gateway:8300}
       CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
       LIVE_ACCOUNT_ID: ${LIVE_ACCOUNT_ID:-}
@@ -48,6 +49,16 @@ services:
     depends_on:
       db: { condition: service_healthy }
 
+  research-gateway:
+    build: ./research-gateway
+    environment:
+      KERNEL_TOKEN: ${KERNEL_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8300/health >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   agent-runtime:
     build: ./agent-runtime
     environment:
@@ -65,6 +76,7 @@ services:
       CONTEXT_SLOT_MAX_BYTES: ${CONTEXT_SLOT_MAX_BYTES:-1048576}
     depends_on:
       kernel: { condition: service_healthy }
+      research-gateway: { condition: service_healthy }
 
 volumes:
   pgdata:
