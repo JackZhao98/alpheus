@@ -656,7 +656,17 @@
     },
     "FailAttemptCommand": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "failure"],
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "retry_class", "failure"],
+      "allOf": [
+        {
+          "if": {"properties": {"retry_class": {"const": "none"}}, "required": ["retry_class"]},
+          "then": {"properties": {"failure": {"type": "object", "properties": {"retryable": {"const": false}}}}}
+        },
+        {
+          "if": {"properties": {"retry_class": {"enum": ["invalid_output", "infrastructure"]}}, "required": ["retry_class"]},
+          "then": {"properties": {"failure": {"type": "object", "properties": {"retryable": {"const": true}}}}}
+        }
+      ],
       "properties": {
         "schema_revision": {"const": 1},
         "envelope": {"$ref": "#/$defs/CommandEnvelope"},
@@ -664,6 +674,7 @@
         "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
         "lease_generation": {"type": "integer", "minimum": 1},
         "lease_token": {"$ref": "#/$defs/Identifier"},
+        "retry_class": {"enum": ["none", "invalid_output", "infrastructure"]},
         "failure": {"$ref": "#/$defs/Failure"}
       }
     },

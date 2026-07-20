@@ -643,10 +643,21 @@ func (value CommitAttemptCommand) Validate() error {
 func (value FailAttemptCommand) Validate() error {
 	if validateAttemptFence(value.SchemaRevision, value.Envelope, "fail_attempt", value.AttemptID,
 		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
-		value.Failure.Validate() != nil {
+		value.Failure.Validate() != nil || !validRetryClass(value.RetryClass, value.Failure.Retryable) {
 		return ErrInvalidRuntime
 	}
 	return nil
+}
+
+func validRetryClass(class RetryClass, retryable bool) bool {
+	switch class {
+	case RetryNone:
+		return !retryable
+	case RetryInvalidOutput, RetryInfrastructure:
+		return retryable
+	default:
+		return false
+	}
 }
 
 func (value RequestChildTaskCommand) Validate() error {

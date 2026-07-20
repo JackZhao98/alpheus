@@ -1,0 +1,25 @@
+{
+  "schema_revision": 1,
+  "envelope": {
+    "schema_revision": 1,
+    "command_id": "command-fail-attempt",
+    "actor": {"principal_id": "worker-1", "kind": "workload", "audience": "worker"},
+    "audience": "control_api",
+    "command_type": "fail_attempt",
+    "idempotency_key": "fail-attempt-1",
+    "request_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "causation_id": "cause-1",
+    "correlation_id": "correlation-1",
+    "deadline": "2026-07-20T13:00:00Z"
+  },
+  "attempt_id": "attempt-1",
+  "expected_attempt_state_generation": 2,
+  "lease_generation": 1,
+  "lease_token": "lease-1",
+  "retry_class": "none",
+  "failure": {
+    "code": "provider_unavailable",
+    "message": "provider unavailable",
+    "retryable": true
+  }
+}

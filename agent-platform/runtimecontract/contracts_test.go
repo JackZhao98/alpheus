@@ -171,6 +171,36 @@ func TestContractsFailClosed(t *testing.T) {
 		}
 	})
 
+	t.Run("fail attempt retry class matches retryability", func(t *testing.T) {
+		value := validFixture().fail
+		value.RetryClass = RetryInvalidOutput
+		if err := value.Validate(); err != nil {
+			t.Fatalf("retryable failure with invalid-output retry class: %v", err)
+		}
+
+		value.RetryClass = "future_retry_class"
+		if value.Validate() == nil {
+			t.Fatal("unknown retry class passed")
+		}
+
+		value = validFixture().fail
+		value.RetryClass = RetryNone
+		if value.Validate() == nil {
+			t.Fatal("retryable failure with none retry class passed")
+		}
+
+		value = validFixture().fail
+		value.Failure.Retryable = false
+		if value.Validate() == nil {
+			t.Fatal("non-retryable failure with infrastructure retry class passed")
+		}
+
+		value.RetryClass = RetryNone
+		if err := value.Validate(); err != nil {
+			t.Fatalf("non-retryable failure with none retry class: %v", err)
+		}
+	})
+
 	t.Run("unknown outcome has its own command", func(t *testing.T) {
 		value := validFixture().resolve
 		value.Outcome = TurnUnknown
@@ -591,7 +621,8 @@ func validFixture() fixture {
 		},
 		fail: FailAttemptCommand{
 			SchemaRevision: 1, Envelope: envelope("fail_attempt", '3'), AttemptID: "attempt-1",
-			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1", Failure: failure,
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
+			RetryClass: RetryInfrastructure, Failure: failure,
 		},
 		child: RequestChildTaskCommand{
 			SchemaRevision: 1, Envelope: envelope("request_child_task", '4'), ParentTaskID: "task-1",

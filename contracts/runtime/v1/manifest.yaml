@@ -50,6 +50,7 @@
     "valid": [
       "golden/valid/artifact_nonmoney.json",
       "golden/valid/claim_task_command.json",
+      "golden/valid/fail_attempt_retryable.json",
       "golden/valid/output_contract_revision.json",
       "golden/valid/publication_disabled.json",
       "golden/valid/recovery_reuse.json",
@@ -60,6 +61,8 @@
       "golden/invalid/artifact_operation_intent.json",
       "golden/invalid/budget_overcommitted.json",
       "golden/invalid/claim_worker_spoof.json",
+      "golden/invalid/fail_attempt_nonretryable_infrastructure.json",
+      "golden/invalid/fail_attempt_retryable_none.json",
       "golden/invalid/publication_behavior_event.json",
       "golden/invalid/recovery_retry_same_attempt.json",
       "golden/invalid/run_terminal_without_time.json"
@@ -67,6 +70,7 @@
     "digests": [
       "golden/digest/artifact_nonmoney.sha256",
       "golden/digest/claim_task_command.sha256",
+      "golden/digest/fail_attempt_retryable.sha256",
       "golden/digest/output_contract_revision.sha256",
       "golden/digest/publication_disabled.sha256",
       "golden/digest/recovery_reuse.sha256",

@@ -143,6 +143,18 @@ const (
 	RecoveryCanceled             RecoveryDecision = "canceled"
 )
 
+// RetryClass selects the frozen retry budget charged by a failed Attempt.
+// Failure.Retryable describes whether retry is allowed; this enum makes the
+// corresponding budget explicit instead of inferring it from a free-form
+// failure code.
+type RetryClass string
+
+const (
+	RetryNone           RetryClass = "none"
+	RetryInvalidOutput  RetryClass = "invalid_output"
+	RetryInfrastructure RetryClass = "infrastructure"
+)
+
 type RuntimeSubject string
 
 const (
@@ -650,6 +662,7 @@ type FailAttemptCommand struct {
 	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
 	LeaseGeneration                int64                     `json:"lease_generation"`
 	LeaseToken                     string                    `json:"lease_token"`
+	RetryClass                     RetryClass                `json:"retry_class"`
 	Failure                        contracts.Failure         `json:"failure"`
 }
 
