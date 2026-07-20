@@ -53,7 +53,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 includes lease chronology at `d23215c` and explicit retry classification at `ce0da6e`; AP1-2 immutable definitions landed at `bce88cc`, durable Runtime state at `7671762`, and claim/start/heartbeat transactions at `95a1af2`; remaining commands are in progress and all effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 includes lease chronology at `d23215c` and explicit retry classification at `ce0da6e`; AP1-2 immutable definitions landed at `bce88cc`, durable Runtime state at `7671762`, claim/start/heartbeat transactions at `95a1af2`, and durable model-call transactions at `4f3a082`; remaining commands are in progress and all effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -106,8 +106,11 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    Historical AP0 certification was isolated from later-stage files at
    `714bee2`, and AP1-2's immutable/default-deny definition storage landed at
    `bce88cc`. Default-deny durable Runtime state landed at `7671762`. The first
-   role-derived claim/start/heartbeat transaction slice landed at `95a1af2`;
-   model-call and the remaining AP1-2 commands remain in progress.
+   role-derived claim/start/heartbeat transaction slice landed at `95a1af2`.
+   Durable model-call dispatch, unknown containment, reconciliation, budget
+   settlement, and same-Attempt crash recovery landed at `4f3a082`; the
+   completion/failure, child-task, cancellation, and recovery commands remain
+   in progress. No deployed Worker or model adapter is enabled.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
