@@ -9,7 +9,8 @@
 - Non-money AP0 is implemented and accepted with effect ceiling `none` at
   corrected source `6c276e9`, evidence seal `628b717`, and release digest
   `0614bf77...932d1da2`.
-- AP1 and later stages remain closed.
+- AP1-1's durable Runtime contract freeze is complete at `df73161`; AP1 is not
+  accepted and no Runtime behavior or effect is enabled.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent non-money acceptance entrypoint.
@@ -29,6 +30,19 @@
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
 criteria. These packets are implementation-sized units, not new architecture
 milestones and not independent authorization gates.
+
+## AP1 work packets
+
+| Packet | Status | Scope |
+|---|---|---|
+| AP1-1 durable Runtime contract freeze | Complete at `df73161` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, sessions, fenced attempts and leases, turns, model-call manifests/results, non-money artifacts, disabled publication intents, checkpoints, budgets, cancellation, recovery, commands and transition events; JSON Schema, exact state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
+| AP1-2 PostgreSQL durable state and command transactions | Not started | Runtime policy/state tables, narrow role-derived command functions, idempotency, generation and lease fencing, atomic budget accounting, cancellation and recovery. |
+| AP1-3 Control Plane and bounded Worker execution | Not started | Integrate the existing `agent-runtime` deployable with AP1 persistence; no second service, operation emission, Provider/broker access or Live effect. |
+| AP1-4 crash/concurrency acceptance and stage seal | Not started | Race, crash-window, duplicate-delivery, stale-lease, budget, cancellation, recovery and non-money acceptance evidence. |
+
+AP1-1 freezes data shape and fail-closed validation only. It does not create
+tables, start a scheduler, claim work, call a model, publish a behavior event,
+or authorize any Kernel-facing effect.
 
 ## AP0-1 contract profile
 

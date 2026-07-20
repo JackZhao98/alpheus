@@ -1,6 +1,7 @@
 # Alpheus Agent Platform Plan Index
 
-> Status: **LEAN V1 FROZEN — AP0 NON-MONEY ACCEPTED; AP1 CLOSED; M11
+> Status: **LEAN V1 FROZEN — AP0 NON-MONEY ACCEPTED; AP1-1 CONTRACTS COMPLETE,
+> AP1 NOT ACCEPTED; M11
 > CANARY DEFERRED; AP13+ withheld pending M11 landing**
 >
 > Relationship to the frozen plan: this directory covers post-M11 Agent
@@ -52,14 +53,14 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 complete; corrected AP0 non-money release accepted at source `6c276e9`, digest `0614bf77...932d1da2`; AP1 remains closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 Runtime contract freeze complete at `df73161`; AP1 behavior and effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
 | GRACE mixed-control attribution | Architecture frozen; B0/AP8 evidence bindings and AP9 quantitative/model-risk acceptance required | [`GRACE_MIXED_CONTROL.md`](GRACE_MIXED_CONTROL.md) |
 | Delegation policy and risk authorization | Architecture and exact v1 specification frozen; autonomous Live disabled pending GRACE/model-risk, machine-schema, security, fault-suite, and rollout acceptance | [`DELEGATION.md`](DELEGATION.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
 | Complete module graph and trust boundaries | Architecture frozen; exact transport, persistence roles, cross-module schemas, and probes required | [`SYSTEM_BOUNDARIES.md`](SYSTEM_BOUNDARIES.md) |
-| Durable Agent Runtime | Architecture frozen; detailed state machines and implementation specification required | [`RUNTIME.md`](RUNTIME.md) |
+| Durable Agent Runtime | Architecture frozen; AP1-1 machine contracts and state machines complete; persistence, execution and acceptance remain | [`RUNTIME.md`](RUNTIME.md) |
 | User query, Intent, interruption, and confirmation | Architecture frozen; trading money-confirmation subset frozen by Delegation; remaining schemas and UI transport required | [`USER_INPUT.md`](USER_INPUT.md), [`DELEGATION_POLICY.md`](DELEGATION_POLICY.md) |
 | Skills, Tools, and Capability Registry | Architecture frozen; metadata, taxonomy, Gateway, and validators required | [`SKILLS_TOOLS.md`](SKILLS_TOOLS.md) |
 | Task planning and typed Agent collaboration | Architecture frozen; state schemas, Scheduler, and limits required | [`COLLABORATION.md`](COLLABORATION.md) |
@@ -68,7 +69,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 | Playbook and Strategy evolution | Architecture frozen; schemas, quantitative validation, Strategy Lab, and implementation specification required | [`PLAYBOOK.md`](PLAYBOOK.md) |
 | Agent team and role contracts | Architecture frozen; exact Role packages, prompts, schedules, models, budgets, and implementation specification required | [`TEAM.md`](TEAM.md) |
 | Agent Ops and Strategy Lab Web | Architecture frozen; exact API, permissions, read models, and implementation specification required | [`WEB.md`](WEB.md) |
-| Agent Platform Build Roadmap | Frozen Lean v1 baseline through AP15; AP0 accepted with effect ceiling `none`; AP1 entry review is next | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
+| Agent Platform Build Roadmap | Frozen Lean v1 baseline through AP15; AP0 accepted with effect ceiling `none`; AP1-1 contract freeze complete, AP1 not accepted | [`BUILD_ROADMAP.md`](BUILD_ROADMAP.md), [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | Final cross-module architecture audit | Current for AP0; no unresolved authority, identity, ordering or fail-open finding; later gates remain closed | [`FINAL_ARCHITECTURE_AUDIT.md`](FINAL_ARCHITECTURE_AUDIT.md) |
 
 ## Planning rules
@@ -97,7 +98,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    through AP0-6 are complete. The accepted AP0 release is bound to source
    `6c276e9d740bf6c20b7e22b53f6ee06c131ecb7d` and manifest digest
    `0614bf7764e9d684e05e63c587f3fdf6c77c91589ce87e7d6ea5295c932d1da2`.
-   Review and freeze AP1's detailed entry packet before implementing it.
+   AP1-1's detailed Runtime contract pack is frozen at `df73161`. Implement
+   AP1-2 PostgreSQL durable state and narrow transactional commands next.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
