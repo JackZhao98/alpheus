@@ -2211,42 +2211,65 @@ func (m *memoryStore) CreateAgentQueryJob(subject, workflow, symbol, query strin
 	return &copy, nil
 }
 
-func (m *memoryStore) StartAgentQueryJob(id string) (bool, error) {
+func (m *memoryStore) ClaimAgentQueryJob(id string, leaseDuration time.Duration) (*store.AgentQueryJob, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job, ok := m.agentQueryJobs[id]
-	if !ok || job.Status != "queued" {
-		return false, nil
+	now := time.Now().UTC()
+	if !ok || (job.Status != "queued" && !(job.Status == "running" && !job.LeaseExpiresAt.After(now))) {
+		return nil, nil
 	}
-	job.Status, job.UpdatedAt = "running", time.Now().UTC()
+	job.Status, job.UpdatedAt = "running", now
+	job.Attempt++
+	job.ClaimToken = store.NewID()
+	job.LeaseExpiresAt = now.Add(leaseDuration)
 	m.agentQueryJobs[id] = job
-	return true, nil
+	copy := job
+	return &copy, nil
 }
 
-func (m *memoryStore) CompleteAgentQueryJob(id string, result json.RawMessage) (bool, error) {
+func (m *memoryStore) CompleteClaimedAgentQueryJob(id, claimToken string, result json.RawMessage) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job, ok := m.agentQueryJobs[id]
-	if !ok || job.Status != "running" {
+	if !ok || job.Status != "running" || job.ClaimToken != claimToken {
 		return false, nil
 	}
 	job.Status, job.UpdatedAt = "succeeded", time.Now().UTC()
 	job.Result = append(json.RawMessage(nil), result...)
+	job.ClaimToken, job.LeaseExpiresAt = "", time.Time{}
 	m.agentQueryJobs[id] = job
 	return true, nil
 }
 
-func (m *memoryStore) FailAgentQueryJob(id, errorCode string) (bool, error) {
+func (m *memoryStore) FailClaimedAgentQueryJob(id, claimToken, errorCode string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job, ok := m.agentQueryJobs[id]
-	if !ok || (job.Status != "queued" && job.Status != "running") {
+	if !ok || job.Status != "running" || job.ClaimToken != claimToken {
 		return false, nil
 	}
 	job.Status, job.UpdatedAt = "failed", time.Now().UTC()
 	job.ErrorCode = errorCode
+	job.ClaimToken, job.LeaseExpiresAt = "", time.Time{}
 	m.agentQueryJobs[id] = job
 	return true, nil
+}
+
+func (m *memoryStore) ListRecoverableAgentQueryJobs(limit int) ([]store.AgentQueryJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	jobs := make([]store.AgentQueryJob, 0)
+	for _, job := range m.agentQueryJobs {
+		if job.Status == "queued" || (job.Status == "running" && !job.LeaseExpiresAt.After(now)) {
+			jobs = append(jobs, job)
+			if len(jobs) == limit {
+				break
+			}
+		}
+	}
+	return jobs, nil
 }
 
 func (m *memoryStore) GetAgentQueryJob(id string) (*store.AgentQueryJob, error) {

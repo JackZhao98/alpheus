@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +89,89 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "sk-test-secret") || strings.Contains(string(completed.Result), "sk-test-secret") {
 		t.Fatal("API key leaked into query response")
+	}
+}
+
+func TestAgentQueryRecoveryReclaimsExpiredLeaseExactlyOnce(t *testing.T) {
+	var runtimeCalls atomic.Int32
+	client := &http.Client{Transport: watchdogRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		runtimeCalls.Add(1)
+		var input agentQueryInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if input.Workflow != "scout" || input.Symbol != "SOFI" || input.Query != "recover me" ||
+			input.OpenAIAPIKey != "sk-recovery-secret" {
+			t.Fatalf("recovered input=%+v", input)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"role":"scout","workflow":"scout","cognition":"llm","provider":"openai","model":"gpt-5.6-sol","output":{"action":"PASS","candidates":[],"structural_notes":[]}}`,
+			)),
+			Request: r,
+		}, nil
+	})}
+	st := newMemoryStore()
+	s := &server{
+		mode: config.ModeConfig{
+			TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret",
+			AgentWebSessionKey: strings.Repeat("k", 32),
+		},
+		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
+	}
+	ciphertext, err := sealAgentSecret(s.mode.AgentWebSessionKey, "openai", "sk-recovery-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutAgentSecret("openai", ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.CreateAgentQueryJob("owner", "scout", "SOFI", "recover me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.ClaimAgentQueryJob(job.ID, time.Minute)
+	if err != nil || first == nil {
+		t.Fatalf("first claim=%+v err=%v", first, err)
+	}
+	st.mu.Lock()
+	expired := st.agentQueryJobs[job.ID]
+	expired.LeaseExpiresAt = time.Now().UTC().Add(-time.Second)
+	st.agentQueryJobs[job.ID] = expired
+	st.mu.Unlock()
+
+	if err := s.recoverAgentQueryJobs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recoverAgentQueryJobs(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	var recovered *store.AgentQueryJob
+	for time.Now().Before(deadline) {
+		recovered, err = st.GetAgentQueryJob(job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered.Status == "succeeded" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if recovered == nil || recovered.Status != "succeeded" || recovered.Attempt != 2 || runtimeCalls.Load() != 1 {
+		t.Fatalf("recovered=%+v runtime_calls=%d", recovered, runtimeCalls.Load())
+	}
+	if updated, err := st.CompleteClaimedAgentQueryJob(job.ID, first.ClaimToken, json.RawMessage(`{"stale":true}`)); err != nil || updated {
+		t.Fatalf("stale completion updated=%v err=%v", updated, err)
+	}
+	encoded, err := json.Marshal(recovered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), first.ClaimToken) || strings.Contains(string(encoded), "sk-recovery-secret") {
+		t.Fatalf("recovered job leaked claim or secret: %s", encoded)
 	}
 }
 

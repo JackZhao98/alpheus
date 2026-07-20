@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 )
 
 const maxAgentQueryResponseBytes int64 = 1 << 20
+const agentQueryLease = 7 * time.Minute
+const agentQueryRecoveryBatch = 32
 
 type agentQueryInput struct {
 	Workflow     string `json:"workflow"`
@@ -60,7 +63,7 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
 		return
 	}
-	go s.executeAgentQuery(job.ID, input)
+	go s.executeAgentQuery(job.ID)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -81,23 +84,57 @@ func (s *server) getAgentQueryJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func (s *server) executeAgentQuery(jobID string, input agentQueryInput) {
-	started, err := s.store.StartAgentQueryJob(jobID)
-	if err != nil || !started {
+func (s *server) executeAgentQuery(jobID string) {
+	job, err := s.store.ClaimAgentQueryJob(jobID, agentQueryLease)
+	if err != nil || job == nil {
 		return
 	}
+	input := agentQueryInput{Workflow: job.Workflow, Symbol: job.Symbol, Query: job.Query}
+	openAIAPIKey, err := s.loadAgentSecret("openai")
+	if err != nil || !validAgentAPIKey(openAIAPIKey) {
+		_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, "credential_unavailable")
+		return
+	}
+	input.OpenAIAPIKey = openAIAPIKey
 	ctx, cancel := context.WithTimeout(context.Background(), 390*time.Second)
 	defer cancel()
 	result, errorCode := s.callAgentRuntime(ctx, input)
 	if errorCode != "" {
-		_, _ = s.store.FailAgentQueryJob(jobID, errorCode)
+		_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, errorCode)
 		return
 	}
-	completed, err := s.store.CompleteAgentQueryJob(jobID, result)
+	completed, err := s.store.CompleteClaimedAgentQueryJob(job.ID, job.ClaimToken, result)
 	if err != nil || !completed {
 		return
 	}
-	s.store.Event("agent_query", map[string]string{"workflow": input.Workflow, "symbol": input.Symbol})
+	s.store.Event("agent_query", map[string]any{"workflow": input.Workflow, "symbol": input.Symbol, "attempt": job.Attempt})
+}
+
+func startAgentQueryRecovery(s *server) error {
+	if err := s.recoverAgentQueryJobs(); err != nil {
+		return err
+	}
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := s.recoverAgentQueryJobs(); err != nil {
+				log.Printf("agent query recovery: %v", err)
+			}
+		}
+	}()
+	return nil
+}
+
+func (s *server) recoverAgentQueryJobs() error {
+	jobs, err := s.store.ListRecoverableAgentQueryJobs(agentQueryRecoveryBatch)
+	if err != nil {
+		return err
+	}
+	for i := range jobs {
+		go s.executeAgentQuery(jobs[i].ID)
+	}
+	return nil
 }
 
 func (s *server) callAgentRuntime(ctx context.Context, input agentQueryInput) (json.RawMessage, string) {

@@ -119,9 +119,10 @@ type storeAPI interface {
 	ReconcileBrokerObservation(observationID string) (*store.BrokerReconciliationResult, error)
 	LoadBrokerCoexistenceView(accountID string, historyLimit int) (*store.BrokerCoexistenceView, error)
 	CreateAgentQueryJob(subject, workflow, symbol, query string) (*store.AgentQueryJob, error)
-	StartAgentQueryJob(id string) (bool, error)
-	CompleteAgentQueryJob(id string, result json.RawMessage) (bool, error)
-	FailAgentQueryJob(id, errorCode string) (bool, error)
+	ClaimAgentQueryJob(id string, leaseDuration time.Duration) (*store.AgentQueryJob, error)
+	CompleteClaimedAgentQueryJob(id, claimToken string, result json.RawMessage) (bool, error)
+	FailClaimedAgentQueryJob(id, claimToken, errorCode string) (bool, error)
+	ListRecoverableAgentQueryJobs(limit int) ([]store.AgentQueryJob, error)
 	GetAgentQueryJob(id string) (*store.AgentQueryJob, error)
 	PutAgentSecret(name string, ciphertext []byte) error
 	GetAgentSecret(name string) (*store.AgentSecretRecord, error)
@@ -319,6 +320,9 @@ func main() {
 	}
 	if err := startRepricer(s); err != nil {
 		log.Fatalf("repricer startup: %v", err)
+	}
+	if err := startAgentQueryRecovery(s); err != nil {
+		log.Fatalf("agent query recovery startup: %v", err)
 	}
 	st.Event("kernel_start", map[string]any{
 		"broker": os.Getenv("BROKER"), "mode": mode.TradingMode,
