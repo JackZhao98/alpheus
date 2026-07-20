@@ -176,6 +176,23 @@ const (
 	FinishContentFilter ModelFinishReason = "content_filter"
 )
 
+type OutputValidationTarget string
+
+const (
+	ValidationTargetModelResultOutput OutputValidationTarget = "model_result_output"
+)
+
+type OutputValidationDecision string
+
+const (
+	ValidationDecisionValid OutputValidationDecision = "valid"
+)
+
+const (
+	OutputValidationSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
+	OutputValidationProfile       = "alpheus_json_schema_2020_12_local_v1"
+)
+
 // BudgetLimit is frozen from one database-owned RuntimePolicy when a Run or
 // Task is created. Zero is a valid denial for any optional resource.
 type BudgetLimit struct {
@@ -430,6 +447,46 @@ type ModelCallResult struct {
 	CommittedAt          time.Time         `json:"committed_at"`
 }
 
+// OutputValidationReceipt is Control-owned proof that one exact model-result
+// Blob was validated against one exact OutputContract schema and one exact
+// ArtifactCandidate digest. Presence means valid; AP1 has no self-asserted or
+// mutable verdict state.
+type OutputValidationReceipt struct {
+	SchemaRevision          uint16                   `json:"schema_revision"`
+	ReceiptID               string                   `json:"receipt_id"`
+	RunID                   string                   `json:"run_id"`
+	TaskID                  string                   `json:"task_id"`
+	SessionID               string                   `json:"session_id"`
+	AttemptID               string                   `json:"attempt_id"`
+	SourceResult            contracts.RecordRef      `json:"source_result"`
+	OutputContract          contracts.RevisionRef    `json:"output_contract"`
+	Schema                  blob.BlobRef             `json:"schema"`
+	Output                  blob.BlobRef             `json:"output"`
+	ArtifactCandidateDigest string                   `json:"artifact_candidate_digest"`
+	ValidationTarget        OutputValidationTarget   `json:"validation_target"`
+	SchemaDialect           string                   `json:"schema_dialect"`
+	ValidationProfile       string                   `json:"validation_profile"`
+	ValidatorImplementation string                   `json:"validator_implementation"`
+	ValidatorBuildDigest    string                   `json:"validator_build_digest"`
+	Decision                OutputValidationDecision `json:"decision"`
+	ValidatedBy             contracts.AuditActor     `json:"validated_by"`
+	ValidatedAt             time.Time                `json:"validated_at"`
+}
+
+func (value OutputValidationReceipt) Ref() (contracts.RecordRef, error) {
+	if value.Validate() != nil {
+		return contracts.RecordRef{}, ErrInvalidRuntime
+	}
+	digest, err := canonical.Digest("agent-platform.contract.output_validation_receipt.v1", value)
+	if err != nil {
+		return contracts.RecordRef{}, err
+	}
+	return contracts.RecordRef{
+		Owner: contracts.OwnerAgentControl, RecordType: "output_validation_receipt",
+		RecordID: value.ReceiptID, SchemaRevision: SchemaRevisionV1, RecordDigest: digest,
+	}, nil
+}
+
 type ArtifactSection struct {
 	Name     string       `json:"name"`
 	Required bool         `json:"required"`
@@ -653,6 +710,22 @@ type CommitAttemptCommand struct {
 	LeaseToken                     string                    `json:"lease_token"`
 	Result                         contracts.RecordRef       `json:"result"`
 	Artifact                       ArtifactCandidate         `json:"artifact"`
+}
+
+// RecordOutputValidationCommand is submitted by the deterministic Control
+// path after its pinned validator has checked the exact schema/output bytes.
+// Durable identity, lineage, time, decision and the ArtifactCandidate digest
+// remain Control-owned; Workers cannot author this command.
+type RecordOutputValidationCommand struct {
+	SchemaRevision          uint16                    `json:"schema_revision"`
+	Envelope                contracts.CommandEnvelope `json:"envelope"`
+	AttemptID               string                    `json:"attempt_id"`
+	Result                  contracts.RecordRef       `json:"result"`
+	Artifact                ArtifactCandidate         `json:"artifact"`
+	SchemaBindingID         string                    `json:"schema_binding_id"`
+	OutputBindingID         string                    `json:"output_binding_id"`
+	ValidatorImplementation string                    `json:"validator_implementation"`
+	ValidatorBuildDigest    string                    `json:"validator_build_digest"`
 }
 
 type FailAttemptCommand struct {

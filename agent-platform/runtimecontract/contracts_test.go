@@ -10,67 +10,71 @@ import (
 )
 
 type fixture struct {
-	outputContract OutputContractRevision
-	policy         RuntimePolicy
-	registration   TriggerRegistration
-	occurrence     TriggerOccurrence
-	run            Run
-	task           Task
-	dependency     Dependency
-	session        Session
-	attempt        Attempt
-	turn           Turn
-	manifest       ModelCallManifest
-	result         ModelCallResult
-	artifact       Artifact
-	publication    ArtifactPublicationIntent
-	checkpoint     Checkpoint
-	ledger         BudgetLedger
-	cancellation   CancellationRequest
-	recovery       RecoveryRecord
-	event          RuntimeEvent
-	claim          ClaimTaskCommand
-	heartbeat      HeartbeatAttemptCommand
-	start          StartAttemptCommand
-	dispatch       DispatchModelCallCommand
-	resolve        ResolveModelCallCommand
-	unknown        MarkModelCallUnknownCommand
-	commit         CommitAttemptCommand
-	fail           FailAttemptCommand
-	child          RequestChildTaskCommand
+	outputContract   OutputContractRevision
+	policy           RuntimePolicy
+	registration     TriggerRegistration
+	occurrence       TriggerOccurrence
+	run              Run
+	task             Task
+	dependency       Dependency
+	session          Session
+	attempt          Attempt
+	turn             Turn
+	manifest         ModelCallManifest
+	result           ModelCallResult
+	validation       OutputValidationReceipt
+	artifact         Artifact
+	publication      ArtifactPublicationIntent
+	checkpoint       Checkpoint
+	ledger           BudgetLedger
+	cancellation     CancellationRequest
+	recovery         RecoveryRecord
+	event            RuntimeEvent
+	claim            ClaimTaskCommand
+	heartbeat        HeartbeatAttemptCommand
+	start            StartAttemptCommand
+	dispatch         DispatchModelCallCommand
+	resolve          ResolveModelCallCommand
+	unknown          MarkModelCallUnknownCommand
+	commit           CommitAttemptCommand
+	recordValidation RecordOutputValidationCommand
+	fail             FailAttemptCommand
+	child            RequestChildTaskCommand
 }
 
 func TestContractsValidate(t *testing.T) {
 	value := validFixture()
 	tests := map[string]interface{ Validate() error }{
-		"output_contract": value.outputContract,
-		"policy":          value.policy,
-		"registration":    value.registration,
-		"occurrence":      value.occurrence,
-		"run":             value.run,
-		"task":            value.task,
-		"dependency":      value.dependency,
-		"session":         value.session,
-		"attempt":         value.attempt,
-		"turn":            value.turn,
-		"manifest":        value.manifest,
-		"result":          value.result,
-		"artifact":        value.artifact,
-		"publication":     value.publication,
-		"checkpoint":      value.checkpoint,
-		"ledger":          value.ledger,
-		"cancellation":    value.cancellation,
-		"recovery":        value.recovery,
-		"event":           value.event,
-		"claim":           value.claim,
-		"heartbeat":       value.heartbeat,
-		"start":           value.start,
-		"dispatch":        value.dispatch,
-		"resolve":         value.resolve,
-		"unknown":         value.unknown,
-		"commit":          value.commit,
-		"fail":            value.fail,
-		"child":           value.child,
+		"output_contract":   value.outputContract,
+		"policy":            value.policy,
+		"registration":      value.registration,
+		"occurrence":        value.occurrence,
+		"run":               value.run,
+		"task":              value.task,
+		"dependency":        value.dependency,
+		"session":           value.session,
+		"attempt":           value.attempt,
+		"turn":              value.turn,
+		"manifest":          value.manifest,
+		"result":            value.result,
+		"validation":        value.validation,
+		"artifact":          value.artifact,
+		"publication":       value.publication,
+		"checkpoint":        value.checkpoint,
+		"ledger":            value.ledger,
+		"cancellation":      value.cancellation,
+		"recovery":          value.recovery,
+		"event":             value.event,
+		"claim":             value.claim,
+		"heartbeat":         value.heartbeat,
+		"start":             value.start,
+		"dispatch":          value.dispatch,
+		"resolve":           value.resolve,
+		"unknown":           value.unknown,
+		"commit":            value.commit,
+		"record_validation": value.recordValidation,
+		"fail":              value.fail,
+		"child":             value.child,
 	}
 	for name, contract := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -90,6 +94,18 @@ func TestOutputContractRevisionRef(t *testing.T) {
 	if ref.Owner != contracts.OwnerAgentControl || ref.RecordType != "output_contract_revision" ||
 		ref.RecordID != value.RevisionID || ref.Generation != value.Generation || len(ref.RecordDigest) != 64 {
 		t.Fatalf("unexpected output contract ref: %+v", ref)
+	}
+}
+
+func TestOutputValidationReceiptRef(t *testing.T) {
+	value := validFixture().validation
+	ref, err := value.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Owner != contracts.OwnerAgentControl || ref.RecordType != "output_validation_receipt" ||
+		ref.RecordID != value.ReceiptID || len(ref.RecordDigest) != 64 {
+		t.Fatalf("unexpected output validation receipt ref: %+v", ref)
 	}
 }
 
@@ -168,6 +184,37 @@ func TestContractsFailClosed(t *testing.T) {
 		value.Result.Owner = contracts.OwnerWorker
 		if value.Validate() == nil {
 			t.Fatal("non-canonical result passed")
+		}
+	})
+
+	t.Run("validation receipt is control-authored valid proof", func(t *testing.T) {
+		value := validFixture().validation
+		value.Decision = "invalid"
+		if value.Validate() == nil {
+			t.Fatal("non-valid validation decision passed")
+		}
+		value = validFixture().validation
+		value.ValidatedBy.Audience = contracts.AudienceWorker
+		if value.Validate() == nil {
+			t.Fatal("worker-authored validation receipt passed")
+		}
+	})
+
+	t.Run("record validation command requires control envelope", func(t *testing.T) {
+		value := validFixture().recordValidation
+		value.Envelope.Actor.Audience = contracts.AudienceWorker
+		if value.Validate() == nil {
+			t.Fatal("worker-authored validation command passed")
+		}
+		value = validFixture().recordValidation
+		value.Envelope.Audience = contracts.AudienceWorker
+		if value.Validate() == nil {
+			t.Fatal("wrong validation command destination passed")
+		}
+		value = validFixture().recordValidation
+		value.Envelope.CommandType = "commit_attempt"
+		if value.Validate() == nil {
+			t.Fatal("wrong validation command type passed")
 		}
 	})
 
@@ -475,6 +522,11 @@ func validFixture() fixture {
 			CausationID: "cause-1", CorrelationID: "correlation-1", Deadline: deadline,
 		}
 	}
+	controlEnvelope := func(commandType string, marker byte) contracts.CommandEnvelope {
+		value := envelope(commandType, marker)
+		value.Actor = control
+		return value
+	}
 	artifactRef := record(contracts.OwnerAgentControl, "artifact", "artifact-1", '9')
 	manifestCandidate := ModelCallManifestCandidate{
 		CallID: "call-1", IdempotencyKey: "call-key-1", Provider: "anthropic", Model: "claude-sonnet",
@@ -552,7 +604,16 @@ func validFixture() fixture {
 			ReservedExternalCostMicroUSD: 5000, TimeoutMS: 60000, TemperatureMicros: 200000,
 			CreatedAt: t2,
 		},
-		result:   result,
+		result: result,
+		validation: OutputValidationReceipt{
+			SchemaRevision: 1, ReceiptID: "validation-receipt-1", RunID: "run-1", TaskID: "task-1",
+			SessionID: "session-1", AttemptID: "attempt-1", SourceResult: resultRef,
+			OutputContract: outputContract, Schema: outputContractRevision.Schema, Output: output,
+			ArtifactCandidateDigest: digest('8'), ValidationTarget: ValidationTargetModelResultOutput,
+			SchemaDialect: OutputValidationSchemaDialect, ValidationProfile: OutputValidationProfile,
+			ValidatorImplementation: "alpheus_output_validator", ValidatorBuildDigest: digest('9'),
+			Decision: ValidationDecisionValid, ValidatedBy: control, ValidatedAt: t3,
+		},
 		artifact: artifact,
 		publication: ArtifactPublicationIntent{
 			SchemaRevision: 1, IntentID: "publication-1", Artifact: artifactRef,
@@ -618,6 +679,12 @@ func validFixture() fixture {
 			SchemaRevision: 1, Envelope: envelope("commit_attempt", '2'), AttemptID: "attempt-1",
 			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
 			Result: resultRef, Artifact: artifactCandidate,
+		},
+		recordValidation: RecordOutputValidationCommand{
+			SchemaRevision: 1, Envelope: controlEnvelope("record_output_validation", '5'),
+			AttemptID: "attempt-1", Result: resultRef, Artifact: artifactCandidate,
+			SchemaBindingID: "binding-output-contract-schema-1", OutputBindingID: "binding-model-output-1",
+			ValidatorImplementation: "alpheus_output_validator", ValidatorBuildDigest: digest('9'),
 		},
 		fail: FailAttemptCommand{
 			SchemaRevision: 1, Envelope: envelope("fail_attempt", '3'), AttemptID: "attempt-1",

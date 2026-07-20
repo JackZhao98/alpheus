@@ -15,6 +15,7 @@
     {"$ref": "#/$defs/Turn"},
     {"$ref": "#/$defs/ModelCallManifest"},
     {"$ref": "#/$defs/ModelCallResult"},
+    {"$ref": "#/$defs/OutputValidationReceipt"},
     {"$ref": "#/$defs/Artifact"},
     {"$ref": "#/$defs/ArtifactPublicationIntent"},
     {"$ref": "#/$defs/Checkpoint"},
@@ -29,6 +30,7 @@
     {"$ref": "#/$defs/ResolveModelCallCommand"},
     {"$ref": "#/$defs/MarkModelCallUnknownCommand"},
     {"$ref": "#/$defs/CommitAttemptCommand"},
+    {"$ref": "#/$defs/RecordOutputValidationCommand"},
     {"$ref": "#/$defs/FailAttemptCommand"},
     {"$ref": "#/$defs/RequestChildTaskCommand"}
   ],
@@ -66,6 +68,25 @@
     },
     "RunOrigin": {"$ref": "https://alpheus.local/contracts/common/v1/schema/common.schema.json#/$defs/RunOrigin"},
     "CommandEnvelope": {"$ref": "https://alpheus.local/contracts/common/v1/schema/common.schema.json#/$defs/CommandEnvelope"},
+    "RecordOutputValidationEnvelope": {
+      "allOf": [
+        {"$ref": "#/$defs/CommandEnvelope"},
+        {
+          "type": "object",
+          "properties": {
+            "actor": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "workload"},
+                "audience": {"const": "control_api"}
+              }
+            },
+            "audience": {"const": "control_api"},
+            "command_type": {"const": "record_output_validation"}
+          }
+        }
+      ]
+    },
     "Failure": {"$ref": "https://alpheus.local/contracts/common/v1/schema/common.schema.json#/$defs/Failure"},
     "BlobRef": {"$ref": "https://alpheus.local/contracts/blob/v1/blob.schema.json#/$defs/BlobRef"},
     "BudgetLimit": {
@@ -212,6 +233,75 @@
         },
         "reason_code": {"$ref": "#/$defs/Name"},
         "created_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "OutputValidationReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "receipt_id", "run_id", "task_id", "session_id", "attempt_id", "source_result", "output_contract", "schema", "output", "artifact_candidate_digest", "validation_target", "schema_dialect", "validation_profile", "validator_implementation", "validator_build_digest", "decision", "validated_by", "validated_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "receipt_id": {"$ref": "#/$defs/Identifier"},
+        "run_id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "session_id": {"$ref": "#/$defs/Identifier"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "source_result": {
+          "allOf": [
+            {"$ref": "#/$defs/RecordRef"},
+            {"type": "object", "properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "model_call_result"}}}
+          ]
+        },
+        "output_contract": {"$ref": "#/$defs/OutputContractRevisionRef"},
+        "schema": {
+          "allOf": [
+            {"$ref": "#/$defs/BlobRef"},
+            {
+              "type": "object",
+              "properties": {
+                "media_type": {"const": "application/json"},
+                "origin": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {"const": "agent_control"},
+                    "record_type": {"const": "output_contract_schema"}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "output": {
+          "allOf": [
+            {"$ref": "#/$defs/BlobRef"},
+            {
+              "type": "object",
+              "properties": {
+                "media_type": {"const": "application/json"},
+                "origin": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {"const": "agent_control"},
+                    "record_type": {"const": "model_call_manifest"}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "artifact_candidate_digest": {"$ref": "#/$defs/Digest"},
+        "validation_target": {"const": "model_result_output"},
+        "schema_dialect": {"const": "https://json-schema.org/draft/2020-12/schema"},
+        "validation_profile": {"const": "alpheus_json_schema_2020_12_local_v1"},
+        "validator_implementation": {"$ref": "#/$defs/Name"},
+        "validator_build_digest": {"$ref": "#/$defs/Digest"},
+        "decision": {"const": "valid"},
+        "validated_by": {
+          "allOf": [
+            {"$ref": "#/$defs/AuditActor"},
+            {"type": "object", "properties": {"kind": {"const": "workload"}, "audience": {"const": "control_api"}}}
+          ]
+        },
+        "validated_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
     "RuntimePolicy": {
@@ -652,6 +742,26 @@
         "lease_token": {"$ref": "#/$defs/Identifier"},
         "result": {"$ref": "#/$defs/RecordRef"},
         "artifact": {"$ref": "#/$defs/ArtifactCandidate"}
+      }
+    },
+    "RecordOutputValidationCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "result", "artifact", "schema_binding_id", "output_binding_id", "validator_implementation", "validator_build_digest"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/RecordOutputValidationEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "result": {
+          "allOf": [
+            {"$ref": "#/$defs/RecordRef"},
+            {"type": "object", "properties": {"owner": {"const": "agent_control"}, "record_type": {"const": "model_call_result"}}}
+          ]
+        },
+        "artifact": {"$ref": "#/$defs/ArtifactCandidate"},
+        "schema_binding_id": {"$ref": "#/$defs/Identifier"},
+        "output_binding_id": {"$ref": "#/$defs/Identifier"},
+        "validator_implementation": {"$ref": "#/$defs/Name"},
+        "validator_build_digest": {"$ref": "#/$defs/Digest"}
       }
     },
     "FailAttemptCommand": {

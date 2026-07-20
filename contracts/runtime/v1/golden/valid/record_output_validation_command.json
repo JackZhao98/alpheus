@@ -1,0 +1,53 @@
+{
+  "schema_revision": 1,
+  "envelope": {
+    "schema_revision": 1,
+    "command_id": "command-record-output-validation",
+    "actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+    "audience": "control_api",
+    "command_type": "record_output_validation",
+    "idempotency_key": "record-output-validation-1",
+    "request_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+    "causation_id": "cause-validation-1",
+    "correlation_id": "correlation-1",
+    "deadline": "2026-07-20T13:00:00Z"
+  },
+  "attempt_id": "attempt-1",
+  "result": {
+    "owner": "agent_control",
+    "record_type": "model_call_result",
+    "record_id": "result-1",
+    "schema_revision": 1,
+    "record_digest": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "artifact": {
+    "artifact_type": "decision_draft",
+    "output_contract_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+    "effect_class": "none",
+    "sections": [
+      {
+        "name": "result",
+        "required": true,
+        "content": {
+          "schema_revision": 1,
+          "blob_id": "20000000-0000-4000-8000-000000000001",
+          "content_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "media_type": "application/json",
+          "size_bytes": 128,
+          "origin": {
+            "owner": "agent_control",
+            "record_type": "model_call_manifest",
+            "record_id": "call-1",
+            "schema_revision": 1,
+            "record_digest": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          "committed_at": "2026-07-20T12:02:00Z"
+        }
+      }
+    ]
+  },
+  "schema_binding_id": "binding-output-contract-schema-1",
+  "output_binding_id": "binding-model-output-1",
+  "validator_implementation": "alpheus_output_validator",
+  "validator_build_digest": "9999999999999999999999999999999999999999999999999999999999999999"
+}

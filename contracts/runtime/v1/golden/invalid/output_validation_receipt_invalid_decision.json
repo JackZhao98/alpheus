@@ -1,0 +1,21 @@
+{
+  "schema_revision": 1,
+  "receipt_id": "validation-receipt-1",
+  "run_id": "run-1",
+  "task_id": "task-1",
+  "session_id": "session-1",
+  "attempt_id": "attempt-1",
+  "source_result": {"owner": "agent_control", "record_type": "model_call_result", "record_id": "result-1", "schema_revision": 1, "record_digest": "7777777777777777777777777777777777777777777777777777777777777777"},
+  "output_contract": {"owner": "agent_control", "record_type": "output_contract_revision", "record_id": "output-contract-1", "schema_revision": 1, "record_digest": "3333333333333333333333333333333333333333333333333333333333333333", "generation": 1},
+  "schema": {"schema_revision": 1, "blob_id": "20000000-0000-4000-8000-333333333333", "content_digest": "3333333333333333333333333333333333333333333333333333333333333333", "media_type": "application/json", "size_bytes": 256, "origin": {"owner": "agent_control", "record_type": "output_contract_schema", "record_id": "output-contract-schema-1", "schema_revision": 1, "record_digest": "4444444444444444444444444444444444444444444444444444444444444444"}, "committed_at": "2026-07-20T12:00:00Z"},
+  "output": {"schema_revision": 1, "blob_id": "20000000-0000-4000-8000-000000000001", "content_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "media_type": "application/json", "size_bytes": 128, "origin": {"owner": "agent_control", "record_type": "model_call_manifest", "record_id": "call-1", "schema_revision": 1, "record_digest": "2222222222222222222222222222222222222222222222222222222222222222"}, "committed_at": "2026-07-20T12:02:00Z"},
+  "artifact_candidate_digest": "8888888888888888888888888888888888888888888888888888888888888888",
+  "validation_target": "model_result_output",
+  "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "validation_profile": "alpheus_json_schema_2020_12_local_v1",
+  "validator_implementation": "alpheus_output_validator",
+  "validator_build_digest": "9999999999999999999999999999999999999999999999999999999999999999",
+  "decision": "rejected",
+  "validated_by": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+  "validated_at": "2026-07-20T12:03:00Z"
+}

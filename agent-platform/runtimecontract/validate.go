@@ -67,6 +67,32 @@ func (value OutputContractRevision) Validate() error {
 	return nil
 }
 
+func (value OutputValidationReceipt) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ReceiptID) ||
+		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
+		!validID(value.AttemptID) ||
+		!validRecord(value.SourceResult, contracts.OwnerAgentControl, "model_call_result") ||
+		!validRevision(value.OutputContract, contracts.OwnerAgentControl, "output_contract_revision") ||
+		!validRuntimeBlob(value.Schema, "output_contract_schema") ||
+		value.Schema.MediaType != "application/json" ||
+		!validRuntimeBlob(value.Output, "model_call_manifest") ||
+		value.Output.MediaType != "application/json" ||
+		!validDigest(value.ArtifactCandidateDigest) ||
+		value.ValidationTarget != ValidationTargetModelResultOutput ||
+		value.SchemaDialect != OutputValidationSchemaDialect ||
+		value.ValidationProfile != OutputValidationProfile ||
+		!namePattern.MatchString(value.ValidatorImplementation) ||
+		!validDigest(value.ValidatorBuildDigest) || value.Decision != ValidationDecisionValid ||
+		value.ValidatedBy.Validate() != nil ||
+		value.ValidatedBy.Kind != contracts.PrincipalWorkload ||
+		value.ValidatedBy.Audience != contracts.AudienceControlAPI ||
+		!validUTC(value.ValidatedAt) || value.Schema.CommittedAt.After(value.ValidatedAt) ||
+		value.Output.CommittedAt.After(value.ValidatedAt) {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
 func (value RuntimePolicy) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.PolicyID) ||
 		value.Generation <= 0 || value.DefaultRunLimit.Validate() != nil ||
@@ -640,6 +666,18 @@ func (value CommitAttemptCommand) Validate() error {
 	return nil
 }
 
+func (value RecordOutputValidationCommand) Validate() error {
+	if !validControlEnvelope(value.SchemaRevision, value.Envelope, "record_output_validation") ||
+		!validID(value.AttemptID) ||
+		!validRecord(value.Result, contracts.OwnerAgentControl, "model_call_result") ||
+		value.Artifact.Validate() != nil || !validID(value.SchemaBindingID) ||
+		!validID(value.OutputBindingID) || !namePattern.MatchString(value.ValidatorImplementation) ||
+		!validDigest(value.ValidatorBuildDigest) {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
 func (value FailAttemptCommand) Validate() error {
 	if validateAttemptFence(value.SchemaRevision, value.Envelope, "fail_attempt", value.AttemptID,
 		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
@@ -686,6 +724,13 @@ func validWorkerEnvelope(revision uint16, envelope contracts.CommandEnvelope, co
 	return revision == SchemaRevisionV1 && envelope.Validate() == nil &&
 		envelope.CommandType == commandType && envelope.Audience == contracts.AudienceControlAPI &&
 		envelope.Actor.Kind == contracts.PrincipalWorkload && envelope.Actor.Audience == contracts.AudienceWorker
+}
+
+func validControlEnvelope(revision uint16, envelope contracts.CommandEnvelope, commandType string) bool {
+	return revision == SchemaRevisionV1 && envelope.Validate() == nil &&
+		envelope.CommandType == commandType && envelope.Audience == contracts.AudienceControlAPI &&
+		envelope.Actor.Kind == contracts.PrincipalWorkload &&
+		envelope.Actor.Audience == contracts.AudienceControlAPI
 }
 
 func validRunnableLimit(value BudgetLimit) bool {

@@ -17,6 +17,7 @@
     "model_call_manifest",
     "model_call_result",
     "output_contract_revision",
+    "output_validation_receipt",
     "recovery_record",
     "run",
     "runtime_policy",
@@ -33,6 +34,7 @@
     "fail_attempt_command",
     "heartbeat_attempt_command",
     "mark_model_call_unknown_command",
+    "record_output_validation_command",
     "request_child_task_command",
     "resolve_model_call_command",
     "start_attempt_command"
@@ -53,7 +55,9 @@
       "golden/valid/commit_attempt_nonmoney.json",
       "golden/valid/fail_attempt_retryable.json",
       "golden/valid/output_contract_revision.json",
+      "golden/valid/output_validation_receipt.json",
       "golden/valid/publication_disabled.json",
+      "golden/valid/record_output_validation_command.json",
       "golden/valid/recovery_reuse.json",
       "golden/valid/run_queued.json",
       "golden/valid/runtime_policy.json"
@@ -65,6 +69,9 @@
       "golden/invalid/fail_attempt_nonretryable_infrastructure.json",
       "golden/invalid/fail_attempt_retryable_none.json",
       "golden/invalid/publication_behavior_event.json",
+      "golden/invalid/output_validation_receipt_invalid_decision.json",
+      "golden/invalid/record_output_validation_worker_actor.json",
+      "golden/invalid/record_output_validation_wrong_audience.json",
       "golden/invalid/recovery_retry_same_attempt.json",
       "golden/invalid/run_terminal_without_time.json"
     ],
@@ -74,7 +81,9 @@
       "golden/digest/commit_attempt_nonmoney.sha256",
       "golden/digest/fail_attempt_retryable.sha256",
       "golden/digest/output_contract_revision.sha256",
+      "golden/digest/output_validation_receipt.sha256",
       "golden/digest/publication_disabled.sha256",
+      "golden/digest/record_output_validation_command.sha256",
       "golden/digest/recovery_reuse.sha256",
       "golden/digest/run_queued.sha256",
       "golden/digest/runtime_policy.sha256"

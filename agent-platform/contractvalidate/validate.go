@@ -86,10 +86,14 @@ var runtimeTypes = map[string]func() validatable{
 	"mark_model_call_unknown_command": func() validatable {
 		return &runtimecontract.MarkModelCallUnknownCommand{}
 	},
-	"model_call_manifest":        func() validatable { return &runtimecontract.ModelCallManifest{} },
-	"model_call_result":          func() validatable { return &runtimecontract.ModelCallResult{} },
-	"output_contract_revision":   func() validatable { return &runtimecontract.OutputContractRevision{} },
-	"recovery_record":            func() validatable { return &runtimecontract.RecoveryRecord{} },
+	"model_call_manifest":       func() validatable { return &runtimecontract.ModelCallManifest{} },
+	"model_call_result":         func() validatable { return &runtimecontract.ModelCallResult{} },
+	"output_contract_revision":  func() validatable { return &runtimecontract.OutputContractRevision{} },
+	"output_validation_receipt": func() validatable { return &runtimecontract.OutputValidationReceipt{} },
+	"recovery_record":           func() validatable { return &runtimecontract.RecoveryRecord{} },
+	"record_output_validation_command": func() validatable {
+		return &runtimecontract.RecordOutputValidationCommand{}
+	},
 	"request_child_task_command": func() validatable { return &runtimecontract.RequestChildTaskCommand{} },
 	"resolve_model_call_command": func() validatable { return &runtimecontract.ResolveModelCallCommand{} },
 	"run":                        func() validatable { return &runtimecontract.Run{} },
