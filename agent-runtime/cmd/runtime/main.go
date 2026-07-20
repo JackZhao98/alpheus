@@ -201,7 +201,7 @@ func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleB
 	return result, nil
 }
 
-const queryCapabilityManifestJSON = `{"capabilities":[{"id":"market_quote","kind":"data"},{"id":"market_bars","kind":"data"},{"id":"news_headlines","kind":"data"},{"id":"technical_indicators","kind":"data"},{"id":"equity_fundamentals","kind":"data"},{"id":"company_financials","kind":"data"},{"id":"earnings_results","kind":"data"},{"id":"portfolio_state","kind":"context"},{"id":"scout","kind":"role"},{"id":"decision_desk","kind":"role"}],"routes":{"SCOUT":["market_quote","market_bars","scout"],"TEAM":["market_quote","market_bars","portfolio_state","scout","decision_desk"]}}`
+const queryCapabilityManifestJSON = `{"capabilities":[{"id":"market_quote","kind":"data"},{"id":"market_bars","kind":"data"},{"id":"news_headlines","kind":"data"},{"id":"web_search","kind":"data"},{"id":"web_fetch","kind":"data"},{"id":"technical_indicators","kind":"data"},{"id":"equity_fundamentals","kind":"data"},{"id":"company_financials","kind":"data"},{"id":"earnings_results","kind":"data"},{"id":"portfolio_state","kind":"context"},{"id":"scout","kind":"role"},{"id":"decision_desk","kind":"role"}],"routes":{"SCOUT":["market_quote","market_bars","scout"],"TEAM":["market_quote","market_bars","portfolio_state","scout","decision_desk"]}}`
 
 var queryRouteCapabilities = map[string][]string{
 	"SCOUT": {"market_quote", "market_bars", "scout"},
@@ -210,7 +210,7 @@ var queryRouteCapabilities = map[string][]string{
 
 var queryKnownCapabilities = map[string]bool{
 	"market_quote": true, "market_bars": true, "technical_indicators": true, "equity_fundamentals": true,
-	"company_financials": true, "earnings_results": true, "news_headlines": true, "portfolio_state": true,
+	"company_financials": true, "earnings_results": true, "news_headlines": true, "web_search": true, "web_fetch": true, "portfolio_state": true,
 	"scout": true, "decision_desk": true,
 }
 

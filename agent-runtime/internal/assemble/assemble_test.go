@@ -59,6 +59,11 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 			body = `{"bars":[]}`
 		case "/research/news/SOFI":
 			body = `{"available":true,"source":"robinhood-private-api","symbol":"SOFI","items":[]}`
+		case "/research/search":
+			if !strings.Contains(r.URL.Query().Get("q"), "SOFI stock") {
+				t.Fatalf("search query=%s", r.URL.RawQuery)
+			}
+			body = `{"available":true,"source":"brave-web","query":"SOFI stock 现在值得研究吗？","items":[]}`
 		case "/mcp/read-query":
 			var input struct {
 				Tool string         `json:"tool"`
@@ -87,7 +92,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	client.HTTP.Transport = transport
 	context, err := client.AssembleQuery(roles.Role{InjectedContext: []string{
 		"state", "equity_fundamentals", "company_financials", "earnings_results",
-		"technical_rsi", "technical_macd", "technical_atr", "news_headlines",
+		"technical_rsi", "technical_macd", "technical_atr", "news_headlines", "web_search", "web_page",
 	}}, "sofi", "现在值得研究吗？")
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +100,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	for _, key := range []string{
 		"state", "market_quote", "market_bars", "symbol", "user_query",
 		"equity_fundamentals", "company_financials", "earnings_results",
-		"technical_rsi", "technical_macd", "technical_atr", "news_headlines",
+		"technical_rsi", "technical_macd", "technical_atr", "news_headlines", "web_search", "web_page",
 	} {
 		if context[key] == nil {
 			t.Fatalf("missing context key %q: %v", key, context)
@@ -109,6 +114,20 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	}
 	if !strings.Contains(string(context["earnings_results"]), `"available":false`) {
 		t.Fatalf("earnings fallback=%s", context["earnings_results"])
+	}
+	if !strings.Contains(string(context["web_page"]), "no_url_requested") {
+		t.Fatalf("web_page=%s", context["web_page"])
+	}
+}
+
+func TestFirstQueryURL(t *testing.T) {
+	if got := firstQueryURL("请阅读 https://example.com/article?q=1，然后分析"); got != "https://example.com/article?q=1" {
+		t.Fatalf("got=%q", got)
+	}
+	for _, query := range []string{"没有链接", "file:///etc/passwd", "https://user@example.com/private"} {
+		if got := firstQueryURL(query); got != "" {
+			t.Fatalf("query=%q got=%q", query, got)
+		}
 	}
 }
 

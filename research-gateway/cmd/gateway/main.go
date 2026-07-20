@@ -21,6 +21,7 @@ import (
 
 const (
 	robinhoodAPIBase   = "https://api.robinhood.com"
+	braveAPIBase       = "https://api.search.brave.com"
 	robinhoodClientID  = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"
 	robinhoodUserAgent = "Robinhood/8232 (com.robinhood.release.Robinhood; build:8232; iOS 17.5.1)"
 	maxRequestBytes    = 8 << 10
@@ -52,9 +53,12 @@ type newsDocument struct {
 }
 
 type gateway struct {
-	token string
-	http  *http.Client
-	base  string
+	token       string
+	http        *http.Client
+	base        string
+	braveBase   string
+	lookupIP    lookupIPFunc
+	dialContext dialContextFunc
 }
 
 func main() {
@@ -62,12 +66,14 @@ func main() {
 	if token == "" {
 		log.Fatal("KERNEL_TOKEN is required")
 	}
-	g := &gateway{token: token, http: &http.Client{Timeout: 15 * time.Second}, base: robinhoodAPIBase}
+	g := newGateway(token)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /v1/robinhood/news", g.news)
+	mux.HandleFunc("POST /v1/web/search", g.webSearch)
+	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
 	log.Printf("research-gateway listening on :8300")
 	log.Fatal(http.ListenAndServe(":8300", mux))
 }

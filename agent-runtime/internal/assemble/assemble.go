@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"alpheus/agentruntime/internal/roles"
 )
@@ -52,31 +53,40 @@ func (c *Client) AssembleQuery(role roles.Role, symbol, query string) (map[strin
 	} else {
 		ctx["market_quote"] = quote
 	}
-	c.addQueryEnrichment(ctx, role, symbol)
+	c.addQueryEnrichment(ctx, role, symbol, query)
 	return ctx, nil
 }
 
 type queryEnrichment struct {
-	key  string
-	tool string
-	path string
-	args map[string]any
+	key    string
+	tool   string
+	path   string
+	source string
+	args   map[string]any
 }
 
-func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.Role, symbol string) {
+func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.Role, symbol, query string) {
 	wanted := make(map[string]bool, len(role.InjectedContext))
 	for _, key := range role.InjectedContext {
 		wanted[key] = true
 	}
 	indicatorStart := time.Now().UTC().AddDate(0, 0, -180).Format(time.RFC3339)
+	searchQuery := boundedContextString(strings.TrimSpace(symbol+" stock "+query), 500)
+	requestedURL := firstQueryURL(query)
 	all := []queryEnrichment{
-		{key: "news_headlines", path: "/research/news/" + url.PathEscape(symbol)},
+		{key: "news_headlines", path: "/research/news/" + url.PathEscape(symbol), source: "robinhood-private-api"},
+		{key: "web_search", path: "/research/search?q=" + url.QueryEscape(searchQuery) + "&count=5", source: "brave-web"},
 		{key: "equity_fundamentals", tool: "get_equity_fundamentals", args: map[string]any{"symbols": []string{symbol}}},
 		{key: "company_financials", tool: "get_financials", args: map[string]any{"symbols": []string{symbol}, "period": "quarterly", "limit": 4}},
 		{key: "earnings_results", tool: "get_earnings_results", args: map[string]any{"symbol": symbol}},
 		{key: "technical_rsi", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "rsi", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
 		{key: "technical_macd", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "macd", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
 		{key: "technical_atr", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "atr", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
+	}
+	if requestedURL != "" {
+		all = append(all, queryEnrichment{key: "web_page", path: "/research/fetch?url=" + url.QueryEscape(requestedURL) + "&max_chars=12000", source: "web-page-untrusted"})
+	} else if wanted["web_page"] {
+		ctx["web_page"] = json.RawMessage(`{"available":false,"reason":"no_url_requested","source":"web-page-untrusted"}`)
 	}
 	tasks := make([]queryEnrichment, 0, len(all))
 	for _, task := range all {
@@ -85,10 +95,11 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 		}
 	}
 	type result struct {
-		key  string
-		tool string
-		raw  json.RawMessage
-		err  error
+		key    string
+		tool   string
+		source string
+		raw    json.RawMessage
+		err    error
 	}
 	results := make(chan result, len(tasks))
 	var wait sync.WaitGroup
@@ -103,7 +114,7 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 			} else {
 				raw, err = c.mcpReadQuery(task.tool, task.args)
 			}
-			results <- result{key: task.key, tool: task.tool, raw: raw, err: err}
+			results <- result{key: task.key, tool: task.tool, source: task.source, raw: raw, err: err}
 		}(task)
 	}
 	wait.Wait()
@@ -111,8 +122,8 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 	for result := range results {
 		if result.err != nil {
 			source := "robinhood-mcp"
-			if result.tool == "" {
-				source = "robinhood-private-api"
+			if result.source != "" {
+				source = result.source
 			}
 			fallback, _ := json.Marshal(map[string]any{
 				"available": false, "source": source, "tool": result.tool,
@@ -122,6 +133,31 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 		}
 		ctx[result.key] = result.raw
 	}
+}
+
+func boundedContextString(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(value[:cut])
+}
+
+func firstQueryURL(query string) string {
+	for _, field := range strings.Fields(query) {
+		candidate := strings.Trim(field, `"'()[]{}<>,.;`)
+		if cut := strings.IndexAny(candidate, "，。！？；、"); cut >= 0 {
+			candidate = candidate[:cut]
+		}
+		parsed, err := url.Parse(candidate)
+		if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func (c *Client) mcpReadQuery(tool string, args map[string]any) (json.RawMessage, error) {

@@ -47,6 +47,8 @@ async function refreshCredentialStatus() {
   const payload = await request("/agent/secrets");
   const configured = Boolean(payload?.configured?.openai);
   byId("openai-status").textContent = configured ? "已加密保存在数据库中。" : "尚未配置。";
+  const braveConfigured = Boolean(payload?.configured?.brave);
+  byId("brave-status").textContent = braveConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   const robinhoodConfigured = Boolean(payload?.configured?.robinhood_research);
   byId("robinhood-research-status").textContent = robinhoodConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   return configured;
@@ -71,6 +73,28 @@ byId("save-openai").addEventListener("click", async () => {
     byId("query-error").textContent = error.message;
   } finally {
     byId("save-openai").disabled = false;
+  }
+});
+
+byId("save-brave").addEventListener("click", async () => {
+  const value = byId("brave-token").value.trim();
+  byId("query-error").textContent = "";
+  if (!value) {
+    byId("query-error").textContent = "请输入 Brave Search API Key。";
+    return;
+  }
+  byId("save-brave").disabled = true;
+  try {
+    await request("/agent/secrets/brave", {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({value})
+    });
+    byId("brave-token").value = "";
+    await refreshCredentialStatus();
+  } catch (error) {
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("save-brave").disabled = false;
   }
 });
 
@@ -100,6 +124,7 @@ byId("save-robinhood-research").addEventListener("click", async () => {
 byId("logout").addEventListener("click", async () => {
   await request("/agent/auth/logout", {method:"POST"}).catch(() => null);
   byId("openai-token").value = "";
+  byId("brave-token").value = "";
   byId("robinhood-research-token").value = "";
   showAuthenticated(false);
 });
