@@ -153,11 +153,15 @@ http://127.0.0.1:8100/agent-lab
 设置 `AGENT_WEB_PASSWORD`（至少 12 字节）和独立的
 `AGENT_WEB_SESSION_KEY`（至少 32 字节）后，用户只需输入密码；服务端签发
 12 小时 HttpOnly/SameSite 会话，不必把机器 token 复制进浏览器。输入股票代码
-和问题后，Kernel 拉取最新标准化报价与 30 日 bars，Runtime 返回严格类型化的
-Scout 结果。Agent Lab 另有 `OpenAI API Token` 密码框：token 只保留在当前页面
+和问题后，默认 Team workflow 先让 Scout 基于最新标准化报价与 30 日 bars
+产生类型化证据简报，再让只读 Decision Desk 返回 `WAIT/PASS`、理由和观察条件；
+也可切回 Scout-only。只读 Desk 若尝试 `PROPOSE`、非空 proposals 或 blackboard
+写入，代码会直接拒绝整个结果。Agent Lab 另有 `OpenAI API Token` 密码框：token 只保留在当前页面
 内存并随手动查询有界转发，不写数据库、日志、cookie 或浏览器存储；刷新即清除。
 该手动路径固定使用 `gpt-5.6-sol`，不会把后台定时 Agent 从 `stub` 切成真实模型。
-`POST /agent/query` 是只读路径，不能创建 operation。当前页面由本地 HTTP 提供，
+查询任务异步写入 `agent_query_job`，页面轮询 queued/running/terminal 状态与持久化
+结果；模型 token 不进入该表。`POST /agent/query` 是只读路径，不能创建 operation。
+当前页面由本地 HTTP 提供，
 只应在可信 LAN 使用；跨不可信网络前必须先加 HTTPS。
 
 它显示运行模式、Provider/snapshot 状态、脱敏账户、资金、live/shadow
