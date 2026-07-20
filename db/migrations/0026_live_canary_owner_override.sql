@@ -1,6 +1,6 @@
--- Load-only schema support for a one-time, explicitly audited owner-directed
--- revision. The normal policy command cannot create authority version 3;
--- version-2 widening continues to require completed-day evidence.
+-- An account owner may explicitly widen the canary without fabricating clean-
+-- day attestations. Authority version 3 is reserved for this audited override;
+-- normal version-2 widening continues to require completed-day evidence.
 ALTER TABLE live_canary_revision
   DROP CONSTRAINT live_canary_authority_shape,
   ADD CONSTRAINT live_canary_authority_shape CHECK (

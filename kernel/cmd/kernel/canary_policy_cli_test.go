@@ -34,6 +34,7 @@ func TestParseCanaryPolicyArgsUsesExactTypedValues(t *testing.T) {
 		"--account-id=518428891",
 		"--recorded-by=deploy:jack",
 		"--reason=reduce initial blast radius",
+		"--owner-override",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +42,7 @@ func TestParseCanaryPolicyArgsUsesExactTypedValues(t *testing.T) {
 	if input.ExpectedRevisionID != 12 || input.DailyAuthorizedRiskCapUSD != units.MustMicros("50.123456") ||
 		input.CleanDaysBeforeRaise != 5 || input.AccountID != "518428891" ||
 		input.RecordedBy != "deploy:jack" ||
-		input.Reason != "reduce initial blast radius" {
+		input.Reason != "reduce initial blast radius" || !input.OwnerOverride {
 		t.Fatalf("input=%+v", input)
 	}
 }

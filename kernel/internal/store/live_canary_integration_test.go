@@ -219,7 +219,7 @@ func TestLiveCanaryWideningFailsClosedAndTighteningUsesCASPostgres(t *testing.T)
 	assertCanaryRevisionCounts(t, s, 2, 2)
 }
 
-func TestLiveCanaryLoadsAuditedOneTimeOwnerRevisionPostgres(t *testing.T) {
+func TestLiveCanaryOwnerOverrideWidensWithAuditAndWithoutFabricatedEvidencePostgres(t *testing.T) {
 	s := openM11IntegrationStore(t)
 	defer s.DB.Close()
 	resetM3AIntegrationData(t, s)
@@ -228,29 +228,34 @@ func TestLiveCanaryLoadsAuditedOneTimeOwnerRevisionPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var revisionID int64
-	if err := s.DB.QueryRow(`INSERT INTO live_canary_revision
-		(daily_authorized_risk_micros,clean_days_before_raise,effective_market_day,
-		 authority_version,recorded_by,reason,change_class,required_attestations)
-		VALUES ($1,5,current_date,3,'owner:jack','one-time owner-directed cap increase','widen',0)
-		RETURNING id`, int64(units.MustMicros("100"))).Scan(&revisionID); err != nil {
-		t.Fatal(err)
+	invalid := canaryInput("40", 6, initial.ID, "owner:jack", "override cannot tighten")
+	invalid.AccountID = "518428891"
+	invalid.OwnerOverride = true
+	if _, err := s.RecordLiveCanaryRevision(invalid); err == nil {
+		t.Fatal("owner override tightening passed")
 	}
-	payload, err := json.Marshal(map[string]any{
-		"revision_id": revisionID, "generation": revisionID, "authority_version": 3,
-		"change": "widen", "owner_override": true, "account_id": "518428891",
-		"previous_revision_id": initial.ID, "recorded_by": "owner:jack",
-		"reason": "one-time owner-directed cap increase",
-	})
+	input := RecordLiveCanaryRevisionInput{
+		DailyAuthorizedRiskCapUSD: units.MustMicros("100"), CleanDaysBeforeRaise: 5,
+		ExpectedRevisionID: initial.ID, AccountID: "518428891",
+		RecordedBy: "owner:jack", Reason: "owner-directed permanent cap increase",
+		OwnerOverride: true,
+	}
+	widened, err := s.RecordLiveCanaryRevision(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(`INSERT INTO events(kind,payload)
-		VALUES ('live_canary_revision_recorded',$1)`, payload); err != nil {
-		t.Fatal(err)
+	if widened.AuthorityVersion != liveCanaryOwnerOverrideVersion ||
+		widened.ChangeClass != "widen" || widened.RequiredAttestations != 0 ||
+		len(widened.AttestationIDs) != 0 || widened.WideningAccountID != "518428891" ||
+		widened.DailyAuthorizedRiskCapUSD != units.MustMicros("100") {
+		t.Fatalf("widened=%+v", widened)
+	}
+	retry, err := s.RecordLiveCanaryRevision(input)
+	if err != nil || retry.ID != widened.ID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
 	}
 	active, err := s.LoadLiveCanaryAuthority()
-	if err != nil || active.ID != revisionID ||
+	if err != nil || active.ID != widened.ID ||
 		active.AuthorityVersion != liveCanaryOwnerOverrideVersion ||
 		active.DailyAuthorizedRiskCapUSD != units.MustMicros("100") {
 		t.Fatalf("active=%+v err=%v", active, err)

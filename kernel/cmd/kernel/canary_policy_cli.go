@@ -22,8 +22,8 @@ import (
 //	  --clean-days-before-raise=5 --recorded-by=deploy:jack --reason='initial canary'
 //
 // Later changes must name the currently active revision. Exact-value retries
-// are idempotent. Widening additionally requires --account-id and the exact
-// K1C completed-day evidence window.
+// are idempotent. Widening additionally requires --account-id and either the
+// K1C completed-day evidence window or an explicit --owner-override.
 func dispatchKernelCommand(args []string, output io.Writer) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
@@ -106,6 +106,7 @@ func parseCanaryPolicyArgs(args []string) (store.RecordLiveCanaryRevisionInput, 
 	expectedRevision := flags.Int64("expected-revision", -1, "active revision ID, or 0 for bootstrap")
 	recordedBy := flags.String("recorded-by", "", "authenticated deployment subject")
 	reason := flags.String("reason", "", "audited policy reason")
+	ownerOverride := flags.Bool("owner-override", false, "explicit account-owner widening override")
 	if err := flags.Parse(args); err != nil {
 		return input, err
 	}
@@ -138,6 +139,7 @@ func parseCanaryPolicyArgs(args []string) (store.RecordLiveCanaryRevisionInput, 
 		AccountID:                 strings.TrimSpace(*accountID),
 		RecordedBy:                strings.TrimSpace(*recordedBy),
 		Reason:                    strings.TrimSpace(*reason),
+		OwnerOverride:             *ownerOverride,
 	}
 	return input, nil
 }

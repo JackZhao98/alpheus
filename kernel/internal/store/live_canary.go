@@ -52,17 +52,17 @@ type RecordLiveCanaryRevisionInput struct {
 	AccountID                 string
 	RecordedBy                string
 	Reason                    string
+	OwnerOverride             bool
 }
 
 // RecordLiveCanaryRevision is the deployment-only governance path. The latest
 // authoritative immutable row is the active revision and its ID is the
 // generation; there is deliberately no generic settings table or head service.
 //
-// Initial bootstrap and tightening remain immediate. K1C permits widening only
-// when the same transaction validates the required immutable completed-day
-// attestations; day_open alone is never evidence. Every change serializes with
-// Live grant admission on the stable Live ledger lock. Authority version 3 is
-// load-only support for an audited one-time owner-directed policy revision.
+// Initial bootstrap and tightening remain immediate. Widening requires either
+// the K1C immutable completed-day attestations or an explicit account-owner
+// override recorded as authority version 3. Every change serializes with Live
+// grant admission on the stable Live ledger lock.
 func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*LiveCanaryRevision, error) {
 	input.AccountID = strings.TrimSpace(input.AccountID)
 	input.RecordedBy = strings.TrimSpace(input.RecordedBy)
@@ -128,22 +128,35 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 			previous.CleanDaysBeforeRaise, input.DailyAuthorizedRiskCapUSD,
 			input.CleanDaysBeforeRaise)
 		if changeClass == "widen" {
-			wideningEvidence, err = eligibleLiveCanaryWideningEvidence(ctx, tx, s.marketTZ,
-				input.AccountID, previous, input.CleanDaysBeforeRaise, marketDay)
-			if err != nil {
-				if errors.Is(err, ErrLiveCanaryWideningUnsafe) ||
-					errors.Is(err, ErrLiveCanaryDayEvidenceInvalid) {
-					return nil, fmt.Errorf("%w: %v", ErrLiveCanaryWideningUnsafe, err)
+			if input.OwnerOverride {
+				if input.AccountID == "" {
+					return nil, fmt.Errorf("owner override requires account id")
 				}
-				return nil, err
+			} else {
+				wideningEvidence, err = eligibleLiveCanaryWideningEvidence(ctx, tx, s.marketTZ,
+					input.AccountID, previous, input.CleanDaysBeforeRaise, marketDay)
+				if err != nil {
+					if errors.Is(err, ErrLiveCanaryWideningUnsafe) ||
+						errors.Is(err, ErrLiveCanaryDayEvidenceInvalid) {
+						return nil, fmt.Errorf("%w: %v", ErrLiveCanaryWideningUnsafe, err)
+					}
+					return nil, err
+				}
+				requiredAttestations = liveCanaryRequiredAttestations(previous.CleanDaysBeforeRaise,
+					input.CleanDaysBeforeRaise)
 			}
-			requiredAttestations = liveCanaryRequiredAttestations(previous.CleanDaysBeforeRaise,
-				input.CleanDaysBeforeRaise)
 		}
+	}
+	if input.OwnerOverride && changeClass != "widen" {
+		return nil, fmt.Errorf("owner override is only valid for widening")
+	}
+	authorityVersion := liveCanaryAuthorityVersion
+	if input.OwnerOverride {
+		authorityVersion = liveCanaryOwnerOverrideVersion
 	}
 
 	revision := &LiveCanaryRevision{
-		AuthorityVersion:          liveCanaryAuthorityVersion,
+		AuthorityVersion:          authorityVersion,
 		DailyAuthorizedRiskCapUSD: input.DailyAuthorizedRiskCapUSD,
 		CleanDaysBeforeRaise:      input.CleanDaysBeforeRaise,
 		EffectiveMarketDay:        marketDay,
@@ -162,7 +175,7 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 		 authority_version,recorded_by,reason,change_class,required_attestations,recorded_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp())
 		RETURNING id,recorded_at`, int64(input.DailyAuthorizedRiskCapUSD),
-		input.CleanDaysBeforeRaise, marketDay, liveCanaryAuthorityVersion,
+		input.CleanDaysBeforeRaise, marketDay, authorityVersion,
 		input.RecordedBy, input.Reason, changeClass, requiredAttestations).Scan(
 		&revision.ID, &revision.RecordedAt)
 	if err != nil {
@@ -170,7 +183,7 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 	}
 	revision.Generation = revision.ID
 	revision.ObservedAt = revision.RecordedAt
-	if changeClass == "widen" {
+	if changeClass == "widen" && !input.OwnerOverride {
 		if err := insertLiveCanaryWideningEvidence(ctx, tx, revision.ID, wideningEvidence); err != nil {
 			return nil, err
 		}
@@ -180,7 +193,7 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 	}
 	payload := map[string]any{
 		"revision_id": revision.ID, "generation": revision.Generation,
-		"authority_version": liveCanaryAuthorityVersion, "change": changeClass,
+		"authority_version": authorityVersion, "change": changeClass,
 		"daily_authorized_risk_cap": input.DailyAuthorizedRiskCapUSD,
 		"clean_days_before_raise":   input.CleanDaysBeforeRaise,
 		"effective_market_day":      marketDay, "recorded_by": input.RecordedBy,
@@ -189,6 +202,7 @@ func (s *Store) RecordLiveCanaryRevision(input RecordLiveCanaryRevisionInput) (*
 	}
 	if changeClass == "widen" {
 		payload["account_id"] = input.AccountID
+		payload["owner_override"] = input.OwnerOverride
 	}
 	if previous != nil {
 		payload["previous_revision_id"] = previous.ID
