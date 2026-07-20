@@ -434,6 +434,8 @@ func normalizeRobinhoodOrderState(state string) (string, error) {
 		return "filled", nil
 	case "cancelled", "partially_filled_rest_cancelled":
 		return "cancelled", nil
+	case "expired":
+		return "expired", nil
 	case "rejected", "failed", "voided", "locate_failed":
 		return "rejected", nil
 	default:

@@ -36,6 +36,14 @@ type recordingReadCaller struct {
 	calls     []mutationCall
 }
 
+type sequenceReadCaller struct {
+	mu             sync.Mutex
+	account        json.RawMessage
+	equitySequence []json.RawMessage
+	equityCalls    int
+	calls          []mutationCall
+}
+
 func (c *recordingReadCaller) Call(_ context.Context, tool string, args map[string]any) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -45,6 +53,30 @@ func (c *recordingReadCaller) Call(_ context.Context, tool string, args map[stri
 		return nil, fmt.Errorf("missing read fixture")
 	}
 	return raw, nil
+}
+
+func (c *sequenceReadCaller) Call(_ context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, mutationCall{tool: tool, args: args})
+	switch tool {
+	case "get_accounts":
+		return c.account, nil
+	case "get_option_orders":
+		return emptyOrdersFixture(), nil
+	case "get_equity_orders":
+		if len(c.equitySequence) == 0 {
+			return nil, fmt.Errorf("missing equity sequence fixture")
+		}
+		index := c.equityCalls
+		if index >= len(c.equitySequence) {
+			index = len(c.equitySequence) - 1
+		}
+		c.equityCalls++
+		return c.equitySequence[index], nil
+	default:
+		return nil, fmt.Errorf("missing read fixture")
+	}
 }
 
 func (m *recordingMutation) MutationBoundary() {}
@@ -129,6 +161,18 @@ func equityMarketOrdersFixture() json.RawMessage {
 func equityWorkingSellOrdersFixture() json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SOFI","side":"sell","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":"18.00","stop_price":null,"average_price":null,"reject_reason":"","created_at":"2026-07-20T19:48:09.301Z","last_transaction_at":"2026-07-20T19:48:09.301Z","type":"limit","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
 		executionOrderID, executionEquity))
+}
+
+func equityLifecycleFixture(state, quantity, filled, price, reason string) json.RawMessage {
+	average := "null"
+	executions := ""
+	if filled != "0" {
+		average = `"` + price + `"`
+		executions = fmt.Sprintf(`{"id":"%s","quantity":%q,"price":%q,"fees":"0.01","timestamp":"2026-07-20T19:50:00Z"}`,
+			executionFillID, filled, price)
+	}
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SOFI","side":"sell","state":%q,"quantity":%q,"dollar_based_amount":null,"cumulative_quantity":%q,"price":%q,"stop_price":null,"average_price":%s,"reject_reason":%q,"created_at":"2026-07-20T19:48:09.301Z","last_transaction_at":"2026-07-20T19:50:00Z","type":"limit","time_in_force":"gfd","market_hours":"regular_hours","trigger":"immediate","placed_agent":"agentic","executions":[%s]}],"next":""},"guide":"fixture"}`,
+		executionOrderID, executionEquity, state, quantity, filled, price, average, reason, executions))
 }
 
 func newExecutionFixture(t *testing.T, mutation *recordingMutation, orderState string) (*RobinhoodExecution, *Robinhood) {
@@ -334,6 +378,77 @@ func TestRobinhoodEquityWorkingSellUsesRecordedCloseShapeOnce(t *testing.T) {
 	}
 }
 
+func TestRobinhoodEquityLifecycleStateMatrix(t *testing.T) {
+	tests := []struct {
+		providerState string
+		quantity      string
+		filled        string
+		reason        string
+		wantState     string
+		wantFills     int
+	}{
+		{providerState: "confirmed", quantity: "2", filled: "0", wantState: "submitted"},
+		{providerState: "partially_filled", quantity: "2", filled: "1", wantState: "partially_filled", wantFills: 1},
+		{providerState: "filled", quantity: "2", filled: "2", wantState: "filled", wantFills: 1},
+		{providerState: "cancelled", quantity: "2", filled: "0", wantState: "cancelled"},
+		{providerState: "partially_filled_rest_cancelled", quantity: "2", filled: "1", wantState: "cancelled", wantFills: 1},
+		{providerState: "expired", quantity: "2", filled: "0", wantState: "expired"},
+		{providerState: "rejected", quantity: "2", filled: "0", reason: "provider rejected", wantState: "rejected"},
+	}
+	for _, test := range tests {
+		t.Run(test.providerState, func(t *testing.T) {
+			adapter, read := newExecutionFixture(t, &recordingMutation{}, "confirmed")
+			read.caller = fixtureCaller{
+				"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+				"get_equity_orders": equityLifecycleFixture(test.providerState, test.quantity, test.filled, "18", test.reason),
+				"get_option_orders": emptyOrdersFixture(),
+			}
+			result, err := adapter.GetOrder(context.Background(), executionOrderID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.State != test.wantState || result.FilledQty != units.MustQty(test.filled) ||
+				len(result.Fills) != test.wantFills || result.Reason != test.reason {
+				t.Fatalf("result=%+v, want state=%s filled=%s reason=%q", result, test.wantState, test.filled, test.reason)
+			}
+		})
+	}
+}
+
+func TestRobinhoodEquityCancelMutatesOnceAndTerminalRetryIsReadOnly(t *testing.T) {
+	mutation := &recordingMutation{responses: map[string]json.RawMessage{
+		"cancel_equity_order": json.RawMessage(`{"data":{"accepted":true},"guide":"fixture"}`),
+	}}
+	caller := &sequenceReadCaller{
+		account: accountFixture(`[` + validAccount("wanted") + `]`),
+		equitySequence: []json.RawMessage{
+			equityLifecycleFixture("confirmed", "1", "0", "18", ""),
+			equityLifecycleFixture("cancelled", "1", "0", "18", ""),
+		},
+	}
+	read, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewRobinhoodExecution(read, mutation, executionInstrument{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.CancelOrder(context.Background(), executionOrderID)
+	if err != nil || result.State != "cancelled" {
+		t.Fatalf("cancel result=%+v err=%v", result, err)
+	}
+	replay, err := adapter.CancelOrder(context.Background(), executionOrderID)
+	if err != nil || replay.State != "cancelled" {
+		t.Fatalf("terminal replay=%+v err=%v", replay, err)
+	}
+	mutation.mu.Lock()
+	defer mutation.mu.Unlock()
+	if len(mutation.calls) != 1 || mutation.calls[0].tool != "cancel_equity_order" ||
+		mutation.calls[0].args["order_id"] != executionOrderID {
+		t.Fatalf("cancel calls=%+v", mutation.calls)
+	}
+}
 func TestRobinhoodEquityLimitPrecisionFailsBeforeMutation(t *testing.T) {
 	for name, request := range map[string]PlaceRequest{
 		"sub-micro tick": {
