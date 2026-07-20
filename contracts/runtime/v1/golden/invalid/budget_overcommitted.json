@@ -1,0 +1,20 @@
+{
+  "schema_revision": 1,
+  "ledger_id": "ledger-run-1",
+  "scope": "run",
+  "scope_id": "run-1",
+  "runtime_policy": {
+    "owner": "agent_control",
+    "record_type": "runtime_policy",
+    "record_id": "runtime-policy-1",
+    "schema_revision": 1,
+    "record_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "generation": 1
+  },
+  "limit": {"max_model_calls": 10, "max_input_tokens": 10000, "max_output_tokens": 2000, "max_tool_calls": 0, "max_external_cost_micro_usd": 100000, "max_wall_time_ms": 3600000, "max_idle_time_ms": 600000, "max_tasks": 10, "max_depth": 3, "max_fanout": 4, "max_parallelism": 2, "max_invalid_output_retries": 1, "max_infrastructure_retries": 2},
+  "consumed": {"model_calls": 9, "input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "external_cost_micro_usd": 0, "wall_time_ms": 0, "tasks": 1, "active_tasks": 1, "invalid_output_retries": 0, "infrastructure_retries": 0},
+  "reserved": {"model_calls": 2, "input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "external_cost_micro_usd": 0, "wall_time_ms": 0, "tasks": 0, "active_tasks": 0, "invalid_output_retries": 0, "infrastructure_retries": 0},
+  "generation": 2,
+  "state": "open",
+  "updated_at": "2026-07-20T12:03:00Z"
+}

@@ -1,0 +1,19 @@
+{
+  "schema_revision": 1,
+  "recovery_id": "recovery-1",
+  "run_id": "run-1",
+  "task_id": "task-1",
+  "previous_attempt_id": "attempt-1",
+  "original_causation_id": "cause-1",
+  "original_idempotency_key": "call-key-1",
+  "decision": "reuse_committed_result",
+  "committed_artifact": {
+    "owner": "agent_control",
+    "record_type": "artifact",
+    "record_id": "artifact-1",
+    "schema_revision": 1,
+    "record_digest": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "reason_code": "committed_result_found",
+  "decided_at": "2026-07-20T12:04:00Z"
+}

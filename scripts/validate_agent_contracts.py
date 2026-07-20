@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent JSON Schema 2020-12 validation for AP0 contract packs."""
+"""Independent JSON Schema 2020-12 validation for Agent Platform contract packs."""
 
 from __future__ import annotations
 
@@ -34,6 +34,12 @@ CONTRACT_TYPES = {
     ("alpheus.governance", "kill_switch_revision.json"): "kill_switch_revision",
     ("alpheus.governance", "platform_mode_head.json"): "platform_mode_head",
     ("alpheus.governance", "platform_mode_revision.json"): "platform_mode_revision",
+    ("alpheus.runtime", "artifact_nonmoney.json"): "artifact",
+    ("alpheus.runtime", "claim_task_command.json"): "claim_task_command",
+    ("alpheus.runtime", "publication_disabled.json"): "artifact_publication_intent",
+    ("alpheus.runtime", "recovery_reuse.json"): "recovery_record",
+    ("alpheus.runtime", "run_queued.json"): "run",
+    ("alpheus.runtime", "runtime_policy.json"): "runtime_policy",
     ("alpheus.security", "profile_set.json"): "profile_set",
 }
 

@@ -1,0 +1,18 @@
+{
+  "schema_revision": 1,
+  "envelope": {
+    "schema_revision": 1,
+    "command_id": "command-claim-task",
+    "actor": {"principal_id": "worker-1", "kind": "workload", "audience": "worker"},
+    "audience": "control_api",
+    "command_type": "claim_task",
+    "idempotency_key": "claim-task-1",
+    "request_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "causation_id": "cause-1",
+    "correlation_id": "correlation-1",
+    "deadline": "2026-07-20T13:00:00Z"
+  },
+  "task_id": "task-1",
+  "expected_task_state_generation": 1,
+  "requested_lease_seconds": 60
+}

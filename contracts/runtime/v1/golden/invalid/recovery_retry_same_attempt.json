@@ -1,0 +1,13 @@
+{
+  "schema_revision": 1,
+  "recovery_id": "recovery-1",
+  "run_id": "run-1",
+  "task_id": "task-1",
+  "previous_attempt_id": "attempt-1",
+  "original_causation_id": "cause-1",
+  "original_idempotency_key": "call-key-1",
+  "decision": "retry_same_task",
+  "next_attempt_id": "attempt-1",
+  "reason_code": "lease_expired",
+  "decided_at": "2026-07-20T12:04:00Z"
+}

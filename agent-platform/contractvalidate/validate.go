@@ -1,4 +1,4 @@
-// Package contractvalidate strictly decodes AP0 common boundary contracts.
+// Package contractvalidate strictly decodes versioned Agent Platform boundary contracts.
 // JSON Schema is the machine contract; this package is the Go enforcement
 // path and rejects lexical ambiguity before typed semantic validation.
 package contractvalidate
@@ -17,6 +17,7 @@ import (
 	"alpheus/agentplatform/delivery"
 	"alpheus/agentplatform/governance"
 	"alpheus/agentplatform/release"
+	"alpheus/agentplatform/runtimecontract"
 	"alpheus/agentplatform/security"
 )
 
@@ -66,8 +67,33 @@ var governanceTypes = map[string]func() validatable{
 	"platform_mode_revision": func() validatable { return &governance.PlatformModeRevision{} },
 }
 
+var runtimeTypes = map[string]func() validatable{
+	"artifact":                    func() validatable { return &runtimecontract.Artifact{} },
+	"artifact_publication_intent": func() validatable { return &runtimecontract.ArtifactPublicationIntent{} },
+	"attempt":                     func() validatable { return &runtimecontract.Attempt{} },
+	"budget_ledger":               func() validatable { return &runtimecontract.BudgetLedger{} },
+	"cancellation_request":        func() validatable { return &runtimecontract.CancellationRequest{} },
+	"checkpoint":                  func() validatable { return &runtimecontract.Checkpoint{} },
+	"claim_task_command":          func() validatable { return &runtimecontract.ClaimTaskCommand{} },
+	"commit_attempt_command":      func() validatable { return &runtimecontract.CommitAttemptCommand{} },
+	"dependency":                  func() validatable { return &runtimecontract.Dependency{} },
+	"heartbeat_attempt_command":   func() validatable { return &runtimecontract.HeartbeatAttemptCommand{} },
+	"model_call_manifest":         func() validatable { return &runtimecontract.ModelCallManifest{} },
+	"model_call_result":           func() validatable { return &runtimecontract.ModelCallResult{} },
+	"recovery_record":             func() validatable { return &runtimecontract.RecoveryRecord{} },
+	"request_child_task_command":  func() validatable { return &runtimecontract.RequestChildTaskCommand{} },
+	"run":                         func() validatable { return &runtimecontract.Run{} },
+	"runtime_event":               func() validatable { return &runtimecontract.RuntimeEvent{} },
+	"runtime_policy":              func() validatable { return &runtimecontract.RuntimePolicy{} },
+	"session":                     func() validatable { return &runtimecontract.Session{} },
+	"task":                        func() validatable { return &runtimecontract.Task{} },
+	"trigger_occurrence":          func() validatable { return &runtimecontract.TriggerOccurrence{} },
+	"trigger_registration":        func() validatable { return &runtimecontract.TriggerRegistration{} },
+	"turn":                        func() validatable { return &runtimecontract.Turn{} },
+}
+
 func SupportedTypes() []string {
-	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+1)
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+len(runtimeTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
@@ -78,6 +104,9 @@ func SupportedTypes() []string {
 		values = append(values, name)
 	}
 	for name := range governanceTypes {
+		values = append(values, name)
+	}
+	for name := range runtimeTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
@@ -122,6 +151,15 @@ func GovernanceTypes() []string {
 	return values
 }
 
+func RuntimeTypes() []string {
+	values := make([]string, 0, len(runtimeTypes))
+	for name := range runtimeTypes {
+		values = append(values, name)
+	}
+	sort.Strings(values)
+	return values
+}
+
 // Validate returns canonical JSON and its contract-domain digest.
 func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, maxContractBytes+1))
@@ -153,6 +191,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	}
 	if !ok {
 		factory, ok = governanceTypes[contractType]
+	}
+	if !ok {
+		factory, ok = runtimeTypes[contractType]
 	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)

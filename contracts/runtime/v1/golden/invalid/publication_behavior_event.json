@@ -1,0 +1,21 @@
+{
+  "schema_revision": 1,
+  "intent_id": "publication-1",
+  "artifact": {
+    "owner": "agent_control",
+    "record_type": "artifact",
+    "record_id": "artifact-1",
+    "schema_revision": 1,
+    "record_digest": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "state": "disabled",
+  "reason_code": "ap8_not_installed",
+  "created_at": "2026-07-20T12:03:00Z",
+  "behavior_event": {
+    "owner": "agent_control",
+    "record_type": "behavior_event",
+    "record_id": "behavior-1",
+    "schema_revision": 1,
+    "record_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }
+}

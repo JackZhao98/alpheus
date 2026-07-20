@@ -1,0 +1,29 @@
+{
+  "schema_revision": 1,
+  "run_id": "run-1",
+  "occurrence": {
+    "owner": "agent_control",
+    "record_type": "trigger_occurrence",
+    "record_id": "occurrence-1",
+    "schema_revision": 1,
+    "record_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "origin": {
+    "schema_revision": 1,
+    "kind": "schedule",
+    "source": {"owner": "agent_control", "record_type": "schedule_occurrence", "record_id": "schedule-occurrence-1", "schema_revision": 1, "record_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+    "initiating_actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+    "owner_policy": {"owner": "platform_governance", "record_type": "owner_policy", "record_id": "owner-policy-1", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "generation": 1},
+    "occurred_at": "2026-07-20T12:00:00Z",
+    "observed_at": "2026-07-20T12:01:00Z",
+    "committed_at": "2026-07-20T12:02:00Z"
+  },
+  "runtime_policy": {"owner": "agent_control", "record_type": "runtime_policy", "record_id": "runtime-policy-1", "schema_revision": 1, "record_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "generation": 1},
+  "budget_ledger_id": "ledger-run-1",
+  "root_task_id": "task-1",
+  "state": "succeeded",
+  "state_generation": 3,
+  "created_at": "2026-07-20T12:02:00Z",
+  "updated_at": "2026-07-20T12:04:00Z",
+  "deadline_at": "2026-07-20T13:00:00Z"
+}

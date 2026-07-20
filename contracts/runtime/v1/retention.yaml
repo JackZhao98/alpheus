@@ -1,0 +1,10 @@
+{
+  "schema_revision": 1,
+  "owner": "agent_control",
+  "operational_record_retention": "database_runtime_policy",
+  "dead_letter_retention": "database_runtime_policy",
+  "immutable_artifact_and_checkpoint_bytes": "blob_reference_retention",
+  "transition_events": "append_only_and_not_shorter_than_trigger_replay_horizon",
+  "deletion_rule": "no_referenced_record_or_blob_is_deleted",
+  "configuration_rule": "lower_operational_values_are_database_policy_not_deployment_literals"
+}

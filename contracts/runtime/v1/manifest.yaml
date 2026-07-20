@@ -1,0 +1,72 @@
+{
+  "pack": "alpheus.runtime",
+  "owner": "agent_control",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": [
+    "artifact",
+    "artifact_publication_intent",
+    "attempt",
+    "budget_ledger",
+    "cancellation_request",
+    "checkpoint",
+    "dependency",
+    "model_call_manifest",
+    "model_call_result",
+    "recovery_record",
+    "run",
+    "runtime_policy",
+    "session",
+    "task",
+    "trigger_occurrence",
+    "trigger_registration",
+    "turn"
+  ],
+  "commands": [
+    "claim_task_command",
+    "commit_attempt_command",
+    "heartbeat_attempt_command",
+    "request_child_task_command"
+  ],
+  "events": ["runtime_event"],
+  "state_machines": ["attempt", "budget", "run", "session", "task", "turn"],
+  "assets": {
+    "schemas": ["schema/runtime.schema.json"],
+    "state_machines": "state-machines/runtime.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": [
+      "golden/valid/artifact_nonmoney.json",
+      "golden/valid/claim_task_command.json",
+      "golden/valid/publication_disabled.json",
+      "golden/valid/recovery_reuse.json",
+      "golden/valid/run_queued.json",
+      "golden/valid/runtime_policy.json"
+    ],
+    "invalid": [
+      "golden/invalid/artifact_operation_intent.json",
+      "golden/invalid/budget_overcommitted.json",
+      "golden/invalid/claim_worker_spoof.json",
+      "golden/invalid/publication_behavior_event.json",
+      "golden/invalid/recovery_retry_same_attempt.json",
+      "golden/invalid/run_terminal_without_time.json"
+    ],
+    "digests": [
+      "golden/digest/artifact_nonmoney.sha256",
+      "golden/digest/claim_task_command.sha256",
+      "golden/digest/publication_disabled.sha256",
+      "golden/digest/recovery_reuse.sha256",
+      "golden/digest/run_queued.sha256",
+      "golden/digest/runtime_policy.sha256"
+    ]
+  },
+  "effect_ceiling": "none",
+  "behavior_registration": "disabled_until_ap8",
+  "deployment": "single_agent_runtime_with_logical_control_and_worker_packages"
+}

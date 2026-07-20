@@ -1,0 +1,28 @@
+{
+  "schema_revision": 1,
+  "policy_id": "runtime-policy-1",
+  "generation": 1,
+  "default_run_limit": {
+    "max_model_calls": 10,
+    "max_input_tokens": 10000,
+    "max_output_tokens": 2000,
+    "max_tool_calls": 0,
+    "max_external_cost_micro_usd": 100000,
+    "max_wall_time_ms": 3600000,
+    "max_idle_time_ms": 600000,
+    "max_tasks": 10,
+    "max_depth": 3,
+    "max_fanout": 4,
+    "max_parallelism": 2,
+    "max_invalid_output_retries": 1,
+    "max_infrastructure_retries": 2
+  },
+  "max_lease_seconds": 300,
+  "max_heartbeat_extension_seconds": 60,
+  "max_claim_batch": 20,
+  "max_dependencies": 100,
+  "max_artifact_sections": 32,
+  "dead_letter_retention_seconds": 86400,
+  "updated_by": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+  "updated_at": "2026-07-20T12:00:00Z"
+}

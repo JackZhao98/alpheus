@@ -1,0 +1,16 @@
+-- AP1 permission freeze. The executable grants land with the AP1 persistence
+-- migration and reuse the AP0 LOGIN identities.
+--
+-- alpheus_agent_control_api:
+--   owns deterministic Runtime commands and state transitions through narrow
+--   SECURITY DEFINER functions; it does not receive Kernel/GRACE/Delegation
+--   credentials.
+-- alpheus_agent_worker:
+--   may claim, heartbeat, commit one fenced Attempt, and request bounded child
+--   work only through command functions. It receives no Runtime table writes.
+--
+-- Every function derives principal/profile from session_user via
+-- platform_security.invoker_identity(). Caller-supplied actor/worker identity
+-- is never trusted. PUBLIC receives no Runtime schema or function privilege.
+-- AP1 grants no operation-emission, Provider, broker, GRACE, Delegation, or
+-- activation capability.

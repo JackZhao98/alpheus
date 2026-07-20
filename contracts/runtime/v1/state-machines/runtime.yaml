@@ -1,0 +1,63 @@
+{
+  "schema_revision": 1,
+  "owner": "agent_control",
+  "machines": {
+    "run": {
+      "initial": ["queued"],
+      "terminal": ["succeeded", "failed", "canceled", "superseded", "dead_lettered"],
+      "transitions": {
+        "queued": ["running", "canceled", "superseded", "dead_lettered"],
+        "running": ["waiting", "canceling", "succeeded", "failed", "dead_lettered"],
+        "waiting": ["running", "canceling", "failed", "canceled", "superseded", "dead_lettered"],
+        "canceling": ["canceled", "failed", "dead_lettered"]
+      }
+    },
+    "task": {
+      "initial": ["blocked", "ready"],
+      "terminal": ["succeeded", "failed", "canceled", "superseded", "dead_lettered"],
+      "transitions": {
+        "blocked": ["ready", "canceled", "superseded", "dead_lettered"],
+        "ready": ["running", "canceled", "superseded", "dead_lettered"],
+        "running": ["waiting", "result_committed", "failed", "canceled", "superseded", "dead_lettered"],
+        "waiting": ["ready", "running", "failed", "canceled", "superseded", "dead_lettered"],
+        "result_committed": ["succeeded", "canceled", "superseded", "dead_lettered"]
+      }
+    },
+    "session": {
+      "initial": ["open"],
+      "terminal": ["closed"],
+      "transitions": {"open": ["closed"]}
+    },
+    "attempt": {
+      "initial": ["leased"],
+      "terminal": ["result_committed", "failed", "timed_out", "canceled", "superseded"],
+      "transitions": {
+        "leased": ["executing", "timed_out", "canceled", "superseded"],
+        "executing": ["result_committed", "failed", "timed_out", "canceled", "superseded"]
+      }
+    },
+    "turn": {
+      "initial": ["planned"],
+      "terminal": ["result_committed", "failed", "canceled"],
+      "transitions": {
+        "planned": ["dispatched", "canceled"],
+        "dispatched": ["result_committed", "failed", "unknown", "canceled"],
+        "unknown": ["result_committed", "failed"]
+      }
+    },
+    "budget": {
+      "initial": ["open"],
+      "terminal": ["closed"],
+      "transitions": {"open": ["exhausted", "closed"], "exhausted": ["closed"]}
+    }
+  },
+  "invariants": [
+    "control_plane_is_the_only_state_writer",
+    "worker_commands_require_authenticated_worker_identity_and_fenced_lease",
+    "terminal_states_do_not_transition",
+    "committed_results_are_reused_after_delivery_failure",
+    "child_work_cannot_widen_parent_budget",
+    "artifact_effect_class_is_none_in_ap1",
+    "artifact_publication_is_disabled_until_ap8"
+  ]
+}
