@@ -155,7 +155,8 @@ http://127.0.0.1:8100/agent-lab
 12 小时 HttpOnly/SameSite 会话，不必把机器 token 复制进浏览器。输入股票代码
 和问题后，默认 Auto workflow 先由类型化 Intent Interpreter 在代码提供的当前
 能力清单中选择 Scout-only 或 Team；虚构、重复或缺失的 capability 会失败关闭。
-Team workflow 先让 Scout 基于最新标准化报价、30 日 bars，以及并行取得的
+Team workflow 先让 Scout 基于最新标准化报价、30 日 bars、Provider 计算的
+日线 RSI/MACD/ATR，以及并行取得的
 Robinhood fundamentals、季度 financials 和 earnings results
 产生类型化证据简报，再让只读 Decision Desk 返回 `WAIT/PASS`、理由和观察条件；
 也可手动选择 Team 或 Scout-only 以少一次模型调用。只读 Desk 若尝试 `PROPOSE`、非空 proposals 或 blackboard
