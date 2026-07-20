@@ -15,6 +15,10 @@ type Stub struct{}
 
 func (Stub) Run(role roles.Role, _ map[string]json.RawMessage) (contracts.Output, error) {
 	switch role.Role {
+	case "intent_interpreter":
+		return contracts.QueryIntent{
+			Route: "SCOUT", Objective: "stub query", RequiredCapabilities: []string{"market_quote", "market_bars", "scout"},
+		}, nil
 	case "desk_master":
 		return contracts.DeskDecision{
 			Action:    "PROPOSE",

@@ -33,7 +33,7 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Query = strings.TrimSpace(input.Query)
 	input.OpenAIAPIKey = strings.TrimSpace(input.OpenAIAPIKey)
-	if (input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
+	if (input.Workflow != "auto" && input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and query are required"})
 		return
 	}
@@ -77,7 +77,7 @@ func (s *server) executeAgentQuery(jobID string, input agentQueryInput) {
 	if err != nil || !started {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 270*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 390*time.Second)
 	defer cancel()
 	result, errorCode := s.callAgentRuntime(ctx, input)
 	if errorCode != "" {
@@ -110,7 +110,7 @@ func (s *server) callAgentRuntime(ctx context.Context, input agentQueryInput) (j
 	}
 	client := s.runtimeHTTP
 	if client == nil {
-		client = &http.Client{Timeout: 265 * time.Second}
+		client = &http.Client{Timeout: 385 * time.Second}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

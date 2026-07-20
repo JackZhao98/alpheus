@@ -57,6 +57,13 @@ func proposedOperationSchema() map[string]any {
 func schemaFor(name string) (map[string]any, bool) {
 	var schema map[string]any
 	switch name {
+	case "QueryIntent":
+		schema = object(map[string]any{
+			"route":                 map[string]any{"type": "string", "enum": []string{"SCOUT", "TEAM", "REFUSE"}},
+			"objective":             stringSchema(),
+			"required_capabilities": stringArraySchema(),
+			"missing_inputs":        stringArraySchema(),
+		}, "route", "objective", "required_capabilities", "missing_inputs")
 	case "DeskDecision":
 		schema = object(map[string]any{
 			"action":           map[string]any{"type": "string", "enum": []string{"PROPOSE", "WAIT", "PASS"}},

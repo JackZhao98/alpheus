@@ -21,13 +21,15 @@ const maxQueryBodyBytes int64 = 16 << 10
 const maxWakeDedupEntries = 4096
 
 type queryResult struct {
-	Role        string
-	Workflow    string
-	Output      contracts.Output
-	ScoutOutput contracts.Output
-	Cognition   string
-	Provider    string
-	Model       string
+	Role              string
+	Workflow          string
+	RequestedWorkflow string
+	Output            contracts.Output
+	IntentOutput      contracts.Output
+	ScoutOutput       contracts.Output
+	Cognition         string
+	Provider          string
+	Model             string
 }
 
 type queryRunner func(string, string, string, string) (queryResult, error)
@@ -193,8 +195,8 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 		if in.Workflow == "" {
 			in.Workflow = "scout"
 		}
-		if in.Workflow != "scout" && in.Workflow != "team" {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "workflow must be scout or team"})
+		if in.Workflow != "auto" && in.Workflow != "scout" && in.Workflow != "team" {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "workflow must be auto, scout or team"})
 			return
 		}
 		result, err := query(in.Workflow, in.Symbol, in.Query, in.OpenAIAPIKey)
@@ -209,6 +211,12 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 			"provider":  result.Provider,
 			"model":     result.Model,
 			"output":    result.Output,
+		}
+		if result.RequestedWorkflow != "" {
+			response["requested_workflow"] = result.RequestedWorkflow
+		}
+		if result.IntentOutput != nil {
+			response["intent_output"] = result.IntentOutput
 		}
 		if result.ScoutOutput != nil {
 			response["scout_output"] = result.ScoutOutput

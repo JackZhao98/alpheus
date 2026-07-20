@@ -72,6 +72,15 @@ type workflowCognition struct {
 func (c workflowCognition) Run(role roles.Role, ctx map[string]json.RawMessage) (contracts.Output, error) {
 	c.t.Helper()
 	switch role.Role {
+	case "intent_interpreter":
+		if !strings.Contains(string(ctx["capability_manifest"]), `"decision_desk"`) {
+			c.t.Fatalf("intent capability manifest=%s", ctx["capability_manifest"])
+		}
+		return contracts.QueryIntent{
+			Route: "TEAM", Objective: "evaluate SOFI evidence",
+			RequiredCapabilities: []string{"market_quote", "market_bars", "portfolio_state", "scout", "decision_desk"},
+			MissingInputs:        []string{},
+		}, nil
 	case "scout":
 		if string(ctx["user_query"]) != `"what matters?"` || string(ctx["symbol"]) != `"SOFI"` {
 			c.t.Fatalf("scout context=%v", ctx)
@@ -109,6 +118,10 @@ func TestRunManualTeamQueryPassesScoutArtifactToReadOnlyDesk(t *testing.T) {
 	})
 	client := &assemble.Client{Kernel: "http://kernel.test", HTTP: &http.Client{Transport: transport}}
 	roleByName := map[string]roles.Role{
+		"intent_interpreter": {
+			Role: "intent_interpreter", ModelTier: "monitor", OutputSchema: "QueryIntent",
+			InjectedContext: []string{"user_query", "symbol", "capability_manifest"},
+		},
 		"scout": {
 			Role: "scout", ModelTier: "monitor", OutputSchema: "OpportunityBrief",
 			InjectedContext: []string{"user_query", "symbol", "market_quote", "market_bars", "limits", "state"},
@@ -119,11 +132,11 @@ func TestRunManualTeamQueryPassesScoutArtifactToReadOnlyDesk(t *testing.T) {
 		},
 	}
 	result, err := runManualQuery(client, workflowCognition{t: t}, roleByName,
-		"team", "SOFI", "what matters?", "", nil)
+		"auto", "SOFI", "what matters?", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Role != "desk_master" || result.Workflow != "team" || result.ScoutOutput == nil {
+	if result.Role != "desk_master" || result.RequestedWorkflow != "auto" || result.Workflow != "team" || result.IntentOutput == nil || result.ScoutOutput == nil {
 		t.Fatalf("result=%+v", result)
 	}
 	decision, ok := result.Output.(contracts.DeskDecision)
@@ -135,6 +148,21 @@ func TestRunManualTeamQueryPassesScoutArtifactToReadOnlyDesk(t *testing.T) {
 		"team", "SOFI", "what matters?", "", nil)
 	if err == nil || !strings.Contains(err.Error(), "attempted a mutation or proposal") {
 		t.Fatalf("proposal err=%v", err)
+	}
+}
+
+func TestResolveQueryIntentRejectsIncompleteCapabilitySelection(t *testing.T) {
+	_, err := resolveQueryIntent(contracts.QueryIntent{
+		Route: "TEAM", Objective: "test", RequiredCapabilities: []string{"scout", "decision_desk"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "omitted a required capability") {
+		t.Fatalf("err=%v", err)
+	}
+	_, err = resolveQueryIntent(contracts.QueryIntent{
+		Route: "REFUSE", Objective: "unsupported", RequiredCapabilities: []string{"invented_tool"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown or duplicate capability") {
+		t.Fatalf("refuse capability err=%v", err)
 	}
 }
 

@@ -50,7 +50,7 @@ byId("logout").addEventListener("click", async () => {
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function waitForAgentQuery(job) {
-  const deadline = Date.now() + 300000;
+  const deadline = Date.now() + 420000;
   while (job.status === "queued" || job.status === "running") {
     if (Date.now() >= deadline) throw new Error("Agent Team 仍在运行，请稍后重试。");
     byId("status").textContent = job.status === "queued" ? "QUERY QUEUED" : "AGENTS WORKING";

@@ -156,6 +156,23 @@ func exactDecimal(number json.Number, positive bool) (int64, error) {
 // Output is what every cognition run must return.
 type Output interface{ Validate() error }
 
+type QueryIntent struct {
+	Route                string   `json:"route"` // SCOUT | TEAM | REFUSE
+	Objective            string   `json:"objective"`
+	RequiredCapabilities []string `json:"required_capabilities"`
+	MissingInputs        []string `json:"missing_inputs"`
+}
+
+func (q QueryIntent) Validate() error {
+	if q.Route != "SCOUT" && q.Route != "TEAM" && q.Route != "REFUSE" {
+		return fmt.Errorf("bad query route %q", q.Route)
+	}
+	if strings.TrimSpace(q.Objective) == "" || len(q.Objective) > 1000 {
+		return fmt.Errorf("query objective is required and bounded")
+	}
+	return nil
+}
+
 type DeskDecision struct {
 	Action          string              `json:"action"` // PROPOSE | WAIT | PASS
 	Reasoning       string              `json:"reasoning"`

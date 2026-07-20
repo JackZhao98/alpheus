@@ -7,6 +7,21 @@ import (
 
 func number(value string) json.Number { return json.Number(value) }
 
+func TestQueryIntentRequiresKnownRouteAndObjective(t *testing.T) {
+	valid := QueryIntent{Route: "TEAM", Objective: "evaluate evidence"}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	valid.Route = "TRADE"
+	if err := valid.Validate(); err == nil {
+		t.Fatal("unknown query route accepted")
+	}
+	valid.Route, valid.Objective = "SCOUT", "  "
+	if err := valid.Validate(); err == nil {
+		t.Fatal("blank query objective accepted")
+	}
+}
+
 func TestCloseContractDoesNotTrustSide(t *testing.T) {
 	valid := ProposedOperation{Action: "close", Symbol: "SPY", Qty: number("1")}
 	if err := valid.Validate(); err != nil {

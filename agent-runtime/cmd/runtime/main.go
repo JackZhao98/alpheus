@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -81,6 +82,56 @@ func main() {
 
 func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleByName map[string]roles.Role,
 	workflow, symbol, question, openAIAPIKey string, telemetry func(cognition.Telemetry) error) (queryResult, error) {
+	requestedWorkflow := workflow
+	result := queryResult{Workflow: workflow, Cognition: env("COGNITION", "stub")}
+	monitorModel := ""
+	if openAIAPIKey != "" {
+		monitorModel = env("MONITOR_MODEL", "gpt-5.6-sol")
+		result.Cognition, result.Provider, result.Model = "llm", "openai", monitorModel
+	}
+	if workflow == "auto" {
+		intentRole, ok := roleByName["intent_interpreter"]
+		if !ok {
+			return queryResult{}, fmt.Errorf("intent interpreter unavailable")
+		}
+		intentContext, err := client.Assemble(intentRole)
+		if err != nil {
+			return queryResult{}, err
+		}
+		intentContext["user_query"], _ = json.Marshal(question)
+		intentContext["symbol"], _ = json.Marshal(symbol)
+		intentContext["capability_manifest"] = json.RawMessage(queryCapabilityManifestJSON)
+		intentCog := fallback
+		if openAIAPIKey != "" {
+			intentCog, err = cognition.NewOpenAIQueryForTier(openAIAPIKey, "monitor", monitorModel, cognition.WithTelemetry(telemetry))
+			if err != nil {
+				return queryResult{}, err
+			}
+		}
+		intentOutput, err := intentCog.Run(intentRole, intentContext)
+		if err != nil {
+			return queryResult{}, err
+		}
+		if err := intentOutput.Validate(); err != nil {
+			return queryResult{}, err
+		}
+		intent, ok := intentOutput.(contracts.QueryIntent)
+		if !ok {
+			return queryResult{}, fmt.Errorf("intent interpreter returned the wrong contract")
+		}
+		workflow, err = resolveQueryIntent(intent)
+		if err != nil {
+			return queryResult{}, err
+		}
+		result.RequestedWorkflow = requestedWorkflow
+		result.IntentOutput = intent
+		result.Workflow = workflow
+		if workflow == "refuse" {
+			result.Role, result.Output = intentRole.Role, intent
+			return result, nil
+		}
+	}
+
 	scout, ok := roleByName["scout"]
 	if !ok {
 		return queryResult{}, fmt.Errorf("scout unavailable")
@@ -90,15 +141,12 @@ func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleB
 		return queryResult{}, err
 	}
 	scoutCog := fallback
-	monitorModel := ""
-	result := queryResult{Role: scout.Role, Workflow: workflow, Cognition: env("COGNITION", "stub")}
+	result.Role = scout.Role
 	if openAIAPIKey != "" {
-		monitorModel = env("MONITOR_MODEL", "gpt-5.6-sol")
 		scoutCog, err = cognition.NewOpenAIQueryForTier(openAIAPIKey, "monitor", monitorModel, cognition.WithTelemetry(telemetry))
 		if err != nil {
 			return queryResult{}, err
 		}
-		result.Cognition, result.Provider, result.Model = "llm", "openai", monitorModel
 	}
 	scoutOutput, err := scoutCog.Run(scout, scoutContext)
 	if err != nil {
@@ -151,6 +199,45 @@ func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleB
 	result.Output = decision
 	result.ScoutOutput = scoutOutput
 	return result, nil
+}
+
+const queryCapabilityManifestJSON = `{"capabilities":[{"id":"market_quote","kind":"data"},{"id":"market_bars","kind":"data"},{"id":"portfolio_state","kind":"context"},{"id":"scout","kind":"role"},{"id":"decision_desk","kind":"role"}],"routes":{"SCOUT":["market_quote","market_bars","scout"],"TEAM":["market_quote","market_bars","portfolio_state","scout","decision_desk"]}}`
+
+var queryRouteCapabilities = map[string][]string{
+	"SCOUT": {"market_quote", "market_bars", "scout"},
+	"TEAM":  {"market_quote", "market_bars", "portfolio_state", "scout", "decision_desk"},
+}
+
+func resolveQueryIntent(intent contracts.QueryIntent) (string, error) {
+	known := map[string]bool{}
+	for _, capabilities := range queryRouteCapabilities {
+		for _, capability := range capabilities {
+			known[capability] = true
+		}
+	}
+	selected := map[string]bool{}
+	for _, capability := range intent.RequiredCapabilities {
+		if !known[capability] || selected[capability] {
+			return "", fmt.Errorf("intent selected an unknown or duplicate capability")
+		}
+		selected[capability] = true
+	}
+	if intent.Route == "REFUSE" {
+		return "refuse", nil
+	}
+	if len(intent.MissingInputs) != 0 {
+		return "", fmt.Errorf("intent selected a route with missing inputs")
+	}
+	required, ok := queryRouteCapabilities[intent.Route]
+	if !ok {
+		return "", fmt.Errorf("intent selected an unknown route")
+	}
+	for _, capability := range required {
+		if !selected[capability] {
+			return "", fmt.Errorf("intent omitted a required capability")
+		}
+	}
+	return strings.ToLower(intent.Route), nil
 }
 
 func runTickFallback(client *assemble.Client, cog cognition.Cognition, rs []roles.Role, interval time.Duration) {
