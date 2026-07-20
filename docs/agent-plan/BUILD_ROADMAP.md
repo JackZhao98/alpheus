@@ -181,7 +181,7 @@ historical audit -> M11 non-money gate -> K1 + B0 -> Lean v1 freeze
                           |
                         AP12  end-to-end Shadow
                           |
-          M11 recertification pending
+             M11 LANDED (equity-only)
                           |
                         AP13  transitional human-confirmed Live
                           |
