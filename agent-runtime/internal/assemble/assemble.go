@@ -67,10 +67,14 @@ func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.R
 	for _, key := range role.InjectedContext {
 		wanted[key] = true
 	}
+	indicatorStart := time.Now().UTC().AddDate(0, 0, -180).Format(time.RFC3339)
 	all := []queryEnrichment{
 		{key: "equity_fundamentals", tool: "get_equity_fundamentals", args: map[string]any{"symbols": []string{symbol}}},
 		{key: "company_financials", tool: "get_financials", args: map[string]any{"symbols": []string{symbol}, "period": "quarterly", "limit": 4}},
 		{key: "earnings_results", tool: "get_earnings_results", args: map[string]any{"symbol": symbol}},
+		{key: "technical_rsi", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "rsi", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
+		{key: "technical_macd", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "macd", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
+		{key: "technical_atr", tool: "get_equity_technical_indicators", args: map[string]any{"symbol": symbol, "type": "atr", "interval": "day", "start_time": indicatorStart, "output": "latest"}},
 	}
 	tasks := make([]queryEnrichment, 0, len(all))
 	for _, task := range all {

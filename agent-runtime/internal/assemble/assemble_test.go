@@ -41,6 +41,7 @@ func TestAssembleAuthenticatesKernelReads(t *testing.T) {
 func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	var mu sync.Mutex
 	tools := map[string]map[string]any{}
+	toolCounts := map[string]int{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("Authorization") != "Bearer runtime-secret" {
 			t.Fatal("missing runtime authorization")
@@ -66,6 +67,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 			}
 			mu.Lock()
 			tools[input.Tool] = input.Args
+			toolCounts[input.Tool]++
 			mu.Unlock()
 			if input.Tool == "get_earnings_results" {
 				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
@@ -83,6 +85,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	client.HTTP.Transport = transport
 	context, err := client.AssembleQuery(roles.Role{InjectedContext: []string{
 		"state", "equity_fundamentals", "company_financials", "earnings_results",
+		"technical_rsi", "technical_macd", "technical_atr",
 	}}, "sofi", "现在值得研究吗？")
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +93,7 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	for _, key := range []string{
 		"state", "market_quote", "market_bars", "symbol", "user_query",
 		"equity_fundamentals", "company_financials", "earnings_results",
+		"technical_rsi", "technical_macd", "technical_atr",
 	} {
 		if context[key] == nil {
 			t.Fatalf("missing context key %q: %v", key, context)
@@ -97,8 +101,9 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(tools) != 3 || tools["get_equity_fundamentals"] == nil || tools["get_financials"] == nil || tools["get_earnings_results"] == nil {
-		t.Fatalf("MCP tools=%v", tools)
+	if len(tools) != 4 || toolCounts["get_equity_technical_indicators"] != 3 ||
+		tools["get_equity_fundamentals"] == nil || tools["get_financials"] == nil || tools["get_earnings_results"] == nil {
+		t.Fatalf("MCP tools=%v counts=%v", tools, toolCounts)
 	}
 	if !strings.Contains(string(context["earnings_results"]), `"available":false`) {
 		t.Fatalf("earnings fallback=%s", context["earnings_results"])
