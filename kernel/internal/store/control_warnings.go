@@ -31,7 +31,8 @@ func (s *Store) ListControlWarnings(pendingBefore, claimBefore time.Time, limit 
 				COALESCE(ro.ledger,rc.ledger,'') AS ledger,
 				COALESCE(ro.symbol,rc.symbol,op.payload->>'symbol',op.payload->>'underlying','') AS symbol,
 				a.state, a.created_at, COALESCE(a.last_error,'') AS detail,
-				COALESCE(a.provider_error_code,''),COALESCE(a.candidate_broker_order_id::text,'')
+				COALESCE(a.provider_error_code,'') AS provider_error_code,
+				COALESCE(a.candidate_broker_order_id::text,'') AS candidate_broker_order_id
 			FROM execution_attempt a
 			JOIN operations op ON op.id=a.operation_id
 			LEFT JOIN open_reservation ro ON ro.id=a.open_reservation_id
