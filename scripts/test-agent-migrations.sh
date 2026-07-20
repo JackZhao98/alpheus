@@ -15,6 +15,57 @@ trap cleanup EXIT INT TERM
 
 mkdir -p "$ARTIFACT_DIR"
 rm -f "$ARTIFACT_DIR/summary.json" "$ARTIFACT_DIR/junit.xml"
+
+# AP0's compatibility evidence is historical. Keep its migration set explicit
+# so later Kernel or Agent Platform migrations cannot silently widen the probe.
+KERNEL_MIGRATION_LIST="$ARTIFACT_DIR/ap0-kernel-migrations.txt"
+AGENT_MIGRATION_LIST="$ARTIFACT_DIR/ap0-agent-migrations.txt"
+printf '%s\n' \
+	"$ROOT/db/migrations/0001_init.sql" \
+	"$ROOT/db/migrations/0002_operation_idempotency.sql" \
+	"$ROOT/db/migrations/0003_execution_entitlements.sql" \
+	"$ROOT/db/migrations/0004_orders_fills.sql" \
+	"$ROOT/db/migrations/0005_backfill_pre_m29_orders.sql" \
+	"$ROOT/db/migrations/0006_m3a_exposure_ledger.sql" \
+	"$ROOT/db/migrations/0007_m3c_pnl_breakers.sql" \
+	"$ROOT/db/migrations/0008_live_canary_revisions.sql" \
+	"$ROOT/db/migrations/0009_live_execution_gate.sql" \
+	"$ROOT/db/migrations/0010_live_canary_authority.sql" \
+	"$ROOT/db/migrations/0011_kernel_policy_authority.sql" \
+	"$ROOT/db/migrations/0012_operation_policy_binding.sql" \
+	"$ROOT/db/migrations/0013_execution_policy_envelope.sql" \
+	"$ROOT/db/migrations/0014_broker_observations.sql" \
+	"$ROOT/db/migrations/0015_pre_effect_manifests.sql" \
+	"$ROOT/db/migrations/0016_pre_effect_evaluations.sql" \
+	"$ROOT/db/migrations/0017_external_control_lifecycle.sql" \
+	"$ROOT/db/migrations/0018_broker_external_reconciliation.sql" \
+	"$ROOT/db/migrations/0019_live_canary_day_attestations.sql" \
+	>"$KERNEL_MIGRATION_LIST"
+printf '%s\n' \
+	"$ROOT/agent-platform/migrations/0001_delivery.sql" \
+	"$ROOT/agent-platform/migrations/0002_blob.sql" \
+	"$ROOT/agent-platform/migrations/0003_governance.sql" \
+	>"$AGENT_MIGRATION_LIST"
+
+kernel_expected=$(awk 'END { print NR + 0 }' "$KERNEL_MIGRATION_LIST")
+agent_expected=$(awk 'END { print NR + 0 }' "$AGENT_MIGRATION_LIST")
+if [ "$kernel_expected" -ne 19 ] || [ "$agent_expected" -ne 3 ]; then
+	echo "FAIL reason=ap0-migration-scope kernel_migrations=$kernel_expected agent_migrations=$agent_expected artifacts=$ARTIFACT_DIR" >&2
+	exit 1
+fi
+while IFS= read -r migration; do
+	if [ ! -f "$migration" ]; then
+		echo "FAIL reason=ap0-migration-missing migration=$migration artifacts=$ARTIFACT_DIR" >&2
+		exit 1
+	fi
+done <"$KERNEL_MIGRATION_LIST"
+while IFS= read -r migration; do
+	if [ ! -f "$migration" ]; then
+		echo "FAIL reason=ap0-migration-missing migration=$migration artifacts=$ARTIFACT_DIR" >&2
+		exit 1
+	fi
+done <"$AGENT_MIGRATION_LIST"
+
 docker run --detach --rm --name "$CONTAINER" \
 	--env POSTGRES_PASSWORD=probe --env POSTGRES_DB=probe "$IMAGE" \
 	>"$ARTIFACT_DIR/container-id.txt"
@@ -40,12 +91,16 @@ if [ "$ready" != true ]; then
 fi
 
 kernel_count=0
-for migration in "$ROOT"/db/migrations/*.sql; do
+while IFS= read -r migration; do
 	kernel_count=$((kernel_count + 1))
 	docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 		--single-transaction --username postgres --dbname probe <"$migration" \
 		>"$ARTIFACT_DIR/kernel-migration-$kernel_count.txt" 2>&1
-done
+done <"$KERNEL_MIGRATION_LIST"
+if [ "$kernel_count" -ne 19 ]; then
+	echo "FAIL reason=ap0-kernel-migration-count actual=$kernel_count expected=19 artifacts=$ARTIFACT_DIR" >&2
+	exit 1
+fi
 
 docker exec "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe --command \
@@ -72,12 +127,16 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	>"$ARTIFACT_DIR/login-identity-probe.txt" 2>&1
 
 agent_count=0
-for migration in "$ROOT"/agent-platform/migrations/*.sql; do
+while IFS= read -r migration; do
 	agent_count=$((agent_count + 1))
 	docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 		--single-transaction --username postgres --dbname probe <"$migration" \
 		>"$ARTIFACT_DIR/agent-migration-$agent_count.txt" 2>&1
-done
+done <"$AGENT_MIGRATION_LIST"
+if [ "$agent_count" -ne 3 ]; then
+	echo "FAIL reason=ap0-agent-migration-count actual=$agent_count expected=3 artifacts=$ARTIFACT_DIR" >&2
+	exit 1
+fi
 for grants in "$ROOT"/contracts/delivery/v1/permissions/roles.sql \
 	"$ROOT"/contracts/blob/v1/permissions/roles.sql \
 	"$ROOT"/contracts/governance/v1/permissions/roles.sql; do
@@ -112,9 +171,9 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	>"$ARTIFACT_DIR/rollback-roles.txt" 2>&1
 (
 	printf 'BEGIN;\n'
-	for migration in "$ROOT"/agent-platform/migrations/*.sql; do
+	while IFS= read -r migration; do
 		sed '/^SET ROLE /d; /^RESET ROLE;/d' "$migration"
-	done
+	done <"$AGENT_MIGRATION_LIST"
 	printf 'ROLLBACK;\n'
 	sed '/^\\set /d' "$ROOT/audit/repro/ap0_migration_rollback.sql"
 ) | docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
