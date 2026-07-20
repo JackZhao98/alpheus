@@ -630,11 +630,18 @@ func (r *Robinhood) OpenOrders(ctx context.Context) ([]ReadOrder, error) {
 		if !typeKnown {
 			return nil, robinhoodSchemaError(r.caller, "equity order type schema drift")
 		}
+		// Robinhood may echo stop_price in price for queued stop-market
+		// orders. Price is only a semantic limit for limit/stop-limit types;
+		// retaining the echo would make a valid stop-market look malformed.
+		limitKnown := priceKnown && (orderType == "limit" || orderType == "stop_limit")
+		if !limitKnown {
+			price = 0
+		}
 		out = append(out, ReadOrder{
 			BrokerOrderID: order.ID,
 			InstrumentID:  order.InstrumentID, Symbol: order.Symbol, Side: order.Side,
 			Kind: "equity", PositionEffect: "unknown", State: order.State,
-			Qty: *order.Quantity, FilledQty: *order.CumulativeQuantity, LimitPrice: price, LimitPriceKnown: priceKnown,
+			Qty: *order.Quantity, FilledQty: *order.CumulativeQuantity, LimitPrice: price, LimitPriceKnown: limitKnown,
 			StopPrice: order.StopPrice.Value, StopPriceKnown: order.StopPrice.Known, OrderType: orderType,
 			Source: robinhoodSource, AsOf: asOf,
 		})

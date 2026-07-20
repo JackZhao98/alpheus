@@ -159,8 +159,29 @@ func equityMarketOrdersFixture() json.RawMessage {
 }
 
 func equityStopMarketOrdersFixture() json.RawMessage {
-	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":null,"stop_price":"18","average_price":null,"reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"market","time_in_force":"gfd","market_hours":"regular_hours","trigger":"stop","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
+	return json.RawMessage(fmt.Sprintf(`{"data":{"orders":[{"id":"%s","instrument_id":"%s","symbol":"SPY","side":"buy","state":"confirmed","quantity":"1","dollar_based_amount":null,"cumulative_quantity":"0","price":"18","stop_price":"18","average_price":null,"reject_reason":"","created_at":"2026-07-17T20:00:00Z","last_transaction_at":"2026-07-17T20:00:01Z","type":"market","time_in_force":"gfd","market_hours":"regular_hours","trigger":"stop","placed_agent":"agentic","executions":[]}],"next":""},"guide":"fixture"}`,
 		executionOrderID, executionEquity))
+}
+
+func TestRobinhoodOpenOrdersNormalizesStopMarketPriceEcho(t *testing.T) {
+	caller := fixtureCaller{
+		"get_accounts":      accountFixture(`[` + validAccount("wanted") + `]`),
+		"get_equity_orders": equityStopMarketOrdersFixture(),
+		"get_option_orders": emptyOrdersFixture(),
+	}
+	read, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders, err := read.OpenOrders(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 || orders[0].OrderType != "stop_market" ||
+		!orders[0].StopPriceKnown || orders[0].StopPrice != units.MustMicros("18") ||
+		orders[0].LimitPriceKnown || orders[0].LimitPrice != 0 {
+		t.Fatalf("orders=%+v", orders)
+	}
 }
 
 func equityWorkingSellOrdersFixture() json.RawMessage {
