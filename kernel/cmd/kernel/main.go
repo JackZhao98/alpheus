@@ -842,7 +842,14 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 		if sym == "" {
 			sym = op.Underlying
 		}
-		quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
+		quoteParent := r.Context()
+		if s.tradingMode() == config.ModeLive && !op.Shadow {
+			// A money-path decision must cross the Provider transport. Reusing the
+			// interactive cache can turn a healthy live quote into a false stale-
+			// data rejection at the exact moment an order is proposed.
+			quoteParent = rhmcp.WithFreshReads(quoteParent)
+		}
+		quoteCtx, cancel := context.WithTimeout(quoteParent, s.brokerCallTimeout())
 		q, quoteErr := s.marketProvider().Quote(quoteCtx, sym)
 		cancel()
 		if quoteErr == nil {
