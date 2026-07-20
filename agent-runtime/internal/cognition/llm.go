@@ -161,9 +161,26 @@ type LLM struct {
 }
 
 func newLLMFromEnvironment(sink telemetrySink) (*LLM, error) {
-	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
-	if apiKey == "" {
-		return nil, errors.New("ANTHROPIC_API_KEY is required when COGNITION=llm")
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
+	if provider == "" {
+		provider = "anthropic"
+	}
+	var transport completionTransport
+	switch provider {
+	case "anthropic":
+		apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+		if apiKey == "" {
+			return nil, errors.New("ANTHROPIC_API_KEY is required when COGNITION=llm and LLM_PROVIDER=anthropic")
+		}
+		transport = newAnthropicTransport(apiKey)
+	case "openai":
+		apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		if apiKey == "" {
+			return nil, errors.New("OPENAI_API_KEY is required when COGNITION=llm and LLM_PROVIDER=openai")
+		}
+		transport = newOpenAITransport(apiKey)
+	default:
+		return nil, fmt.Errorf("unknown LLM_PROVIDER %q", provider)
 	}
 	models := map[string]string{
 		"decider": strings.TrimSpace(os.Getenv("DECIDER_MODEL")),
@@ -187,7 +204,7 @@ func newLLMFromEnvironment(sink telemetrySink) (*LLM, error) {
 		return nil, err
 	}
 	return &LLM{
-		transport:           newAnthropicTransport(apiKey),
+		transport:           transport,
 		models:              models,
 		sessionTokenBudget:  tokenBudget,
 		promptSlotMaxBytes:  promptMax,

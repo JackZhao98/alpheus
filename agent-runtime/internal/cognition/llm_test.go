@@ -210,6 +210,7 @@ func TestInstructionShapedLessonRemainsUserData(t *testing.T) {
 
 func TestLLMModeFailsAtStartupWithoutAPIKey(t *testing.T) {
 	t.Setenv("COGNITION", "llm")
+	t.Setenv("LLM_PROVIDER", "anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("DECIDER_MODEL", "")
 	t.Setenv("MONITOR_MODEL", "")
@@ -221,12 +222,44 @@ func TestLLMModeFailsAtStartupWithoutAPIKey(t *testing.T) {
 
 func TestLLMModeFailsAtStartupWithoutModels(t *testing.T) {
 	t.Setenv("COGNITION", "llm")
+	t.Setenv("LLM_PROVIDER", "anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("DECIDER_MODEL", "")
 	t.Setenv("MONITOR_MODEL", "monitor")
 	_, err := New()
 	if err == nil || !strings.Contains(err.Error(), "DECIDER_MODEL") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestOpenAILLMModeRequiresOpenAIKey(t *testing.T) {
+	t.Setenv("COGNITION", "llm")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("DECIDER_MODEL", "gpt-5.6-sol")
+	t.Setenv("MONITOR_MODEL", "gpt-5.6-sol")
+	_, err := New()
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestOpenAILLMModeSelectsOpenAITransport(t *testing.T) {
+	t.Setenv("COGNITION", "llm")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("DECIDER_MODEL", "gpt-5.6-sol")
+	t.Setenv("MONITOR_MODEL", "gpt-5.6-sol")
+	cognition, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm, ok := cognition.(*LLM)
+	if !ok {
+		t.Fatalf("cognition=%T", cognition)
+	}
+	if _, ok := llm.transport.(*openAITransport); !ok {
+		t.Fatalf("transport=%T", llm.transport)
 	}
 }
 
