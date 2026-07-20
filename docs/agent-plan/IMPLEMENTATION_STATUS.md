@@ -6,7 +6,10 @@
 ## Current boundary
 
 - The frozen Lean v1 architecture remains authoritative.
-- Non-money AP0 is implemented and accepted with effect ceiling `none`.
+- Non-money AP0 is implemented with effect ceiling `none`. The prior AP0
+  release approval is superseded by the post-certification security correction
+  at `6c276e9`; a replacement digest is pending fresh certification and owner
+  approval.
 - AP1 and later stages remain closed.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
@@ -19,10 +22,10 @@
 |---|---|---|
 | AP0-1 common identity and release-verification foundation | Code complete at `a7fafa2`; certification correction at `775f176` | Versioned canonical JSON/digests, common identity and authority-bearing Go contracts, fail-closed RunOrigin/recovery lineage, EffectiveRunAuthority freshness, idempotency replay comparison, digest-bound release manifest verifier and CLI, golden/race tests, certification entrypoint scaffold |
 | AP0-2 common Schema Freeze Pack | Complete at `3175afd` | Machine-readable manifest, JSON Schema, canonicalization profile, valid/invalid goldens and digest vectors, compatibility declaration, contract validation command, and automated Go/Schema field and enum drift detection |
-| AP0-3 service security and durable delivery scaffold | Complete at `83bce82` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
-| AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
-| AP0-5 platform/effect governance registry | Complete at `f8f2e74` | Frozen governance Schema Pack, immutable typed mode/effect/kill-switch revisions, fenced heads and append-only events, single-use bounded ActivationReceipts, separate owner/Activator/emergency-halt roles, stable-subject CAS, exact current-head projection, deterministic fail-closed Go resolver, and role/stale/malformed/concurrency probes |
-| AP0-6 integration and AP0 acceptance | Complete; source `b026b87`; release digest `cdf451e5...c385df1` | Full Kernel/Agent migration compatibility, complete common and AP0 threat probes, cross-language canonical digest validation, machine-readable certification evidence, bound release files, and exact owner-approved digest verification |
+| AP0-3 service security and durable delivery scaffold | Complete at `83bce82`; identity/provenance hardening at `6c276e9` | Credential-isolated service profiles, bounded owner-only secret-file loading, per-owner database roles, durable outbox/inbox contracts, dynamic delivery policy, poison quarantine and explicit replay, role/concurrency/replay/secret-leak probes; no shared writer credential |
+| AP0-4 BlobRef and bounded local BlobStore | Complete at `bd9bb52`; identity/ownership hardening at `6c276e9` | Local package plus owner-only content-addressed volume, database-issued staging bounds, persisted pre-materialization facts, verified reads, exact principal/reference/ACL/retention checks, audited reference/ACL/policy transitions, bounded staged/content GC, and mismatch/unauthorized/missing/concurrency probes |
+| AP0-5 platform/effect governance registry | Complete at `f8f2e74`; authority/locking hardening at `6c276e9` | Frozen governance Schema Pack, immutable typed mode/effect/kill-switch revisions, fenced heads and append-only events, single-use bounded ActivationReceipts, separate owner/Activator/emergency-halt roles, stable-subject CAS, exact current-head projection, deterministic fail-closed Go resolver, and role/stale/malformed/concurrency probes |
+| AP0-6 integration and AP0 acceptance | Re-certification pending; corrected source `6c276e9`; replacement digest not yet approved | Full Kernel/Agent migration compatibility, complete common and AP0 threat probes, cross-language canonical digest validation, machine-readable certification evidence, bound release files, and exact owner-approved digest verification |
 
 AP0 is complete only when all six packets pass the frozen AP0 acceptance
 criteria. These packets are implementation-sized units, not new architecture
@@ -56,7 +59,9 @@ activation record, never from the same untrusted manifest being checked.
 
 ## Verification
 
-The implemented AP0-1 through AP0-6 checks pass:
+The corrected AP0 implementation passes the individual code, contract, role,
+concurrency, and migration probes below. The protected aggregate stage command
+must be rerun against a newly sealed manifest before AP0 is accepted again:
 
 ```text
 gofmt
@@ -71,8 +76,10 @@ disposable PostgreSQL governance role/receipt/CAS probe
 full Kernel plus Agent migration compatibility and transactional rollback probe
 Docker Compose configuration validation
 static non-money boundary probe
-exact release-manifest document and evidence verification
 ```
+
+Exact release-manifest document and evidence verification is pending replacement
+manifest sealing and owner approval.
 
 The PostgreSQL probe exercises exact retry and conflicting identity behavior,
 stale lease rejection, inbox deduplication, quarantine/replay, dynamic-policy
@@ -82,9 +89,10 @@ events claimed concurrently by eight dispatchers with no duplicate lease.
 The governance probe exercises all three typed head families, immutable
 revision/receipt/event records, owner-versus-Activator role isolation,
 least-privilege emergency halt, stale receipt rejection, single-use receipt
-consumption, and 20 concurrent activations against both an existing head and an
-absent bootstrap head. Each subject produces exactly one generation, one event,
-and one receipt consumption.
+consumption, direct private-lock-table denial, expiry while waiting on a subject
+lock, and 20 concurrent activations against both an existing head and an absent
+bootstrap head. Each subject produces exactly one generation, one event, and
+one receipt consumption.
 
 The stage command runs every mandatory probe, retains JSON/JUnit artifacts, and
 fails on a dirty worktree, skipped or unavailable infrastructure, leaked secret,
@@ -135,9 +143,23 @@ The delivery freeze pack and migration establish at-least-once delivery with:
 
 Separate NOLOGIN database roles expose only narrow `SECURITY DEFINER`
 functions. Workers, research, GRACE, Delegation, validation, activation, Web,
-and diagnostics do not receive a catch-all writer credential. This packet
-creates persistence and contracts only: it does not start a dispatcher or
-alter Agent Runtime, Kernel, Provider, Live, operation, or UI behavior.
+and diagnostics do not receive a catch-all writer credential. Each production
+process uses a distinct, non-elevated LOGIN whose name exactly matches its
+configured `principal_id` and which belongs directly to exactly one application
+group. One internal definer derives principal, profile, group, and owner solely
+from `session_user`; zero or multiple application-group memberships, any
+membership with `ADMIN OPTION`, and any migrator membership fail closed. Agent
+LOGINs cannot call PostgreSQL advisory-lock functions, so they cannot block the
+Kernel's private coordination keys. There is no caller-writable identity
+mapping. This packet creates persistence and contracts only: it does not start
+a dispatcher or alter Agent Runtime, Kernel, Provider, Live, operation, or UI
+behavior.
+
+The advisory-function revocation assumes the dedicated Alpheus database used
+by the current deployment. A future least-privilege Kernel LOGIN must receive
+only the advisory-function grants its transaction gate actually needs; sharing
+this database with unrelated non-superuser applications requires an explicit
+grant review.
 
 ## AP0-4 BlobRef and bounded local BlobStore
 
@@ -199,10 +221,12 @@ are rejected.
 
 Candidate authoring, CAS activation, and emergency halt use three non-overlapping
 database roles. The emergency role may only create `disabled`/`halted`
-successors. A stable per-subject transaction advisory lock protects both
-existing heads and the otherwise rowless bootstrap race, without serializing
-unrelated subjects. Runtime profiles receive a read-only exact-current-head
-projection, never base-table mutation privileges.
+successors. A fixed, migrator-owned per-subject lock row protects both existing
+heads and the otherwise rowless bootstrap race without exposing a predictable
+advisory-lock key or serializing unrelated subjects. Receipt validity is
+rechecked after every potentially blocking lock acquisition. Runtime profiles
+receive a read-only exact-current-head projection, never base-table mutation
+privileges.
 
 The Go resolver recomputes each immutable revision digest and intersects the
 fresh snapshot, deployment ceilings, global mode, exact effect head, fixed
