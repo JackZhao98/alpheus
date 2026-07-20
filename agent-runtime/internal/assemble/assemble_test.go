@@ -1,9 +1,11 @@
 package assemble
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"alpheus/agentruntime/internal/roles"
@@ -37,6 +39,8 @@ func TestAssembleAuthenticatesKernelReads(t *testing.T) {
 }
 
 func TestAssembleQueryAddsMarketContext(t *testing.T) {
+	var mu sync.Mutex
+	tools := map[string]map[string]any{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("Authorization") != "Bearer runtime-secret" {
 			t.Fatal("missing runtime authorization")
@@ -52,6 +56,21 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 				t.Fatalf("bars query=%s", r.URL.RawQuery)
 			}
 			body = `{"bars":[]}`
+		case "/mcp/read-query":
+			var input struct {
+				Tool string         `json:"tool"`
+				Args map[string]any `json:"args"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Errorf("decode MCP query: %v", err)
+			}
+			mu.Lock()
+			tools[input.Tool] = input.Args
+			mu.Unlock()
+			if input.Tool == "get_earnings_results" {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			}
+			body = `{"tool":"` + input.Tool + `","source":"robinhood-mcp","result":{}}`
 		default:
 			t.Fatalf("unexpected path %s", r.URL.String())
 		}
@@ -62,14 +81,27 @@ func TestAssembleQueryAddsMarketContext(t *testing.T) {
 	})
 	client := New("http://kernel.test", "runtime-secret")
 	client.HTTP.Transport = transport
-	context, err := client.AssembleQuery(roles.Role{InjectedContext: []string{"state"}}, "sofi", "现在值得研究吗？")
+	context, err := client.AssembleQuery(roles.Role{InjectedContext: []string{
+		"state", "equity_fundamentals", "company_financials", "earnings_results",
+	}}, "sofi", "现在值得研究吗？")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"state", "market_quote", "market_bars", "symbol", "user_query"} {
+	for _, key := range []string{
+		"state", "market_quote", "market_bars", "symbol", "user_query",
+		"equity_fundamentals", "company_financials", "earnings_results",
+	} {
 		if context[key] == nil {
 			t.Fatalf("missing context key %q: %v", key, context)
 		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tools) != 3 || tools["get_equity_fundamentals"] == nil || tools["get_financials"] == nil || tools["get_earnings_results"] == nil {
+		t.Fatalf("MCP tools=%v", tools)
+	}
+	if !strings.Contains(string(context["earnings_results"]), `"available":false`) {
+		t.Fatalf("earnings fallback=%s", context["earnings_results"])
 	}
 }
 

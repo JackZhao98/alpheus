@@ -201,23 +201,23 @@ func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleB
 	return result, nil
 }
 
-const queryCapabilityManifestJSON = `{"capabilities":[{"id":"market_quote","kind":"data"},{"id":"market_bars","kind":"data"},{"id":"portfolio_state","kind":"context"},{"id":"scout","kind":"role"},{"id":"decision_desk","kind":"role"}],"routes":{"SCOUT":["market_quote","market_bars","scout"],"TEAM":["market_quote","market_bars","portfolio_state","scout","decision_desk"]}}`
+const queryCapabilityManifestJSON = `{"capabilities":[{"id":"market_quote","kind":"data"},{"id":"market_bars","kind":"data"},{"id":"equity_fundamentals","kind":"data"},{"id":"company_financials","kind":"data"},{"id":"earnings_results","kind":"data"},{"id":"portfolio_state","kind":"context"},{"id":"scout","kind":"role"},{"id":"decision_desk","kind":"role"}],"routes":{"SCOUT":["market_quote","market_bars","scout"],"TEAM":["market_quote","market_bars","portfolio_state","scout","decision_desk"]}}`
 
 var queryRouteCapabilities = map[string][]string{
 	"SCOUT": {"market_quote", "market_bars", "scout"},
 	"TEAM":  {"market_quote", "market_bars", "portfolio_state", "scout", "decision_desk"},
 }
 
+var queryKnownCapabilities = map[string]bool{
+	"market_quote": true, "market_bars": true, "equity_fundamentals": true,
+	"company_financials": true, "earnings_results": true, "portfolio_state": true,
+	"scout": true, "decision_desk": true,
+}
+
 func resolveQueryIntent(intent contracts.QueryIntent) (string, error) {
-	known := map[string]bool{}
-	for _, capabilities := range queryRouteCapabilities {
-		for _, capability := range capabilities {
-			known[capability] = true
-		}
-	}
 	selected := map[string]bool{}
 	for _, capability := range intent.RequiredCapabilities {
-		if !known[capability] || selected[capability] {
+		if !queryKnownCapabilities[capability] || selected[capability] {
 			return "", fmt.Errorf("intent selected an unknown or duplicate capability")
 		}
 		selected[capability] = true

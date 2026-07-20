@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"alpheus/agentruntime/internal/roles"
@@ -51,7 +52,86 @@ func (c *Client) AssembleQuery(role roles.Role, symbol, query string) (map[strin
 	} else {
 		ctx["market_quote"] = quote
 	}
+	c.addQueryEnrichment(ctx, role, symbol)
 	return ctx, nil
+}
+
+type queryEnrichment struct {
+	key  string
+	tool string
+	args map[string]any
+}
+
+func (c *Client) addQueryEnrichment(ctx map[string]json.RawMessage, role roles.Role, symbol string) {
+	wanted := make(map[string]bool, len(role.InjectedContext))
+	for _, key := range role.InjectedContext {
+		wanted[key] = true
+	}
+	all := []queryEnrichment{
+		{key: "equity_fundamentals", tool: "get_equity_fundamentals", args: map[string]any{"symbols": []string{symbol}}},
+		{key: "company_financials", tool: "get_financials", args: map[string]any{"symbols": []string{symbol}, "period": "quarterly", "limit": 4}},
+		{key: "earnings_results", tool: "get_earnings_results", args: map[string]any{"symbol": symbol}},
+	}
+	tasks := make([]queryEnrichment, 0, len(all))
+	for _, task := range all {
+		if wanted[task.key] {
+			tasks = append(tasks, task)
+		}
+	}
+	type result struct {
+		key  string
+		tool string
+		raw  json.RawMessage
+		err  error
+	}
+	results := make(chan result, len(tasks))
+	var wait sync.WaitGroup
+	for _, task := range tasks {
+		wait.Add(1)
+		go func(task queryEnrichment) {
+			defer wait.Done()
+			raw, err := c.mcpReadQuery(task.tool, task.args)
+			results <- result{key: task.key, tool: task.tool, raw: raw, err: err}
+		}(task)
+	}
+	wait.Wait()
+	close(results)
+	for result := range results {
+		if result.err != nil {
+			fallback, _ := json.Marshal(map[string]any{
+				"available": false, "source": "robinhood-mcp", "tool": result.tool,
+			})
+			ctx[result.key] = fallback
+			continue
+		}
+		ctx[result.key] = result.raw
+	}
+}
+
+func (c *Client) mcpReadQuery(tool string, args map[string]any) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]any{"tool": tool, "args": args})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, c.Kernel+"/mcp/read-query", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.Authorize(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("MCP %s: HTTP %d", tool, resp.StatusCode)
+	}
+	var raw json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func safeSymbol(symbol string) bool {
