@@ -25,6 +25,16 @@ func protectedMode(mode string) config.ModeConfig {
 	}
 }
 
+func TestCompatibilityBrokerDoesNotBoxNilFake(t *testing.T) {
+	if got := compatibilityBroker(nil); got != nil {
+		t.Fatalf("nil fake became a non-nil compatibility adapter: %T", got)
+	}
+	fake := broker.NewFake(0)
+	if got := compatibilityBroker(fake); got != fake {
+		t.Fatalf("compatibility adapter=%T, want the fake broker", got)
+	}
+}
+
 func routeRequest(handler http.Handler, method, target, body, token string) *httptest.ResponseRecorder {
 	return routeRequestWithKey(handler, method, target, body, token, "")
 }

@@ -293,7 +293,7 @@ func main() {
 	}
 	s := &server{
 		limits: limits, mode: mode, account: account, execution: execution, market: market,
-		mcpLab: mcpLab, simVenue: simVenue, broker: simVenue, store: st,
+		mcpLab: mcpLab, simVenue: simVenue, broker: compatibilityBroker(simVenue), store: st,
 		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
 		providerDedupeVerified: brokerName == "fake" ||
@@ -640,6 +640,16 @@ func (s *server) executionProvider() broker.ExecutionProvider {
 		return s.execution
 	}
 	return s.broker
+}
+
+func compatibilityBroker(fake *broker.Fake) broker.Adapter {
+	// Converting a nil *Fake directly to broker.Adapter creates a non-nil
+	// interface whose method call panics. Production Robinhood construction has
+	// no compatibility broker, especially in read-only mode.
+	if fake == nil {
+		return nil
+	}
+	return fake
 }
 
 func (s *server) marketProvider() marketdata.Provider {

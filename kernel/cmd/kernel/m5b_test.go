@@ -481,7 +481,7 @@ func TestM5BHaltBeforePendingReplacementReleasesWithoutPlacement(t *testing.T) {
 	}
 }
 
-func TestM5BHaltCancelsOpenButDoesNotSuppressClose(t *testing.T) {
+func TestM5BHaltCancelsOpenButDoesNotRepriceExplicitCloseLimit(t *testing.T) {
 	s, st, execution, _, _ := newRepriceTestServer(t, "1", 3)
 	st.halted, st.haltReason = true, "operator stop"
 	if err := s.repriceOnce(context.Background()); err != nil {
@@ -520,9 +520,8 @@ func TestM5BHaltCancelsOpenButDoesNotSuppressClose(t *testing.T) {
 	if err := closeServer.repriceOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(closeExecution.requests) != 1 || closeExecution.requests[0].Side != "sell" ||
-		closeExecution.requests[0].PositionEffect != "close" {
-		t.Fatalf("halted close requests=%+v, want one eligible replacement", closeExecution.requests)
+	if len(closeExecution.requests) != 0 {
+		t.Fatalf("explicit close limit was repriced: requests=%+v", closeExecution.requests)
 	}
 }
 
