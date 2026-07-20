@@ -36,10 +36,17 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	})}
 	st := newMemoryStore()
 	s := &server{
-		mode:  config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret"},
+		mode:  config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret", AgentWebSessionKey: strings.Repeat("k", 32)},
 		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
 	}
-	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"workflow":"team","symbol":"sofi","query":"值得研究吗？","openai_api_key":"sk-test-secret"}`, "runtime-secret")
+	ciphertext, err := sealAgentSecret(s.mode.AgentWebSessionKey, "openai", "sk-test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutAgentSecret("openai", ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"workflow":"team","symbol":"sofi","query":"值得研究吗？"}`, "runtime-secret")
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -84,10 +91,18 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	}
 }
 
-func TestAgentQueryRequiresOpenAIAPIKey(t *testing.T) {
-	s := &server{mode: config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret"}}
+func TestAgentQueryRequiresConfiguredOpenAIAPIKey(t *testing.T) {
+	s := &server{mode: config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", AgentWebSessionKey: strings.Repeat("k", 32)}, store: newMemoryStore()}
 	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"SOFI","query":"test"}`, "runtime-secret")
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "OpenAI API token is required") {
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "OpenAI API token is not configured") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAgentQueryRejectsBrowserSuppliedCredential(t *testing.T) {
+	s := &server{mode: config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", AgentWebSessionKey: strings.Repeat("k", 32)}, store: newMemoryStore()}
+	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"SOFI","query":"test","openai_api_key":"must-not-cross-browser-boundary"}`, "runtime-secret")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid JSON body") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

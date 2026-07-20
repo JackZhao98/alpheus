@@ -120,6 +120,10 @@ type storeAPI interface {
 	CompleteAgentQueryJob(id string, result json.RawMessage) (bool, error)
 	FailAgentQueryJob(id, errorCode string) (bool, error)
 	GetAgentQueryJob(id string) (*store.AgentQueryJob, error)
+	PutAgentSecret(name string, ciphertext []byte) error
+	GetAgentSecret(name string) (*store.AgentSecretRecord, error)
+	DeleteAgentSecret(name string) error
+	ListAgentSecretNames() ([]string, error)
 }
 
 type dayStateReader interface {

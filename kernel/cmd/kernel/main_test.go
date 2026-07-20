@@ -101,6 +101,7 @@ type memoryStore struct {
 	controlTrackedFilled     map[string]units.Qty
 	controlExternalFilled    map[string]units.Qty
 	agentQueryJobs           map[string]store.AgentQueryJob
+	agentSecrets             map[string][]byte
 }
 
 func newMemoryStore() *memoryStore {
@@ -145,6 +146,7 @@ func newMemoryStore() *memoryStore {
 		controlTrackedFilled:     map[string]units.Qty{},
 		controlExternalFilled:    map[string]units.Qty{},
 		agentQueryJobs:           map[string]store.AgentQueryJob{},
+		agentSecrets:             map[string][]byte{},
 		eventPayloads:            map[string][]any{},
 		dayOpenEquity:            map[string]units.Micros{},
 		realizedPnL:              map[string]units.Micros{},
@@ -2240,6 +2242,41 @@ func (m *memoryStore) GetAgentQueryJob(id string) (*store.AgentQueryJob, error) 
 	}
 	job.Result = append(json.RawMessage(nil), job.Result...)
 	return &job, nil
+}
+
+func (m *memoryStore) PutAgentSecret(name string, ciphertext []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.agentSecrets[name] = append([]byte(nil), ciphertext...)
+	return nil
+}
+
+func (m *memoryStore) GetAgentSecret(name string) (*store.AgentSecretRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ciphertext, ok := m.agentSecrets[name]
+	if !ok {
+		return nil, nil
+	}
+	return &store.AgentSecretRecord{Name: name, Ciphertext: append([]byte(nil), ciphertext...)}, nil
+}
+
+func (m *memoryStore) DeleteAgentSecret(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.agentSecrets, name)
+	return nil
+}
+
+func (m *memoryStore) ListAgentSecretNames() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.agentSecrets))
+	for name := range m.agentSecrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (m *memoryStore) LoadGlobalHalt() (bool, string, error) {

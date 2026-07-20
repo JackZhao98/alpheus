@@ -18,6 +18,7 @@ async function restoreSession() {
   try {
     await request("/agent/auth/session");
     showAuthenticated(true);
+    await refreshCredentialStatus();
   } catch (_) {
     showAuthenticated(false);
   }
@@ -38,6 +39,35 @@ byId("login-form").addEventListener("submit", async (event) => {
     byId("login-error").textContent = "密码错误。";
   } finally {
     byId("login").disabled = false;
+  }
+});
+
+async function refreshCredentialStatus() {
+  const payload = await request("/agent/secrets");
+  const configured = Boolean(payload?.configured?.openai);
+  byId("openai-status").textContent = configured ? "已加密保存在数据库中。" : "尚未配置。";
+  return configured;
+}
+
+byId("save-openai").addEventListener("click", async () => {
+  const value = byId("openai-token").value.trim();
+  byId("query-error").textContent = "";
+  if (!value) {
+    byId("query-error").textContent = "请输入 OpenAI API Token。";
+    return;
+  }
+  byId("save-openai").disabled = true;
+  try {
+    await request("/agent/secrets/openai", {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({value})
+    });
+    byId("openai-token").value = "";
+    await refreshCredentialStatus();
+  } catch (error) {
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("save-openai").disabled = false;
   }
 });
 
@@ -65,14 +95,8 @@ byId("query-form").addEventListener("submit", async (event) => {
   const symbol = byId("symbol").value.trim().toUpperCase();
   const workflow = byId("workflow").value;
   const query = byId("question").value.trim();
-  const openaiToken = byId("openai-token").value.trim();
   if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !query) {
     byId("query-error").textContent = "请输入有效股票代码和问题。";
-    return;
-  }
-  if (!openaiToken) {
-    byId("query-error").textContent = "请输入 OpenAI API Token。";
-    byId("openai-token").focus();
     return;
   }
   byId("run").disabled = true;
@@ -81,7 +105,7 @@ byId("query-form").addEventListener("submit", async (event) => {
   try {
     let job = await request("/agent/query", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({workflow, symbol, query, openai_api_key:openaiToken})
+      body:JSON.stringify({workflow, symbol, query})
     });
     job = await waitForAgentQuery(job);
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");

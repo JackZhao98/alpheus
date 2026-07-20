@@ -19,28 +19,37 @@ type agentQueryInput struct {
 	OpenAIAPIKey string `json:"openai_api_key"`
 }
 
-// postAgentQuery creates a durable, non-trading MVP job. The model credential
-// is handed directly to the short-lived dispatcher and is never persisted.
+type agentQueryRequest struct {
+	Workflow string `json:"workflow"`
+	Symbol   string `json:"symbol"`
+	Query    string `json:"query"`
+}
+
+// postAgentQuery creates a durable, non-trading MVP job. The encrypted model
+// credential is loaded only after authentication and exists as plaintext only
+// for the lifetime of the dispatcher call; it is never part of the job.
 func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
-	var input agentQueryInput
-	if !decodeJSONBody(w, r, &input) {
+	var request agentQueryRequest
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
+	input := agentQueryInput{Workflow: request.Workflow, Symbol: request.Symbol, Query: request.Query}
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
 	input.Workflow = strings.TrimSpace(input.Workflow)
 	if input.Workflow == "" {
 		input.Workflow = "scout"
 	}
 	input.Query = strings.TrimSpace(input.Query)
-	input.OpenAIAPIKey = strings.TrimSpace(input.OpenAIAPIKey)
 	if (input.Workflow != "auto" && input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and query are required"})
 		return
 	}
-	if input.OpenAIAPIKey == "" || !validAgentAPIKey(input.OpenAIAPIKey) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OpenAI API token is required"})
+	openAIAPIKey, err := s.loadAgentSecret("openai")
+	if err != nil || !validAgentAPIKey(openAIAPIKey) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OpenAI API token is not configured"})
 		return
 	}
+	input.OpenAIAPIKey = openAIAPIKey
 
 	if s.store == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})

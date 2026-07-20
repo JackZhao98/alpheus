@@ -16,6 +16,9 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .card { padding:clamp(22px,4vw,38px); border:1px solid #285044; border-radius:18px; background:rgba(8,24,20,.92); box-shadow:0 24px 80px rgba(0,0,0,.28); }
 .login-card { max-width:480px; margin:0 auto; }
 .card-head,.result-head { display:flex; justify-content:space-between; gap:16px; align-items:center; }
+.credential-row { display:flex; justify-content:space-between; gap:16px; align-items:end; }
+.credential-row > div { flex:1; }
+.credential-row button { width:auto; margin:0; }
 .muted { color:#a6beb4; line-height:1.55; }
 .field-note { margin:0 0 4px; color:#86a59a; font-size:12px; line-height:1.5; }
 form { display:grid; gap:10px; }
