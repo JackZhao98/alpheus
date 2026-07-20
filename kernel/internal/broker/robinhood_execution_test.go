@@ -512,6 +512,44 @@ func TestRobinhoodEquityCancelMutatesOnceAndTerminalRetryIsReadOnly(t *testing.T
 		t.Fatalf("cancel calls=%+v", mutation.calls)
 	}
 }
+
+func TestRobinhoodEquityCancelPollsFreshUntilTerminal(t *testing.T) {
+	mutation := &recordingMutation{responses: map[string]json.RawMessage{
+		"cancel_equity_order": json.RawMessage(`{"data":{"accepted":true},"guide":"fixture"}`),
+	}}
+	caller := &sequenceReadCaller{
+		account: accountFixture(`[` + validAccount("wanted") + `]`),
+		equitySequence: []json.RawMessage{
+			equityLifecycleFixture("confirmed", "1", "0", "18", ""),
+			equityLifecycleFixture("confirmed", "1", "0", "18", ""),
+			equityLifecycleFixture("cancelled", "1", "0", "18", ""),
+		},
+	}
+	read, err := NewRobinhood(caller, "wanted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewRobinhoodExecution(read, mutation, executionInstrument{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.CancelOrder(context.Background(), executionOrderID)
+	if err != nil || result.State != "cancelled" {
+		t.Fatalf("cancel result=%+v err=%v", result, err)
+	}
+	caller.mu.Lock()
+	equityCalls := caller.equityCalls
+	caller.mu.Unlock()
+	if equityCalls != 3 {
+		t.Fatalf("equity reads=%d, want initial plus two confirmation reads", equityCalls)
+	}
+	mutation.mu.Lock()
+	defer mutation.mu.Unlock()
+	if len(mutation.calls) != 1 {
+		t.Fatalf("cancel calls=%+v", mutation.calls)
+	}
+}
+
 func TestRobinhoodEquityLimitPrecisionFailsBeforeMutation(t *testing.T) {
 	for name, request := range map[string]PlaceRequest{
 		"sub-micro tick": {

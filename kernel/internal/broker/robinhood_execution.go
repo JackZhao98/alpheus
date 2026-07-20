@@ -22,6 +22,14 @@ type RobinhoodExecution struct {
 	allowOption bool
 }
 
+var cancelConfirmationDelays = [...]time.Duration{
+	0,
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+}
+
 func NewRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader) (*RobinhoodExecution, error) {
 	return newRobinhoodExecution(read, mutation, instruments, false)
 }
@@ -196,7 +204,11 @@ func providerOrderShape(orderType string) (string, string) {
 }
 
 func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID string) (OrderResult, error) {
-	current, kind, err := r.getOrder(ctx, brokerOrderID)
+	// Cancel authority must never be derived from the interactive 15-second
+	// read cache. A stale working state here can race a fill or duplicate a
+	// cancellation that already reached the broker.
+	freshCtx := rhmcp.WithFreshReads(ctx)
+	current, kind, err := r.getOrder(freshCtx, brokerOrderID)
 	if err != nil {
 		return OrderResult{}, err
 	}
@@ -227,11 +239,63 @@ func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID stri
 		current.Reason = "cancel rejected by provider"
 		return current, nil
 	}
-	confirmed, _, err := r.getOrder(ctx, brokerOrderID)
-	if err != nil {
-		return OrderResult{}, fmt.Errorf("cancel final state unavailable")
+	return r.confirmCancelState(freshCtx, brokerOrderID, kind, current)
+}
+
+func (r *RobinhoodExecution) confirmCancelState(ctx context.Context, brokerOrderID, kind string, last OrderResult) (OrderResult, error) {
+	var lastErr error
+	for _, delay := range cancelConfirmationDelays {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				if last.State != "" {
+					return last, nil
+				}
+				return OrderResult{}, fmt.Errorf("cancel final state unavailable")
+			case <-timer.C:
+			}
+		}
+		confirmed, err := r.readKnownOrder(ctx, brokerOrderID, kind)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		last, lastErr = confirmed, nil
+		if confirmed.State != "submitted" && confirmed.State != "partially_filled" {
+			return confirmed, nil
+		}
 	}
-	return confirmed, nil
+	if last.State != "" {
+		return last, nil
+	}
+	return OrderResult{}, fmt.Errorf("cancel final state unavailable: %w", lastErr)
+}
+
+func (r *RobinhoodExecution) readKnownOrder(ctx context.Context, brokerOrderID, kind string) (OrderResult, error) {
+	switch kind {
+	case "equity":
+		orders, err := r.readEquityOrder(ctx, brokerOrderID)
+		if err != nil {
+			return OrderResult{}, err
+		}
+		if len(orders) != 1 {
+			return OrderResult{}, ErrNotFound
+		}
+		return normalizeEquityOrder(r.read.caller, orders[0])
+	case "option":
+		orders, err := r.readOptionOrder(ctx, brokerOrderID)
+		if err != nil {
+			return OrderResult{}, err
+		}
+		if len(orders) != 1 {
+			return OrderResult{}, ErrNotFound
+		}
+		return normalizeOptionOrder(r.read.caller, orders[0])
+	default:
+		return OrderResult{}, fmt.Errorf("cancel order kind is invalid")
+	}
 }
 
 func (r *RobinhoodExecution) GetOrder(ctx context.Context, brokerOrderID string) (OrderResult, error) {
