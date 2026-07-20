@@ -28,6 +28,7 @@ const (
 	TriggerKernelEvent       TriggerKind = "kernel_event"
 	TriggerExternalEvent     TriggerKind = "external_event"
 	TriggerSystemMaintenance TriggerKind = "system_maintenance"
+	TriggerSystemRecovery    TriggerKind = "system_recovery"
 )
 
 type RunState string
@@ -222,18 +223,18 @@ type TriggerRegistration struct {
 }
 
 type TriggerOccurrence struct {
-	SchemaRevision  uint16                `json:"schema_revision"`
-	OccurrenceID    string                `json:"occurrence_id"`
-	Registration    contracts.RevisionRef `json:"registration"`
-	Kind            TriggerKind           `json:"kind"`
-	Source          contracts.RecordRef   `json:"source"`
-	InitiatingActor contracts.AuditActor  `json:"initiating_actor"`
-	OwnerPolicy     contracts.RevisionRef `json:"owner_policy"`
-	OccurrenceKey   string                `json:"occurrence_key"`
-	Payload         *blob.BlobRef         `json:"payload,omitempty"`
-	OccurredAt      time.Time             `json:"occurred_at"`
-	ObservedAt      time.Time             `json:"observed_at"`
-	CommittedAt     time.Time             `json:"committed_at"`
+	SchemaRevision  uint16                 `json:"schema_revision"`
+	OccurrenceID    string                 `json:"occurrence_id"`
+	Registration    *contracts.RevisionRef `json:"registration,omitempty"`
+	Kind            TriggerKind            `json:"kind"`
+	Source          contracts.RecordRef    `json:"source"`
+	InitiatingActor contracts.AuditActor   `json:"initiating_actor"`
+	OwnerPolicy     contracts.RevisionRef  `json:"owner_policy"`
+	OccurrenceKey   string                 `json:"occurrence_key"`
+	Payload         *blob.BlobRef          `json:"payload,omitempty"`
+	OccurredAt      time.Time              `json:"occurred_at"`
+	ObservedAt      time.Time              `json:"observed_at"`
+	CommittedAt     time.Time              `json:"committed_at"`
 }
 
 type Run struct {
@@ -260,8 +261,9 @@ type Task struct {
 	RunID            string                `json:"run_id"`
 	ParentTaskID     string                `json:"parent_task_id,omitempty"`
 	Depth            int64                 `json:"depth"`
-	ObjectiveDigest  string                `json:"objective_digest"`
+	Objective        blob.BlobRef          `json:"objective"`
 	InputRefs        []contracts.RecordRef `json:"input_refs"`
+	OutputContract   contracts.RevisionRef `json:"output_contract"`
 	BudgetLedgerID   string                `json:"budget_ledger_id"`
 	SessionID        string                `json:"session_id,omitempty"`
 	ResultArtifactID string                `json:"result_artifact_id,omitempty"`
@@ -283,17 +285,17 @@ type Dependency struct {
 }
 
 type Session struct {
-	SchemaRevision         uint16       `json:"schema_revision"`
-	SessionID              string       `json:"session_id"`
-	RunID                  string       `json:"run_id"`
-	TaskID                 string       `json:"task_id"`
-	Generation             int64        `json:"generation"`
-	ExecutionBindingDigest string       `json:"execution_binding_digest"`
-	ContextManifestDigest  string       `json:"context_manifest_digest"`
-	LatestCheckpointID     string       `json:"latest_checkpoint_id,omitempty"`
-	State                  SessionState `json:"state"`
-	CreatedAt              time.Time    `json:"created_at"`
-	ClosedAt               *time.Time   `json:"closed_at,omitempty"`
+	SchemaRevision     uint16       `json:"schema_revision"`
+	SessionID          string       `json:"session_id"`
+	RunID              string       `json:"run_id"`
+	TaskID             string       `json:"task_id"`
+	Generation         int64        `json:"generation"`
+	ExecutionBinding   blob.BlobRef `json:"execution_binding"`
+	ContextManifest    blob.BlobRef `json:"context_manifest"`
+	LatestCheckpointID string       `json:"latest_checkpoint_id,omitempty"`
+	State              SessionState `json:"state"`
+	CreatedAt          time.Time    `json:"created_at"`
+	ClosedAt           *time.Time   `json:"closed_at,omitempty"`
 }
 
 type AttemptLease struct {
@@ -306,76 +308,126 @@ type AttemptLease struct {
 }
 
 type Attempt struct {
-	SchemaRevision  uint16             `json:"schema_revision"`
-	AttemptID       string             `json:"attempt_id"`
-	RunID           string             `json:"run_id"`
-	TaskID          string             `json:"task_id"`
-	SessionID       string             `json:"session_id"`
-	Ordinal         int64              `json:"ordinal"`
-	State           AttemptState       `json:"state"`
-	StateGeneration int64              `json:"state_generation"`
-	Lease           AttemptLease       `json:"lease"`
-	ResultDigest    string             `json:"result_digest,omitempty"`
-	Failure         *contracts.Failure `json:"failure,omitempty"`
-	CreatedAt       time.Time          `json:"created_at"`
-	UpdatedAt       time.Time          `json:"updated_at"`
-	TerminalAt      *time.Time         `json:"terminal_at,omitempty"`
+	SchemaRevision  uint16               `json:"schema_revision"`
+	AttemptID       string               `json:"attempt_id"`
+	RunID           string               `json:"run_id"`
+	TaskID          string               `json:"task_id"`
+	SessionID       string               `json:"session_id"`
+	Ordinal         int64                `json:"ordinal"`
+	State           AttemptState         `json:"state"`
+	StateGeneration int64                `json:"state_generation"`
+	Lease           AttemptLease         `json:"lease"`
+	ResultArtifact  *contracts.RecordRef `json:"result_artifact,omitempty"`
+	Failure         *contracts.Failure   `json:"failure,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	TerminalAt      *time.Time           `json:"terminal_at,omitempty"`
 }
 
 type Turn struct {
-	SchemaRevision uint16             `json:"schema_revision"`
-	TurnID         string             `json:"turn_id"`
-	RunID          string             `json:"run_id"`
-	TaskID         string             `json:"task_id"`
-	SessionID      string             `json:"session_id"`
-	AttemptID      string             `json:"attempt_id"`
-	Ordinal        int64              `json:"ordinal"`
-	Kind           TurnKind           `json:"kind"`
-	State          TurnState          `json:"state"`
-	RequestDigest  string             `json:"request_digest"`
-	ResultDigest   string             `json:"result_digest,omitempty"`
-	Failure        *contracts.Failure `json:"failure,omitempty"`
-	CreatedAt      time.Time          `json:"created_at"`
-	DispatchedAt   *time.Time         `json:"dispatched_at,omitempty"`
-	FinishedAt     *time.Time         `json:"finished_at,omitempty"`
+	SchemaRevision  uint16               `json:"schema_revision"`
+	TurnID          string               `json:"turn_id"`
+	RunID           string               `json:"run_id"`
+	TaskID          string               `json:"task_id"`
+	SessionID       string               `json:"session_id"`
+	AttemptID       string               `json:"attempt_id"`
+	Ordinal         int64                `json:"ordinal"`
+	Kind            TurnKind             `json:"kind"`
+	State           TurnState            `json:"state"`
+	StateGeneration int64                `json:"state_generation"`
+	RequestDigest   string               `json:"request_digest"`
+	Result          *contracts.RecordRef `json:"result,omitempty"`
+	Failure         *contracts.Failure   `json:"failure,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	DispatchedAt    *time.Time           `json:"dispatched_at,omitempty"`
+	FinishedAt      *time.Time           `json:"finished_at,omitempty"`
 }
 
 type ModelCallManifest struct {
-	SchemaRevision        uint16    `json:"schema_revision"`
-	CallID                string    `json:"call_id"`
-	TurnID                string    `json:"turn_id"`
-	AttemptID             string    `json:"attempt_id"`
-	IdempotencyKey        string    `json:"idempotency_key"`
-	Provider              string    `json:"provider"`
-	Model                 string    `json:"model"`
-	PromptDigest          string    `json:"prompt_digest"`
-	ContextManifestDigest string    `json:"context_manifest_digest"`
-	OutputContractDigest  string    `json:"output_contract_digest"`
-	RequestDigest         string    `json:"request_digest"`
-	MaxOutputTokens       int64     `json:"max_output_tokens"`
-	TimeoutMS             int64     `json:"timeout_ms"`
-	TemperatureMicros     int64     `json:"temperature_micros"`
-	CreatedAt             time.Time `json:"created_at"`
+	SchemaRevision               uint16       `json:"schema_revision"`
+	CallID                       string       `json:"call_id"`
+	TurnID                       string       `json:"turn_id"`
+	AttemptID                    string       `json:"attempt_id"`
+	IdempotencyKey               string       `json:"idempotency_key"`
+	Provider                     string       `json:"provider"`
+	Model                        string       `json:"model"`
+	PromptDigest                 string       `json:"prompt_digest"`
+	ContextManifest              blob.BlobRef `json:"context_manifest"`
+	OutputContractDigest         string       `json:"output_contract_digest"`
+	RequestDigest                string       `json:"request_digest"`
+	MaxOutputTokens              int64        `json:"max_output_tokens"`
+	ReservedInputTokens          int64        `json:"reserved_input_tokens"`
+	ReservedExternalCostMicroUSD int64        `json:"reserved_external_cost_micro_usd"`
+	TimeoutMS                    int64        `json:"timeout_ms"`
+	TemperatureMicros            int64        `json:"temperature_micros"`
+	CreatedAt                    time.Time    `json:"created_at"`
 }
 
 type ModelCallResult struct {
-	SchemaRevision    uint16            `json:"schema_revision"`
-	ResultID          string            `json:"result_id"`
-	CallID            string            `json:"call_id"`
-	IdempotencyKey    string            `json:"idempotency_key"`
-	RequestDigest     string            `json:"request_digest"`
-	ProviderRequestID string            `json:"provider_request_id"`
-	Output            blob.BlobRef      `json:"output"`
-	InputTokens       int64             `json:"input_tokens"`
-	OutputTokens      int64             `json:"output_tokens"`
-	FinishReason      ModelFinishReason `json:"finish_reason"`
-	CommittedAt       time.Time         `json:"committed_at"`
+	SchemaRevision       uint16            `json:"schema_revision"`
+	ResultID             string            `json:"result_id"`
+	CallID               string            `json:"call_id"`
+	AttemptID            string            `json:"attempt_id"`
+	TurnID               string            `json:"turn_id"`
+	IdempotencyKey       string            `json:"idempotency_key"`
+	RequestDigest        string            `json:"request_digest"`
+	ProviderRequestID    string            `json:"provider_request_id"`
+	Output               blob.BlobRef      `json:"output"`
+	InputTokens          int64             `json:"input_tokens"`
+	OutputTokens         int64             `json:"output_tokens"`
+	ExternalCostMicroUSD int64             `json:"external_cost_micro_usd"`
+	WallTimeMS           int64             `json:"wall_time_ms"`
+	FinishReason         ModelFinishReason `json:"finish_reason"`
+	CommittedAt          time.Time         `json:"committed_at"`
 }
 
 type ArtifactSection struct {
 	Name     string       `json:"name"`
 	Required bool         `json:"required"`
 	Content  blob.BlobRef `json:"content"`
+}
+
+// ModelCallManifestCandidate is Worker-supplied intent. The stable call ID is
+// proposed for replay; lineage, timestamps, state, and acceptance remain owned
+// by the Control Plane transaction.
+type ModelCallManifestCandidate struct {
+	CallID                       string       `json:"call_id"`
+	IdempotencyKey               string       `json:"idempotency_key"`
+	Provider                     string       `json:"provider"`
+	Model                        string       `json:"model"`
+	PromptDigest                 string       `json:"prompt_digest"`
+	ContextManifest              blob.BlobRef `json:"context_manifest"`
+	OutputContractDigest         string       `json:"output_contract_digest"`
+	RequestDigest                string       `json:"request_digest"`
+	MaxOutputTokens              int64        `json:"max_output_tokens"`
+	ReservedInputTokens          int64        `json:"reserved_input_tokens"`
+	ReservedExternalCostMicroUSD int64        `json:"reserved_external_cost_micro_usd"`
+	TimeoutMS                    int64        `json:"timeout_ms"`
+	TemperatureMicros            int64        `json:"temperature_micros"`
+}
+
+// ModelCallResultCandidate contains provider facts only. The Control Plane
+// derives the durable Result identity, Attempt/Turn lineage and commit time.
+type ModelCallResultCandidate struct {
+	CallID               string            `json:"call_id"`
+	RequestDigest        string            `json:"request_digest"`
+	ProviderRequestID    string            `json:"provider_request_id"`
+	Output               blob.BlobRef      `json:"output"`
+	InputTokens          int64             `json:"input_tokens"`
+	OutputTokens         int64             `json:"output_tokens"`
+	ExternalCostMicroUSD int64             `json:"external_cost_micro_usd"`
+	WallTimeMS           int64             `json:"wall_time_ms"`
+	FinishReason         ModelFinishReason `json:"finish_reason"`
+}
+
+// ArtifactCandidate is untrusted Worker output. The Control Plane derives all
+// canonical identity, lineage and time fields when accepting it.
+type ArtifactCandidate struct {
+	ArtifactType         string                `json:"artifact_type"`
+	OutputContractDigest string                `json:"output_contract_digest"`
+	EffectClass          contracts.EffectClass `json:"effect_class"`
+	Sections             []ArtifactSection     `json:"sections"`
 }
 
 type Artifact struct {
@@ -385,6 +437,7 @@ type Artifact struct {
 	TaskID               string                `json:"task_id"`
 	SessionID            string                `json:"session_id"`
 	AttemptID            string                `json:"attempt_id"`
+	SourceResult         contracts.RecordRef   `json:"source_result"`
 	ArtifactType         string                `json:"artifact_type"`
 	OutputContractDigest string                `json:"output_contract_digest"`
 	EffectClass          contracts.EffectClass `json:"effect_class"`
@@ -409,7 +462,7 @@ type Checkpoint struct {
 	SessionID            string                `json:"session_id"`
 	Generation           int64                 `json:"generation"`
 	PreviousCheckpointID string                `json:"previous_checkpoint_id,omitempty"`
-	ManifestDigest       string                `json:"manifest_digest"`
+	Manifest             blob.BlobRef          `json:"manifest"`
 	MustPreserveRefs     []contracts.RecordRef `json:"must_preserve_refs"`
 	Narrative            *blob.BlobRef         `json:"narrative,omitempty"`
 	CreatedByAttemptID   string                `json:"created_by_attempt_id"`
@@ -492,6 +545,57 @@ type HeartbeatAttemptCommand struct {
 	RequestedExtensionSeconds      int64                     `json:"requested_extension_seconds"`
 }
 
+type StartAttemptCommand struct {
+	SchemaRevision                 uint16                    `json:"schema_revision"`
+	Envelope                       contracts.CommandEnvelope `json:"envelope"`
+	AttemptID                      string                    `json:"attempt_id"`
+	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
+	LeaseGeneration                int64                     `json:"lease_generation"`
+	LeaseToken                     string                    `json:"lease_token"`
+}
+
+// DispatchModelCallCommand durably creates the Turn and Manifest and reserves
+// worst-case budget before the Worker performs the external model call.
+type DispatchModelCallCommand struct {
+	SchemaRevision                 uint16                     `json:"schema_revision"`
+	Envelope                       contracts.CommandEnvelope  `json:"envelope"`
+	AttemptID                      string                     `json:"attempt_id"`
+	ExpectedAttemptStateGeneration int64                      `json:"expected_attempt_state_generation"`
+	LeaseGeneration                int64                      `json:"lease_generation"`
+	LeaseToken                     string                     `json:"lease_token"`
+	TurnID                         string                     `json:"turn_id"`
+	Manifest                       ModelCallManifestCandidate `json:"manifest"`
+}
+
+// ResolveModelCallCommand records a successful or failed provider outcome. It
+// also resolves an existing unknown Turn without creating another provider
+// call identity. MarkModelCallUnknownCommand owns the unresolved transition.
+type ResolveModelCallCommand struct {
+	SchemaRevision                 uint16                    `json:"schema_revision"`
+	Envelope                       contracts.CommandEnvelope `json:"envelope"`
+	AttemptID                      string                    `json:"attempt_id"`
+	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
+	LeaseGeneration                int64                     `json:"lease_generation"`
+	LeaseToken                     string                    `json:"lease_token"`
+	TurnID                         string                    `json:"turn_id"`
+	ExpectedTurnStateGeneration    int64                     `json:"expected_turn_state_generation"`
+	Outcome                        TurnState                 `json:"outcome"`
+	Result                         *ModelCallResultCandidate `json:"result,omitempty"`
+	Failure                        *contracts.Failure        `json:"failure,omitempty"`
+}
+
+type MarkModelCallUnknownCommand struct {
+	SchemaRevision                 uint16                    `json:"schema_revision"`
+	Envelope                       contracts.CommandEnvelope `json:"envelope"`
+	AttemptID                      string                    `json:"attempt_id"`
+	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
+	LeaseGeneration                int64                     `json:"lease_generation"`
+	LeaseToken                     string                    `json:"lease_token"`
+	TurnID                         string                    `json:"turn_id"`
+	ExpectedTurnStateGeneration    int64                     `json:"expected_turn_state_generation"`
+	Failure                        contracts.Failure         `json:"failure"`
+}
+
 type CommitAttemptCommand struct {
 	SchemaRevision                 uint16                    `json:"schema_revision"`
 	Envelope                       contracts.CommandEnvelope `json:"envelope"`
@@ -499,8 +603,18 @@ type CommitAttemptCommand struct {
 	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
 	LeaseGeneration                int64                     `json:"lease_generation"`
 	LeaseToken                     string                    `json:"lease_token"`
-	Result                         ModelCallResult           `json:"result"`
-	Artifact                       Artifact                  `json:"artifact"`
+	Result                         contracts.RecordRef       `json:"result"`
+	Artifact                       ArtifactCandidate         `json:"artifact"`
+}
+
+type FailAttemptCommand struct {
+	SchemaRevision                 uint16                    `json:"schema_revision"`
+	Envelope                       contracts.CommandEnvelope `json:"envelope"`
+	AttemptID                      string                    `json:"attempt_id"`
+	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
+	LeaseGeneration                int64                     `json:"lease_generation"`
+	LeaseToken                     string                    `json:"lease_token"`
+	Failure                        contracts.Failure         `json:"failure"`
 }
 
 type RequestChildTaskCommand struct {
@@ -511,7 +625,8 @@ type RequestChildTaskCommand struct {
 	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
 	LeaseGeneration                int64                     `json:"lease_generation"`
 	LeaseToken                     string                    `json:"lease_token"`
-	ObjectiveDigest                string                    `json:"objective_digest"`
+	Objective                      blob.BlobRef              `json:"objective"`
 	InputRefs                      []contracts.RecordRef     `json:"input_refs"`
+	OutputContract                 contracts.RevisionRef     `json:"output_contract"`
 	RequestedLimit                 BudgetLimit               `json:"requested_limit"`
 }

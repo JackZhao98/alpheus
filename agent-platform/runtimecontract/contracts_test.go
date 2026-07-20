@@ -30,7 +30,12 @@ type fixture struct {
 	event        RuntimeEvent
 	claim        ClaimTaskCommand
 	heartbeat    HeartbeatAttemptCommand
+	start        StartAttemptCommand
+	dispatch     DispatchModelCallCommand
+	resolve      ResolveModelCallCommand
+	unknown      MarkModelCallUnknownCommand
 	commit       CommitAttemptCommand
+	fail         FailAttemptCommand
 	child        RequestChildTaskCommand
 }
 
@@ -57,7 +62,12 @@ func TestContractsValidate(t *testing.T) {
 		"event":        value.event,
 		"claim":        value.claim,
 		"heartbeat":    value.heartbeat,
+		"start":        value.start,
+		"dispatch":     value.dispatch,
+		"resolve":      value.resolve,
+		"unknown":      value.unknown,
 		"commit":       value.commit,
+		"fail":         value.fail,
 		"child":        value.child,
 	}
 	for name, contract := range tests {
@@ -110,11 +120,122 @@ func TestContractsFailClosed(t *testing.T) {
 		}
 	})
 
-	t.Run("commit binds model output", func(t *testing.T) {
+	t.Run("commit requires canonical result", func(t *testing.T) {
 		value := validFixture().commit
-		value.Artifact.Sections[0].Content.BlobID = "20000000-0000-4000-8000-000000000099"
+		value.Result.Owner = contracts.OwnerWorker
 		if value.Validate() == nil {
-			t.Fatal("unbound artifact output passed")
+			t.Fatal("non-canonical result passed")
+		}
+	})
+
+	t.Run("unknown outcome has its own command", func(t *testing.T) {
+		value := validFixture().resolve
+		value.Outcome = TurnUnknown
+		value.Result = nil
+		failure := contracts.Failure{Code: "provider_unknown", Message: "unknown", Retryable: true}
+		value.Failure = &failure
+		if value.Validate() == nil {
+			t.Fatal("unknown outcome passed resolve command")
+		}
+	})
+
+	t.Run("model output is bound to call request", func(t *testing.T) {
+		value := validFixture().resolve
+		value.Result.Output.Origin.RecordID = "call-2"
+		if value.Validate() == nil {
+			t.Fatal("unbound model output passed")
+		}
+	})
+
+	t.Run("trigger payload is control owned", func(t *testing.T) {
+		value := validFixture().occurrence
+		payload := runtimeBlob("trigger_payload", "payload-1", '8', value.CommittedAt)
+		payload.Origin.Owner = contracts.OwnerWorker
+		value.Payload = &payload
+		if value.Validate() == nil {
+			t.Fatal("worker-owned trigger payload passed")
+		}
+	})
+
+	t.Run("checkpoint narrative is control owned", func(t *testing.T) {
+		value := validFixture().checkpoint
+		narrative := runtimeBlob("checkpoint_narrative", "narrative-1", '8', value.CreatedAt)
+		narrative.Origin.Owner = contracts.OwnerWorker
+		value.Narrative = &narrative
+		if value.Validate() == nil {
+			t.Fatal("worker-owned checkpoint narrative passed")
+		}
+	})
+
+	t.Run("recovery occurrence cannot claim registration", func(t *testing.T) {
+		value := validFixture().occurrence
+		value.Kind = TriggerSystemRecovery
+		value.Source.RecordType = "recovery_occurrence"
+		if value.Validate() == nil {
+			t.Fatal("registered recovery occurrence passed")
+		}
+	})
+
+	t.Run("run cannot predate committed origin", func(t *testing.T) {
+		value := validFixture().run
+		value.CreatedAt = value.Origin.CommittedAt.Add(-time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("run predating committed origin passed")
+		}
+	})
+
+	t.Run("run requires canonical owner policy type", func(t *testing.T) {
+		value := validFixture().run
+		value.Origin.OwnerPolicy.RecordType = "owner_policy"
+		if value.Validate() == nil {
+			t.Fatal("non-canonical owner policy type passed")
+		}
+	})
+
+	t.Run("terminal time cannot exceed update time", func(t *testing.T) {
+		value := validFixture().run
+		future := value.UpdatedAt.Add(time.Nanosecond)
+		value.TerminalAt = &future
+		if value.Validate() == nil {
+			t.Fatal("terminal time after update passed")
+		}
+	})
+
+	t.Run("task cannot reference future objective", func(t *testing.T) {
+		value := validFixture().task
+		value.Objective.CommittedAt = value.CreatedAt.Add(time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("future task objective passed")
+		}
+	})
+
+	t.Run("record identity cannot carry conflicting digests", func(t *testing.T) {
+		value := validFixture().task
+		conflict := value.InputRefs[0]
+		conflict.RecordDigest = digest('9')
+		value.InputRefs = append(value.InputRefs, conflict)
+		if value.Validate() == nil {
+			t.Fatal("conflicting record identity passed")
+		}
+	})
+
+	t.Run("attempt update cannot predate heartbeat", func(t *testing.T) {
+		value := validFixture().attempt
+		value.UpdatedAt = value.Lease.HeartbeatAt.Add(-time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("attempt update predating heartbeat passed")
+		}
+	})
+
+	t.Run("unknown turn update cannot predate dispatch", func(t *testing.T) {
+		value := validFixture().turn
+		value.State = TurnUnknown
+		value.Result = nil
+		value.FinishedAt = nil
+		value.Failure = &contracts.Failure{Code: "provider_unknown", Message: "unknown", Retryable: true}
+		value.UpdatedAt = value.DispatchedAt.Add(-time.Nanosecond)
+		if value.Validate() == nil {
+			t.Fatal("unknown turn predating dispatch passed")
 		}
 	})
 
@@ -173,6 +294,26 @@ func TestStateTransitions(t *testing.T) {
 	}
 }
 
+func TestRecoveryOccurrenceAndUnknownTurnValidate(t *testing.T) {
+	occurrence := validFixture().occurrence
+	occurrence.Kind = TriggerSystemRecovery
+	occurrence.Registration = nil
+	occurrence.Source.RecordType = "recovery_occurrence"
+	if err := occurrence.Validate(); err != nil {
+		t.Fatalf("recovery occurrence: %v", err)
+	}
+
+	turn := validFixture().turn
+	turn.State = TurnUnknown
+	turn.StateGeneration = 3
+	turn.Result = nil
+	turn.FinishedAt = nil
+	turn.Failure = &contracts.Failure{Code: "provider_unknown", Message: "provider outcome unavailable", Retryable: true}
+	if err := turn.Validate(); err != nil {
+		t.Fatalf("unknown turn: %v", err)
+	}
+}
+
 func validFixture() fixture {
 	t0 := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
@@ -183,8 +324,9 @@ func validFixture() fixture {
 	deadline := t0.Add(time.Hour)
 	worker := contracts.AuditActor{PrincipalID: "worker-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceWorker}
 	control := contracts.AuditActor{PrincipalID: "control-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI}
-	ownerPolicy := revision(contracts.OwnerPlatformGovernance, "owner_policy", "owner-policy-1", 1, 'a')
+	ownerPolicy := revision(contracts.OwnerPlatformGovernance, "owner_policy_revision", "owner-policy-1", 1, 'a')
 	runtimePolicy := revision(contracts.OwnerAgentControl, "runtime_policy", "runtime-policy-1", 1, 'b')
+	outputContract := revision(contracts.OwnerAgentControl, "output_contract_revision", "output-contract-1", 1, '3')
 	registrationRef := revision(contracts.OwnerAgentControl, "trigger_registration", "trigger-1", 1, 'c')
 	occurrenceRef := record(contracts.OwnerAgentControl, "trigger_occurrence", "occurrence-1", 'd')
 	originSource := record(contracts.OwnerAgentControl, "schedule_occurrence", "schedule-occurrence-1", 'e')
@@ -199,19 +341,27 @@ func validFixture() fixture {
 		MaxTasks: 10, MaxDepth: 3, MaxFanout: 4, MaxParallelism: 2,
 		MaxInvalidOutputRetries: 1, MaxInfrastructureRetries: 2,
 	}
+	objective := runtimeBlob("task_objective", "objective-1", '4', t0)
+	executionBinding := runtimeBlob("execution_binding", "binding-1", '5', t0)
+	contextManifest := runtimeBlob("context_manifest", "context-1", '6', t0)
+	checkpointManifest := runtimeBlob("checkpoint_manifest", "checkpoint-manifest-1", 'a', t3)
 	output := blob.BlobRef{
 		SchemaRevision: 1, BlobID: "20000000-0000-4000-8000-000000000001",
 		ContentDigest: digest('f'), MediaType: "application/json", SizeBytes: 128,
-		Origin: record(contracts.OwnerWorker, "model_call_output", "result-1", '1'), CommittedAt: t2,
+		Origin: record(contracts.OwnerAgentControl, "model_call_manifest", "call-1", '2'), CommittedAt: t2,
 	}
 	result := ModelCallResult{
 		SchemaRevision: 1, ResultID: "result-1", CallID: "call-1", IdempotencyKey: "call-key-1",
+		AttemptID: "attempt-1", TurnID: "turn-1",
 		RequestDigest: digest('2'), ProviderRequestID: "provider-request-1", Output: output,
-		InputTokens: 100, OutputTokens: 20, FinishReason: FinishStop, CommittedAt: t2,
+		InputTokens: 100, OutputTokens: 20, ExternalCostMicroUSD: 1000, WallTimeMS: 500,
+		FinishReason: FinishStop, CommittedAt: t2,
 	}
+	resultRef := record(contracts.OwnerAgentControl, "model_call_result", "result-1", '7')
 	artifact := Artifact{
 		SchemaRevision: 1, ArtifactID: "artifact-1", RunID: "run-1", TaskID: "task-1",
-		SessionID: "session-1", AttemptID: "attempt-1", ArtifactType: "decision_draft",
+		SessionID: "session-1", AttemptID: "attempt-1", SourceResult: resultRef,
+		ArtifactType:         "decision_draft",
 		OutputContractDigest: digest('3'), EffectClass: contracts.EffectNone,
 		Sections: []ArtifactSection{{Name: "result", Required: true, Content: output}}, CreatedAt: t3,
 	}
@@ -224,6 +374,22 @@ func validFixture() fixture {
 		}
 	}
 	artifactRef := record(contracts.OwnerAgentControl, "artifact", "artifact-1", '9')
+	manifestCandidate := ModelCallManifestCandidate{
+		CallID: "call-1", IdempotencyKey: "call-key-1", Provider: "anthropic", Model: "claude-sonnet",
+		PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: digest('3'),
+		RequestDigest: digest('2'), MaxOutputTokens: 2000, ReservedInputTokens: 500,
+		ReservedExternalCostMicroUSD: 5000, TimeoutMS: 60000, TemperatureMicros: 200000,
+	}
+	resultCandidate := ModelCallResultCandidate{
+		CallID: "call-1", RequestDigest: digest('2'), ProviderRequestID: "provider-request-1",
+		Output: output, InputTokens: 100, OutputTokens: 20, ExternalCostMicroUSD: 1000,
+		WallTimeMS: 500, FinishReason: FinishStop,
+	}
+	artifactCandidate := ArtifactCandidate{
+		ArtifactType: "decision_draft", OutputContractDigest: digest('3'), EffectClass: contracts.EffectNone,
+		Sections: []ArtifactSection{{Name: "result", Required: true, Content: output}},
+	}
+	failure := contracts.Failure{Code: "provider_timeout", Message: "provider outcome unavailable", Retryable: true}
 	return fixture{
 		policy: RuntimePolicy{
 			SchemaRevision: 1, PolicyID: "runtime-policy-1", Generation: 1, DefaultRunLimit: limit,
@@ -237,50 +403,51 @@ func validFixture() fixture {
 			Enabled: true, UpdatedBy: control, UpdatedAt: t0,
 		},
 		occurrence: TriggerOccurrence{
-			SchemaRevision: 1, OccurrenceID: "occurrence-1", Registration: registrationRef,
+			SchemaRevision: 1, OccurrenceID: "occurrence-1", Registration: &registrationRef,
 			Kind: TriggerSchedule, Source: originSource, InitiatingActor: control, OwnerPolicy: ownerPolicy,
 			OccurrenceKey: "2026-07-20", OccurredAt: t0, ObservedAt: t1, CommittedAt: t2,
 		},
 		run: Run{
 			SchemaRevision: 1, RunID: "run-1", Occurrence: &occurrenceRef, Origin: origin,
 			RuntimePolicy: runtimePolicy, BudgetLedgerID: "ledger-run-1", RootTaskID: "task-1",
-			State: RunSucceeded, StateGeneration: 3, CreatedAt: t0, UpdatedAt: terminal,
+			State: RunSucceeded, StateGeneration: 3, CreatedAt: t2, UpdatedAt: terminal,
 			DeadlineAt: deadline, TerminalAt: &terminal,
 		},
 		task: Task{
 			SchemaRevision: 1, TaskID: "task-1", RunID: "run-1", Depth: 0,
-			ObjectiveDigest: digest('4'), InputRefs: []contracts.RecordRef{originSource},
+			Objective: objective, InputRefs: []contracts.RecordRef{originSource}, OutputContract: outputContract,
 			BudgetLedgerID: "ledger-task-1", SessionID: "session-1", ResultArtifactID: "artifact-1",
-			State: TaskSucceeded, StateGeneration: 4, CreatedAt: t0, UpdatedAt: terminal,
+			State: TaskSucceeded, StateGeneration: 4, CreatedAt: t2, UpdatedAt: terminal,
 			DeadlineAt: deadline, TerminalAt: &terminal,
 		},
 		dependency: Dependency{
 			SchemaRevision: 1, TaskID: "task-2", DependsOnTaskID: "task-1",
-			RequiresSuccess: true, CreatedAt: t0,
+			RequiresSuccess: true, CreatedAt: t2,
 		},
 		session: Session{
 			SchemaRevision: 1, SessionID: "session-1", RunID: "run-1", TaskID: "task-1",
-			Generation: 1, ExecutionBindingDigest: digest('5'), ContextManifestDigest: digest('6'),
-			LatestCheckpointID: "checkpoint-1", State: SessionClosed, CreatedAt: t0, ClosedAt: &closed,
+			Generation: 1, ExecutionBinding: executionBinding, ContextManifest: contextManifest,
+			LatestCheckpointID: "checkpoint-1", State: SessionClosed, CreatedAt: t2, ClosedAt: &closed,
 		},
 		attempt: Attempt{
 			SchemaRevision: 1, AttemptID: "attempt-1", RunID: "run-1", TaskID: "task-1",
 			SessionID: "session-1", Ordinal: 1, State: AttemptResultCommitted, StateGeneration: 3,
-			Lease:        AttemptLease{Generation: 1, Token: "lease-1", Worker: worker, ClaimedAt: t0, HeartbeatAt: t1, ExpiresAt: deadline},
-			ResultDigest: digest('7'), CreatedAt: t0, UpdatedAt: terminal, TerminalAt: &terminal,
+			Lease:          AttemptLease{Generation: 1, Token: "lease-1", Worker: worker, ClaimedAt: t2, HeartbeatAt: t2, ExpiresAt: deadline},
+			ResultArtifact: &artifactRef, CreatedAt: t2, UpdatedAt: terminal, TerminalAt: &terminal,
 		},
 		turn: Turn{
 			SchemaRevision: 1, TurnID: "turn-1", RunID: "run-1", TaskID: "task-1",
 			SessionID: "session-1", AttemptID: "attempt-1", Ordinal: 1, Kind: TurnModelCall,
-			State: TurnResultCommitted, RequestDigest: digest('2'), ResultDigest: digest('7'),
-			CreatedAt: t0, DispatchedAt: &t1, FinishedAt: &t2,
+			State: TurnResultCommitted, StateGeneration: 3, RequestDigest: digest('2'), Result: &resultRef,
+			CreatedAt: t2, UpdatedAt: t2, DispatchedAt: &t2, FinishedAt: &t2,
 		},
 		manifest: ModelCallManifest{
 			SchemaRevision: 1, CallID: "call-1", TurnID: "turn-1", AttemptID: "attempt-1",
 			IdempotencyKey: "call-key-1", Provider: "anthropic", Model: "claude-sonnet",
-			PromptDigest: digest('8'), ContextManifestDigest: digest('6'), OutputContractDigest: digest('3'),
-			RequestDigest: digest('2'), MaxOutputTokens: 2000, TimeoutMS: 60000, TemperatureMicros: 200000,
-			CreatedAt: t0,
+			PromptDigest: digest('8'), ContextManifest: contextManifest, OutputContractDigest: digest('3'),
+			RequestDigest: digest('2'), MaxOutputTokens: 2000, ReservedInputTokens: 500,
+			ReservedExternalCostMicroUSD: 5000, TimeoutMS: 60000, TemperatureMicros: 200000,
+			CreatedAt: t2,
 		},
 		result:   result,
 		artifact: artifact,
@@ -290,7 +457,7 @@ func validFixture() fixture {
 		},
 		checkpoint: Checkpoint{
 			SchemaRevision: 1, CheckpointID: "checkpoint-1", RunID: "run-1", TaskID: "task-1",
-			SessionID: "session-1", Generation: 1, ManifestDigest: digest('a'),
+			SessionID: "session-1", Generation: 1, Manifest: checkpointManifest,
 			MustPreserveRefs: []contracts.RecordRef{artifactRef}, CreatedByAttemptID: "attempt-1", CreatedAt: t3,
 		},
 		ledger: BudgetLedger{
@@ -322,18 +489,42 @@ func validFixture() fixture {
 		},
 		heartbeat: HeartbeatAttemptCommand{
 			SchemaRevision: 1, Envelope: envelope("heartbeat_attempt", 'c'), AttemptID: "attempt-1",
-			ExpectedAttemptStateGeneration: 1, LeaseGeneration: 1, LeaseToken: "lease-1", RequestedExtensionSeconds: 30,
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1", RequestedExtensionSeconds: 30,
+		},
+		start: StartAttemptCommand{
+			SchemaRevision: 1, Envelope: envelope("start_attempt", 'd'), AttemptID: "attempt-1",
+			ExpectedAttemptStateGeneration: 1, LeaseGeneration: 1, LeaseToken: "lease-1",
+		},
+		dispatch: DispatchModelCallCommand{
+			SchemaRevision: 1, Envelope: envelope("dispatch_model_call", 'e'), AttemptID: "attempt-1",
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
+			TurnID: "turn-1", Manifest: manifestCandidate,
+		},
+		resolve: ResolveModelCallCommand{
+			SchemaRevision: 1, Envelope: envelope("resolve_model_call", 'f'), AttemptID: "attempt-1",
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
+			TurnID: "turn-1", ExpectedTurnStateGeneration: 2, Outcome: TurnResultCommitted,
+			Result: &resultCandidate,
+		},
+		unknown: MarkModelCallUnknownCommand{
+			SchemaRevision: 1, Envelope: envelope("mark_model_call_unknown", '1'), AttemptID: "attempt-1",
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
+			TurnID: "turn-1", ExpectedTurnStateGeneration: 2, Failure: failure,
 		},
 		commit: CommitAttemptCommand{
-			SchemaRevision: 1, Envelope: envelope("commit_attempt", 'd'), AttemptID: "attempt-1",
+			SchemaRevision: 1, Envelope: envelope("commit_attempt", '2'), AttemptID: "attempt-1",
 			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1",
-			Result: result, Artifact: artifact,
+			Result: resultRef, Artifact: artifactCandidate,
+		},
+		fail: FailAttemptCommand{
+			SchemaRevision: 1, Envelope: envelope("fail_attempt", '3'), AttemptID: "attempt-1",
+			ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1, LeaseToken: "lease-1", Failure: failure,
 		},
 		child: RequestChildTaskCommand{
-			SchemaRevision: 1, Envelope: envelope("request_child_task", 'e'), ParentTaskID: "task-1",
+			SchemaRevision: 1, Envelope: envelope("request_child_task", '4'), ParentTaskID: "task-1",
 			AttemptID: "attempt-1", ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1,
-			LeaseToken: "lease-1", ObjectiveDigest: digest('f'), InputRefs: []contracts.RecordRef{artifactRef},
-			RequestedLimit: limit,
+			LeaseToken: "lease-1", Objective: objective, InputRefs: []contracts.RecordRef{artifactRef},
+			OutputContract: outputContract, RequestedLimit: limit,
 		},
 	}
 }
@@ -344,6 +535,15 @@ func revision(owner contracts.Owner, recordType, id string, generation int64, ma
 
 func record(owner contracts.Owner, recordType, id string, marker byte) contracts.RecordRef {
 	return contracts.RecordRef{Owner: owner, RecordType: recordType, RecordID: id, SchemaRevision: 1, RecordDigest: digest(marker)}
+}
+
+func runtimeBlob(recordType, id string, marker byte, committedAt time.Time) blob.BlobRef {
+	return blob.BlobRef{
+		SchemaRevision: 1,
+		BlobID:         "20000000-0000-4000-8000-" + strings.Repeat(string(marker), 12),
+		ContentDigest:  digest(marker), MediaType: "application/json", SizeBytes: 128,
+		Origin: record(contracts.OwnerAgentControl, recordType, id, marker), CommittedAt: committedAt,
+	}
 }
 
 func digest(marker byte) string {

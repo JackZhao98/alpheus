@@ -22,8 +22,13 @@
     {"$ref": "#/$defs/RecoveryRecord"},
     {"$ref": "#/$defs/RuntimeEvent"},
     {"$ref": "#/$defs/ClaimTaskCommand"},
+    {"$ref": "#/$defs/StartAttemptCommand"},
     {"$ref": "#/$defs/HeartbeatAttemptCommand"},
+    {"$ref": "#/$defs/DispatchModelCallCommand"},
+    {"$ref": "#/$defs/ResolveModelCallCommand"},
+    {"$ref": "#/$defs/MarkModelCallUnknownCommand"},
     {"$ref": "#/$defs/CommitAttemptCommand"},
+    {"$ref": "#/$defs/FailAttemptCommand"},
     {"$ref": "#/$defs/RequestChildTaskCommand"}
   ],
   "$defs": {
@@ -94,6 +99,50 @@
         "content": {"$ref": "#/$defs/BlobRef"}
       }
     },
+    "ModelCallManifestCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["call_id", "idempotency_key", "provider", "model", "prompt_digest", "context_manifest", "output_contract_digest", "request_digest", "max_output_tokens", "reserved_input_tokens", "reserved_external_cost_micro_usd", "timeout_ms", "temperature_micros"],
+      "properties": {
+        "call_id": {"$ref": "#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "#/$defs/Identifier"},
+        "provider": {"$ref": "#/$defs/Identifier"},
+        "model": {"$ref": "#/$defs/Identifier"},
+        "prompt_digest": {"$ref": "#/$defs/Digest"},
+        "context_manifest": {"$ref": "#/$defs/BlobRef"},
+        "output_contract_digest": {"$ref": "#/$defs/Digest"},
+        "request_digest": {"$ref": "#/$defs/Digest"},
+        "max_output_tokens": {"type": "integer", "minimum": 1},
+        "reserved_input_tokens": {"type": "integer", "minimum": 0},
+        "reserved_external_cost_micro_usd": {"type": "integer", "minimum": 0},
+        "timeout_ms": {"type": "integer", "minimum": 1},
+        "temperature_micros": {"type": "integer", "minimum": 0}
+      }
+    },
+    "ModelCallResultCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["call_id", "request_digest", "provider_request_id", "output", "input_tokens", "output_tokens", "external_cost_micro_usd", "wall_time_ms", "finish_reason"],
+      "properties": {
+        "call_id": {"$ref": "#/$defs/Identifier"},
+        "request_digest": {"$ref": "#/$defs/Digest"},
+        "provider_request_id": {"$ref": "#/$defs/Identifier"},
+        "output": {"$ref": "#/$defs/BlobRef"},
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "external_cost_micro_usd": {"type": "integer", "minimum": 0},
+        "wall_time_ms": {"type": "integer", "minimum": 0},
+        "finish_reason": {"enum": ["stop", "tool_use", "length", "content_filter"]}
+      }
+    },
+    "ArtifactCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["artifact_type", "output_contract_digest", "effect_class", "sections"],
+      "properties": {
+        "artifact_type": {"$ref": "#/$defs/Name"},
+        "output_contract_digest": {"$ref": "#/$defs/Digest"},
+        "effect_class": {"const": "none"},
+        "sections": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/ArtifactSection"}}
+      }
+    },
     "RuntimePolicy": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_revision", "policy_id", "generation", "default_run_limit", "max_lease_seconds", "max_heartbeat_extension_seconds", "max_claim_batch", "max_dependencies", "max_artifact_sections", "dead_letter_retention_seconds", "updated_by", "updated_at"],
@@ -130,12 +179,19 @@
     },
     "TriggerOccurrence": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "occurrence_id", "registration", "kind", "source", "initiating_actor", "owner_policy", "occurrence_key", "occurred_at", "observed_at", "committed_at"],
+      "required": ["schema_revision", "occurrence_id", "kind", "source", "initiating_actor", "owner_policy", "occurrence_key", "occurred_at", "observed_at", "committed_at"],
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "system_recovery"}}, "required": ["kind"]},
+          "then": {"not": {"required": ["registration"]}},
+          "else": {"required": ["registration"]}
+        }
+      ],
       "properties": {
         "schema_revision": {"const": 1},
         "occurrence_id": {"$ref": "#/$defs/Identifier"},
         "registration": {"$ref": "#/$defs/RevisionRef"},
-        "kind": {"enum": ["schedule", "kernel_event", "external_event", "system_maintenance"]},
+        "kind": {"enum": ["schedule", "kernel_event", "external_event", "system_maintenance", "system_recovery"]},
         "source": {"$ref": "#/$defs/RecordRef"},
         "initiating_actor": {"$ref": "#/$defs/AuditActor"},
         "owner_policy": {"$ref": "#/$defs/RevisionRef"},
@@ -169,15 +225,16 @@
     },
     "Task": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "task_id", "run_id", "depth", "objective_digest", "input_refs", "budget_ledger_id", "state", "state_generation", "created_at", "updated_at", "deadline_at"],
+      "required": ["schema_revision", "task_id", "run_id", "depth", "objective", "input_refs", "output_contract", "budget_ledger_id", "state", "state_generation", "created_at", "updated_at", "deadline_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "task_id": {"$ref": "#/$defs/Identifier"},
         "run_id": {"$ref": "#/$defs/Identifier"},
         "parent_task_id": {"$ref": "#/$defs/Identifier"},
         "depth": {"type": "integer", "minimum": 0},
-        "objective_digest": {"$ref": "#/$defs/Digest"},
+        "objective": {"$ref": "#/$defs/BlobRef"},
         "input_refs": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/RecordRef"}},
+        "output_contract": {"$ref": "#/$defs/RevisionRef"},
         "budget_ledger_id": {"$ref": "#/$defs/Identifier"},
         "session_id": {"$ref": "#/$defs/Identifier"},
         "result_artifact_id": {"$ref": "#/$defs/Identifier"},
@@ -203,15 +260,15 @@
     },
     "Session": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "session_id", "run_id", "task_id", "generation", "execution_binding_digest", "context_manifest_digest", "state", "created_at"],
+      "required": ["schema_revision", "session_id", "run_id", "task_id", "generation", "execution_binding", "context_manifest", "state", "created_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "session_id": {"$ref": "#/$defs/Identifier"},
         "run_id": {"$ref": "#/$defs/Identifier"},
         "task_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1},
-        "execution_binding_digest": {"$ref": "#/$defs/Digest"},
-        "context_manifest_digest": {"$ref": "#/$defs/Digest"},
+        "execution_binding": {"$ref": "#/$defs/BlobRef"},
+        "context_manifest": {"$ref": "#/$defs/BlobRef"},
         "latest_checkpoint_id": {"$ref": "#/$defs/Identifier"},
         "state": {"enum": ["open", "closed"]},
         "created_at": {"$ref": "#/$defs/Timestamp"},
@@ -231,7 +288,7 @@
         "state": {"enum": ["leased", "executing", "result_committed", "failed", "timed_out", "canceled", "superseded"]},
         "state_generation": {"type": "integer", "minimum": 1},
         "lease": {"$ref": "#/$defs/AttemptLease"},
-        "result_digest": {"$ref": "#/$defs/Digest"},
+        "result_artifact": {"$ref": "#/$defs/RecordRef"},
         "failure": {"$ref": "#/$defs/Failure"},
         "created_at": {"$ref": "#/$defs/Timestamp"},
         "updated_at": {"$ref": "#/$defs/Timestamp"},
@@ -240,7 +297,7 @@
     },
     "Turn": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "turn_id", "run_id", "task_id", "session_id", "attempt_id", "ordinal", "kind", "state", "request_digest", "created_at"],
+      "required": ["schema_revision", "turn_id", "run_id", "task_id", "session_id", "attempt_id", "ordinal", "kind", "state", "state_generation", "request_digest", "created_at", "updated_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "turn_id": {"$ref": "#/$defs/Identifier"},
@@ -251,17 +308,19 @@
         "ordinal": {"type": "integer", "minimum": 1},
         "kind": {"const": "model_call"},
         "state": {"enum": ["planned", "dispatched", "result_committed", "failed", "unknown", "canceled"]},
+        "state_generation": {"type": "integer", "minimum": 1},
         "request_digest": {"$ref": "#/$defs/Digest"},
-        "result_digest": {"$ref": "#/$defs/Digest"},
+        "result": {"$ref": "#/$defs/RecordRef"},
         "failure": {"$ref": "#/$defs/Failure"},
         "created_at": {"$ref": "#/$defs/Timestamp"},
+        "updated_at": {"$ref": "#/$defs/Timestamp"},
         "dispatched_at": {"$ref": "#/$defs/Timestamp"},
         "finished_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
     "ModelCallManifest": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "call_id", "turn_id", "attempt_id", "idempotency_key", "provider", "model", "prompt_digest", "context_manifest_digest", "output_contract_digest", "request_digest", "max_output_tokens", "timeout_ms", "temperature_micros", "created_at"],
+      "required": ["schema_revision", "call_id", "turn_id", "attempt_id", "idempotency_key", "provider", "model", "prompt_digest", "context_manifest", "output_contract_digest", "request_digest", "max_output_tokens", "reserved_input_tokens", "reserved_external_cost_micro_usd", "timeout_ms", "temperature_micros", "created_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "call_id": {"$ref": "#/$defs/Identifier"},
@@ -271,10 +330,12 @@
         "provider": {"$ref": "#/$defs/Identifier"},
         "model": {"$ref": "#/$defs/Identifier"},
         "prompt_digest": {"$ref": "#/$defs/Digest"},
-        "context_manifest_digest": {"$ref": "#/$defs/Digest"},
+        "context_manifest": {"$ref": "#/$defs/BlobRef"},
         "output_contract_digest": {"$ref": "#/$defs/Digest"},
         "request_digest": {"$ref": "#/$defs/Digest"},
         "max_output_tokens": {"type": "integer", "minimum": 1},
+        "reserved_input_tokens": {"type": "integer", "minimum": 0},
+        "reserved_external_cost_micro_usd": {"type": "integer", "minimum": 0},
         "timeout_ms": {"type": "integer", "minimum": 1},
         "temperature_micros": {"type": "integer", "minimum": 0},
         "created_at": {"$ref": "#/$defs/Timestamp"}
@@ -282,24 +343,28 @@
     },
     "ModelCallResult": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "result_id", "call_id", "idempotency_key", "request_digest", "provider_request_id", "output", "input_tokens", "output_tokens", "finish_reason", "committed_at"],
+      "required": ["schema_revision", "result_id", "call_id", "attempt_id", "turn_id", "idempotency_key", "request_digest", "provider_request_id", "output", "input_tokens", "output_tokens", "external_cost_micro_usd", "wall_time_ms", "finish_reason", "committed_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "result_id": {"$ref": "#/$defs/Identifier"},
         "call_id": {"$ref": "#/$defs/Identifier"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "turn_id": {"$ref": "#/$defs/Identifier"},
         "idempotency_key": {"$ref": "#/$defs/Identifier"},
         "request_digest": {"$ref": "#/$defs/Digest"},
         "provider_request_id": {"$ref": "#/$defs/Identifier"},
         "output": {"$ref": "#/$defs/BlobRef"},
         "input_tokens": {"type": "integer", "minimum": 0},
         "output_tokens": {"type": "integer", "minimum": 0},
+        "external_cost_micro_usd": {"type": "integer", "minimum": 0},
+        "wall_time_ms": {"type": "integer", "minimum": 0},
         "finish_reason": {"enum": ["stop", "tool_use", "length", "content_filter"]},
         "committed_at": {"$ref": "#/$defs/Timestamp"}
       }
     },
     "Artifact": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "artifact_id", "run_id", "task_id", "session_id", "attempt_id", "artifact_type", "output_contract_digest", "effect_class", "sections", "created_at"],
+      "required": ["schema_revision", "artifact_id", "run_id", "task_id", "session_id", "attempt_id", "source_result", "artifact_type", "output_contract_digest", "effect_class", "sections", "created_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "artifact_id": {"$ref": "#/$defs/Identifier"},
@@ -307,6 +372,7 @@
         "task_id": {"$ref": "#/$defs/Identifier"},
         "session_id": {"$ref": "#/$defs/Identifier"},
         "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "source_result": {"$ref": "#/$defs/RecordRef"},
         "artifact_type": {"$ref": "#/$defs/Name"},
         "output_contract_digest": {"$ref": "#/$defs/Digest"},
         "effect_class": {"const": "none"},
@@ -328,7 +394,7 @@
     },
     "Checkpoint": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "checkpoint_id", "run_id", "task_id", "session_id", "generation", "manifest_digest", "must_preserve_refs", "created_by_attempt_id", "created_at"],
+      "required": ["schema_revision", "checkpoint_id", "run_id", "task_id", "session_id", "generation", "manifest", "must_preserve_refs", "created_by_attempt_id", "created_at"],
       "properties": {
         "schema_revision": {"const": 1},
         "checkpoint_id": {"$ref": "#/$defs/Identifier"},
@@ -337,7 +403,7 @@
         "session_id": {"$ref": "#/$defs/Identifier"},
         "generation": {"type": "integer", "minimum": 1},
         "previous_checkpoint_id": {"$ref": "#/$defs/Identifier"},
-        "manifest_digest": {"$ref": "#/$defs/Digest"},
+        "manifest": {"$ref": "#/$defs/BlobRef"},
         "must_preserve_refs": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/RecordRef"}},
         "narrative": {"$ref": "#/$defs/BlobRef"},
         "created_by_attempt_id": {"$ref": "#/$defs/Identifier"},
@@ -438,6 +504,71 @@
         "requested_extension_seconds": {"type": "integer", "minimum": 1}
       }
     },
+    "StartAttemptCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
+        "lease_generation": {"type": "integer", "minimum": 1},
+        "lease_token": {"$ref": "#/$defs/Identifier"}
+      }
+    },
+    "DispatchModelCallCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "turn_id", "manifest"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
+        "lease_generation": {"type": "integer", "minimum": 1},
+        "lease_token": {"$ref": "#/$defs/Identifier"},
+        "turn_id": {"$ref": "#/$defs/Identifier"},
+        "manifest": {"$ref": "#/$defs/ModelCallManifestCandidate"}
+      }
+    },
+    "ResolveModelCallCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "turn_id", "expected_turn_state_generation", "outcome"],
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "result_committed"}}, "required": ["outcome"]},
+          "then": {"required": ["result"], "not": {"required": ["failure"]}},
+          "else": {"required": ["failure"], "not": {"required": ["result"]}}
+        }
+      ],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
+        "lease_generation": {"type": "integer", "minimum": 1},
+        "lease_token": {"$ref": "#/$defs/Identifier"},
+        "turn_id": {"$ref": "#/$defs/Identifier"},
+        "expected_turn_state_generation": {"type": "integer", "minimum": 1},
+        "outcome": {"enum": ["result_committed", "failed"]},
+        "result": {"$ref": "#/$defs/ModelCallResultCandidate"},
+        "failure": {"$ref": "#/$defs/Failure"}
+      }
+    },
+    "MarkModelCallUnknownCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "turn_id", "expected_turn_state_generation", "failure"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
+        "lease_generation": {"type": "integer", "minimum": 1},
+        "lease_token": {"$ref": "#/$defs/Identifier"},
+        "turn_id": {"$ref": "#/$defs/Identifier"},
+        "expected_turn_state_generation": {"type": "integer", "minimum": 1},
+        "failure": {"$ref": "#/$defs/Failure"}
+      }
+    },
     "CommitAttemptCommand": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "result", "artifact"],
@@ -448,13 +579,26 @@
         "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
         "lease_generation": {"type": "integer", "minimum": 1},
         "lease_token": {"$ref": "#/$defs/Identifier"},
-        "result": {"$ref": "#/$defs/ModelCallResult"},
-        "artifact": {"$ref": "#/$defs/Artifact"}
+        "result": {"$ref": "#/$defs/RecordRef"},
+        "artifact": {"$ref": "#/$defs/ArtifactCandidate"}
+      }
+    },
+    "FailAttemptCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "failure"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "attempt_id": {"$ref": "#/$defs/Identifier"},
+        "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
+        "lease_generation": {"type": "integer", "minimum": 1},
+        "lease_token": {"$ref": "#/$defs/Identifier"},
+        "failure": {"$ref": "#/$defs/Failure"}
       }
     },
     "RequestChildTaskCommand": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "envelope", "parent_task_id", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "objective_digest", "input_refs", "requested_limit"],
+      "required": ["schema_revision", "envelope", "parent_task_id", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "objective", "input_refs", "output_contract", "requested_limit"],
       "properties": {
         "schema_revision": {"const": 1},
         "envelope": {"$ref": "#/$defs/CommandEnvelope"},
@@ -463,8 +607,9 @@
         "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
         "lease_generation": {"type": "integer", "minimum": 1},
         "lease_token": {"$ref": "#/$defs/Identifier"},
-        "objective_digest": {"$ref": "#/$defs/Digest"},
+        "objective": {"$ref": "#/$defs/BlobRef"},
         "input_refs": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/RecordRef"}},
+        "output_contract": {"$ref": "#/$defs/RevisionRef"},
         "requested_limit": {"$ref": "#/$defs/BudgetLimit"}
       }
     }

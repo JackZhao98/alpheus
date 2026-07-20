@@ -3,11 +3,13 @@ package runtimecontract
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
 	"unicode"
 
+	"alpheus/agentplatform/blob"
 	"alpheus/agentplatform/contracts"
 )
 
@@ -68,8 +70,9 @@ func (value RuntimePolicy) Validate() error {
 
 func (value TriggerRegistration) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.RegistrationID) ||
-		value.Generation <= 0 || !knownTriggerKind(value.Kind) || !validID(value.SourceKey) ||
-		!validRevision(value.OwnerPolicy, contracts.OwnerPlatformGovernance, "owner_policy") ||
+		value.Generation <= 0 || !knownTriggerKind(value.Kind) || value.Kind == TriggerSystemRecovery ||
+		!validID(value.SourceKey) ||
+		!validRevision(value.OwnerPolicy, contracts.OwnerPlatformGovernance, "owner_policy_revision") ||
 		!validRevision(value.RuntimePolicy, contracts.OwnerAgentControl, "runtime_policy") ||
 		value.UpdatedBy.Validate() != nil || !validUTC(value.UpdatedAt) {
 		return ErrInvalidRuntime
@@ -79,25 +82,51 @@ func (value TriggerRegistration) Validate() error {
 
 func (value TriggerOccurrence) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.OccurrenceID) ||
-		!validRevision(value.Registration, contracts.OwnerAgentControl, "trigger_registration") ||
 		!knownTriggerKind(value.Kind) || value.Source.Validate() != nil ||
 		value.InitiatingActor.Validate() != nil ||
-		!validRevision(value.OwnerPolicy, contracts.OwnerPlatformGovernance, "owner_policy") ||
+		!validRevision(value.OwnerPolicy, contracts.OwnerPlatformGovernance, "owner_policy_revision") ||
 		!validID(value.OccurrenceKey) || !orderedUTC(value.OccurredAt, value.ObservedAt, value.CommittedAt) {
 		return ErrInvalidRuntime
 	}
-	if value.Payload != nil && value.Payload.Validate() != nil {
+	if value.Kind == TriggerSystemRecovery {
+		if value.Registration != nil {
+			return ErrInvalidRuntime
+		}
+	} else if value.Registration == nil ||
+		!validRevision(*value.Registration, contracts.OwnerAgentControl, "trigger_registration") {
+		return ErrInvalidRuntime
+	}
+	if value.Payload != nil && (!validRuntimeBlob(*value.Payload, "trigger_payload") ||
+		value.Payload.CommittedAt.After(value.CommittedAt)) {
 		return ErrInvalidRuntime
 	}
 	switch value.Kind {
 	case TriggerKernelEvent:
-		if value.Source.Owner != contracts.OwnerKernel ||
+		if value.Source.Owner != contracts.OwnerKernel || value.Source.RecordType != "kernel_event" ||
 			value.InitiatingActor.Kind != contracts.PrincipalKernel ||
 			value.InitiatingActor.Audience != contracts.AudienceKernel {
 			return ErrInvalidRuntime
 		}
-	default:
-		if value.Source.Owner != contracts.OwnerAgentControl ||
+	case TriggerSchedule:
+		if value.Source.Owner != contracts.OwnerAgentControl || value.Source.RecordType != "schedule_occurrence" ||
+			value.InitiatingActor.Kind != contracts.PrincipalWorkload ||
+			value.InitiatingActor.Audience != contracts.AudienceControlAPI {
+			return ErrInvalidRuntime
+		}
+	case TriggerExternalEvent:
+		if value.Source.Owner != contracts.OwnerAgentControl || value.Source.RecordType != "external_event" ||
+			value.InitiatingActor.Kind != contracts.PrincipalWorkload ||
+			value.InitiatingActor.Audience != contracts.AudienceControlAPI {
+			return ErrInvalidRuntime
+		}
+	case TriggerSystemMaintenance:
+		if value.Source.Owner != contracts.OwnerAgentControl || value.Source.RecordType != "maintenance_occurrence" ||
+			value.InitiatingActor.Kind != contracts.PrincipalWorkload ||
+			value.InitiatingActor.Audience != contracts.AudienceControlAPI {
+			return ErrInvalidRuntime
+		}
+	case TriggerSystemRecovery:
+		if value.Source.Owner != contracts.OwnerAgentControl || value.Source.RecordType != "recovery_occurrence" ||
 			value.InitiatingActor.Kind != contracts.PrincipalWorkload ||
 			value.InitiatingActor.Audience != contracts.AudienceControlAPI {
 			return ErrInvalidRuntime
@@ -109,6 +138,7 @@ func (value TriggerOccurrence) Validate() error {
 func (value Run) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.RunID) ||
 		value.Origin.Validate() != nil ||
+		!validRevision(value.Origin.OwnerPolicy, contracts.OwnerPlatformGovernance, "owner_policy_revision") ||
 		!validRevision(value.RuntimePolicy, contracts.OwnerAgentControl, "runtime_policy") ||
 		!validID(value.BudgetLedgerID) || !validID(value.RootTaskID) ||
 		!knownRunState(value.State) || value.StateGeneration <= 0 ||
@@ -116,14 +146,15 @@ func (value Run) Validate() error {
 		!value.CreatedAt.Before(value.DeadlineAt) {
 		return ErrInvalidRuntime
 	}
-	if value.Occurrence != nil && !validRecord(*value.Occurrence, contracts.OwnerAgentControl, "trigger_occurrence") {
-		return ErrInvalidRuntime
-	}
 	if value.Origin.Kind == contracts.OriginUserRequest {
 		if value.Occurrence != nil {
 			return ErrInvalidRuntime
 		}
-	} else if value.Occurrence == nil {
+	} else if value.Occurrence == nil ||
+		!validRecord(*value.Occurrence, contracts.OwnerAgentControl, "trigger_occurrence") {
+		return ErrInvalidRuntime
+	}
+	if value.CreatedAt.Before(value.Origin.CommittedAt) {
 		return ErrInvalidRuntime
 	}
 	if value.State == RunSuperseded {
@@ -139,13 +170,15 @@ func (value Run) Validate() error {
 	if value.Failure != nil && value.Failure.Validate() != nil {
 		return ErrInvalidRuntime
 	}
-	return validateTerminalTime(terminalRunState(value.State), value.CreatedAt, value.TerminalAt)
+	return validateTerminalTime(terminalRunState(value.State), value.CreatedAt, value.UpdatedAt, value.TerminalAt)
 }
 
 func (value Task) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.TaskID) ||
-		!validID(value.RunID) || value.Depth < 0 || !validDigest(value.ObjectiveDigest) ||
+		!validID(value.RunID) || value.Depth < 0 ||
+		!validRuntimeBlob(value.Objective, "task_objective") || value.Objective.CommittedAt.After(value.CreatedAt) ||
 		len(value.InputRefs) > AbsoluteMaxReferencesV1 ||
+		!validRevision(value.OutputContract, contracts.OwnerAgentControl, "output_contract_revision") ||
 		!validID(value.BudgetLedgerID) || !knownTaskState(value.State) ||
 		value.StateGeneration <= 0 || !orderedUTC(value.CreatedAt, value.UpdatedAt) ||
 		!validUTC(value.DeadlineAt) || !value.CreatedAt.Before(value.DeadlineAt) {
@@ -172,7 +205,7 @@ func (value Task) Validate() error {
 	if value.Failure != nil && value.Failure.Validate() != nil {
 		return ErrInvalidRuntime
 	}
-	return validateTerminalTime(terminalTaskState(value.State), value.CreatedAt, value.TerminalAt)
+	return validateTerminalTime(terminalTaskState(value.State), value.CreatedAt, value.UpdatedAt, value.TerminalAt)
 }
 
 func (value Dependency) Validate() error {
@@ -187,7 +220,10 @@ func (value Dependency) Validate() error {
 func (value Session) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.SessionID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || value.Generation <= 0 ||
-		!validDigest(value.ExecutionBindingDigest) || !validDigest(value.ContextManifestDigest) ||
+		!validRuntimeBlob(value.ExecutionBinding, "execution_binding") ||
+		value.ExecutionBinding.CommittedAt.After(value.CreatedAt) ||
+		!validRuntimeBlob(value.ContextManifest, "context_manifest") ||
+		value.ContextManifest.CommittedAt.After(value.CreatedAt) ||
 		!knownSessionState(value.State) || !validUTC(value.CreatedAt) ||
 		value.LatestCheckpointID != "" && !validID(value.LatestCheckpointID) {
 		return ErrInvalidRuntime
@@ -217,25 +253,28 @@ func (value Attempt) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.AttemptID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
 		value.Ordinal <= 0 || !knownAttemptState(value.State) || value.StateGeneration <= 0 ||
-		value.Lease.Validate() != nil || !orderedUTC(value.CreatedAt, value.UpdatedAt) {
+		value.Lease.Validate() != nil || !orderedUTC(value.CreatedAt, value.UpdatedAt) ||
+		value.CreatedAt.Before(value.Lease.ClaimedAt) || value.UpdatedAt.Before(value.Lease.HeartbeatAt) {
 		return ErrInvalidRuntime
 	}
 	needsResult := value.State == AttemptResultCommitted
-	if needsResult != (value.ResultDigest != "") || value.ResultDigest != "" && !validDigest(value.ResultDigest) {
+	if needsResult != (value.ResultArtifact != nil) || value.ResultArtifact != nil &&
+		!validRecord(*value.ResultArtifact, contracts.OwnerAgentControl, "artifact") {
 		return ErrInvalidRuntime
 	}
 	needsFailure := value.State == AttemptFailed || value.State == AttemptTimedOut
 	if needsFailure != (value.Failure != nil) || value.Failure != nil && value.Failure.Validate() != nil {
 		return ErrInvalidRuntime
 	}
-	return validateTerminalTime(terminalAttemptState(value.State), value.CreatedAt, value.TerminalAt)
+	return validateTerminalTime(terminalAttemptState(value.State), value.CreatedAt, value.UpdatedAt, value.TerminalAt)
 }
 
 func (value Turn) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.TurnID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
 		!validID(value.AttemptID) || value.Ordinal <= 0 || value.Kind != TurnModelCall ||
-		!knownTurnState(value.State) || !validDigest(value.RequestDigest) || !validUTC(value.CreatedAt) {
+		!knownTurnState(value.State) || value.StateGeneration <= 0 ||
+		!validDigest(value.RequestDigest) || !orderedUTC(value.CreatedAt, value.UpdatedAt) {
 		return ErrInvalidRuntime
 	}
 	if value.DispatchedAt != nil && (!validUTC(*value.DispatchedAt) || value.DispatchedAt.Before(value.CreatedAt)) ||
@@ -245,24 +284,36 @@ func (value Turn) Validate() error {
 	}
 	switch value.State {
 	case TurnPlanned:
-		if value.DispatchedAt != nil || value.FinishedAt != nil || value.ResultDigest != "" || value.Failure != nil {
+		if !value.UpdatedAt.Equal(value.CreatedAt) || value.DispatchedAt != nil || value.FinishedAt != nil ||
+			value.Result != nil || value.Failure != nil {
 			return ErrInvalidRuntime
 		}
 	case TurnDispatched:
-		if value.DispatchedAt == nil || value.FinishedAt != nil || value.ResultDigest != "" || value.Failure != nil {
+		if value.DispatchedAt == nil || value.UpdatedAt.Before(*value.DispatchedAt) ||
+			value.FinishedAt != nil || value.Result != nil || value.Failure != nil {
 			return ErrInvalidRuntime
 		}
 	case TurnResultCommitted:
-		if value.DispatchedAt == nil || value.FinishedAt == nil || !validDigest(value.ResultDigest) || value.Failure != nil {
+		if value.DispatchedAt == nil || value.FinishedAt == nil || value.UpdatedAt.Before(*value.FinishedAt) ||
+			value.Result == nil ||
+			!validRecord(*value.Result, contracts.OwnerAgentControl, "model_call_result") || value.Failure != nil {
 			return ErrInvalidRuntime
 		}
-	case TurnFailed, TurnUnknown:
-		if value.DispatchedAt == nil || value.FinishedAt == nil || value.ResultDigest != "" ||
+	case TurnFailed:
+		if value.DispatchedAt == nil || value.FinishedAt == nil || value.UpdatedAt.Before(*value.FinishedAt) ||
+			value.Result != nil ||
+			value.Failure == nil || value.Failure.Validate() != nil {
+			return ErrInvalidRuntime
+		}
+	case TurnUnknown:
+		if value.DispatchedAt == nil || value.UpdatedAt.Before(*value.DispatchedAt) ||
+			value.FinishedAt != nil || value.Result != nil ||
 			value.Failure == nil || value.Failure.Validate() != nil {
 			return ErrInvalidRuntime
 		}
 	case TurnCanceled:
-		if value.FinishedAt == nil || value.ResultDigest != "" || value.Failure != nil {
+		if value.FinishedAt == nil || value.UpdatedAt.Before(*value.FinishedAt) ||
+			value.Result != nil || value.Failure != nil {
 			return ErrInvalidRuntime
 		}
 	}
@@ -273,8 +324,10 @@ func (value ModelCallManifest) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.CallID) ||
 		!validID(value.TurnID) || !validID(value.AttemptID) || !validID(value.IdempotencyKey) ||
 		!validID(value.Provider) || !validID(value.Model) || !validDigest(value.PromptDigest) ||
-		!validDigest(value.ContextManifestDigest) || !validDigest(value.OutputContractDigest) ||
+		!validRuntimeBlob(value.ContextManifest, "context_manifest") ||
+		value.ContextManifest.CommittedAt.After(value.CreatedAt) || !validDigest(value.OutputContractDigest) ||
 		!validDigest(value.RequestDigest) || value.MaxOutputTokens <= 0 || value.TimeoutMS <= 0 ||
+		value.ReservedInputTokens < 0 || value.ReservedExternalCostMicroUSD < 0 ||
 		value.TemperatureMicros < 0 || !validUTC(value.CreatedAt) {
 		return ErrInvalidRuntime
 	}
@@ -283,10 +336,13 @@ func (value ModelCallManifest) Validate() error {
 
 func (value ModelCallResult) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ResultID) ||
-		!validID(value.CallID) || !validID(value.IdempotencyKey) || !validDigest(value.RequestDigest) ||
+		!validID(value.CallID) || !validID(value.AttemptID) || !validID(value.TurnID) ||
+		!validID(value.IdempotencyKey) || !validDigest(value.RequestDigest) ||
 		!validID(value.ProviderRequestID) || value.Output.Validate() != nil ||
-		value.Output.Origin.Owner != contracts.OwnerWorker || value.Output.Origin.RecordType != "model_call_output" ||
-		value.InputTokens < 0 || value.OutputTokens < 0 || !knownFinishReason(value.FinishReason) ||
+		value.Output.Origin.Owner != contracts.OwnerAgentControl || value.Output.Origin.RecordType != "model_call_manifest" ||
+		value.Output.Origin.RecordID != value.CallID || value.Output.CommittedAt.After(value.CommittedAt) ||
+		value.InputTokens < 0 || value.OutputTokens < 0 || value.ExternalCostMicroUSD < 0 || value.WallTimeMS < 0 ||
+		!knownFinishReason(value.FinishReason) ||
 		!validUTC(value.CommittedAt) {
 		return ErrInvalidRuntime
 	}
@@ -295,16 +351,71 @@ func (value ModelCallResult) Validate() error {
 
 func (value ArtifactSection) Validate() error {
 	if !namePattern.MatchString(value.Name) || value.Content.Validate() != nil ||
-		value.Content.Origin.Owner != contracts.OwnerWorker {
+		value.Content.Origin.Owner != contracts.OwnerAgentControl {
 		return ErrInvalidRuntime
 	}
 	return nil
 }
 
+func (value ModelCallManifestCandidate) Validate() error {
+	manifest := ModelCallManifest{
+		SchemaRevision: SchemaRevisionV1, CallID: value.CallID, TurnID: "candidate-turn",
+		AttemptID: "candidate-attempt", IdempotencyKey: value.IdempotencyKey,
+		Provider: value.Provider, Model: value.Model, PromptDigest: value.PromptDigest,
+		ContextManifest: value.ContextManifest, OutputContractDigest: value.OutputContractDigest,
+		RequestDigest: value.RequestDigest, MaxOutputTokens: value.MaxOutputTokens,
+		ReservedInputTokens:          value.ReservedInputTokens,
+		ReservedExternalCostMicroUSD: value.ReservedExternalCostMicroUSD,
+		TimeoutMS:                    value.TimeoutMS, TemperatureMicros: value.TemperatureMicros,
+		CreatedAt: value.ContextManifest.CommittedAt,
+	}
+	return manifest.Validate()
+}
+
+func (value ModelCallResultCandidate) Validate() error {
+	if value.Output.Origin.Owner != contracts.OwnerAgentControl ||
+		value.Output.Origin.RecordType != "model_call_manifest" ||
+		value.Output.Origin.RecordID != value.CallID {
+		return ErrInvalidRuntime
+	}
+	result := ModelCallResult{
+		SchemaRevision: SchemaRevisionV1, ResultID: "candidate-result", CallID: value.CallID,
+		AttemptID: "candidate-attempt", TurnID: "candidate-turn", IdempotencyKey: "candidate-key",
+		RequestDigest: value.RequestDigest, ProviderRequestID: value.ProviderRequestID,
+		Output: value.Output, InputTokens: value.InputTokens, OutputTokens: value.OutputTokens,
+		ExternalCostMicroUSD: value.ExternalCostMicroUSD, WallTimeMS: value.WallTimeMS,
+		FinishReason: value.FinishReason, CommittedAt: value.Output.CommittedAt,
+	}
+	return result.Validate()
+}
+
+func (value ArtifactCandidate) Validate() error {
+	createdAt := time.Unix(1, 0).UTC()
+	for _, section := range value.Sections {
+		if section.Content.CommittedAt.After(createdAt) {
+			createdAt = section.Content.CommittedAt
+		}
+	}
+	artifact := Artifact{
+		SchemaRevision: SchemaRevisionV1, ArtifactID: "candidate-artifact", RunID: "candidate-run",
+		TaskID: "candidate-task", SessionID: "candidate-session", AttemptID: "candidate-attempt",
+		SourceResult: contracts.RecordRef{
+			Owner: contracts.OwnerAgentControl, RecordType: "model_call_result",
+			RecordID: "candidate-result", SchemaRevision: contracts.SchemaRevisionV1,
+			RecordDigest: strings.Repeat("a", 64),
+		},
+		ArtifactType: value.ArtifactType, OutputContractDigest: value.OutputContractDigest,
+		EffectClass: value.EffectClass, Sections: value.Sections, CreatedAt: createdAt,
+	}
+	return artifact.Validate()
+}
+
 func (value Artifact) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ArtifactID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
-		!validID(value.AttemptID) || !namePattern.MatchString(value.ArtifactType) ||
+		!validID(value.AttemptID) ||
+		!validRecord(value.SourceResult, contracts.OwnerAgentControl, "model_call_result") ||
+		!namePattern.MatchString(value.ArtifactType) ||
 		!validDigest(value.OutputContractDigest) || value.EffectClass != contracts.EffectNone ||
 		len(value.Sections) == 0 || len(value.Sections) > AbsoluteMaxArtifactSectionsV1 ||
 		!validUTC(value.CreatedAt) {
@@ -313,7 +424,7 @@ func (value Artifact) Validate() error {
 	seen := make(map[string]struct{}, len(value.Sections))
 	required := false
 	for _, section := range value.Sections {
-		if section.Validate() != nil {
+		if section.Validate() != nil || section.Content.CommittedAt.After(value.CreatedAt) {
 			return ErrInvalidRuntime
 		}
 		if _, exists := seen[section.Name]; exists {
@@ -341,7 +452,8 @@ func (value ArtifactPublicationIntent) Validate() error {
 func (value Checkpoint) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.CheckpointID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.SessionID) ||
-		value.Generation <= 0 || !validDigest(value.ManifestDigest) ||
+		value.Generation <= 0 || !validRuntimeBlob(value.Manifest, "checkpoint_manifest") ||
+		value.Manifest.CommittedAt.After(value.CreatedAt) ||
 		len(value.MustPreserveRefs) > AbsoluteMaxReferencesV1 ||
 		!validRecordRefs(value.MustPreserveRefs) || !validID(value.CreatedByAttemptID) ||
 		!validUTC(value.CreatedAt) {
@@ -351,7 +463,9 @@ func (value Checkpoint) Validate() error {
 		(!validID(value.PreviousCheckpointID) || value.PreviousCheckpointID == value.CheckpointID || value.Generation <= 1) {
 		return ErrInvalidRuntime
 	}
-	if value.Generation > 1 && value.PreviousCheckpointID == "" || value.Narrative != nil && value.Narrative.Validate() != nil {
+	if value.Generation > 1 && value.PreviousCheckpointID == "" ||
+		value.Narrative != nil && (!validRuntimeBlob(*value.Narrative, "checkpoint_narrative") ||
+			value.Narrative.CommittedAt.After(value.CreatedAt)) {
 		return ErrInvalidRuntime
 	}
 	return nil
@@ -457,13 +571,64 @@ func (value HeartbeatAttemptCommand) Validate() error {
 	return nil
 }
 
+func (value StartAttemptCommand) Validate() error {
+	return validateAttemptFence(value.SchemaRevision, value.Envelope, "start_attempt", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken)
+}
+
+func (value DispatchModelCallCommand) Validate() error {
+	if validateAttemptFence(value.SchemaRevision, value.Envelope, "dispatch_model_call", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
+		!validID(value.TurnID) || value.Manifest.Validate() != nil {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
+func (value ResolveModelCallCommand) Validate() error {
+	if validateAttemptFence(value.SchemaRevision, value.Envelope, "resolve_model_call", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
+		!validID(value.TurnID) || value.ExpectedTurnStateGeneration <= 0 {
+		return ErrInvalidRuntime
+	}
+	switch value.Outcome {
+	case TurnResultCommitted:
+		if value.Result == nil || value.Result.Validate() != nil || value.Failure != nil {
+			return ErrInvalidRuntime
+		}
+	case TurnFailed:
+		if value.Result != nil || value.Failure == nil || value.Failure.Validate() != nil {
+			return ErrInvalidRuntime
+		}
+	default:
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
+func (value MarkModelCallUnknownCommand) Validate() error {
+	if validateAttemptFence(value.SchemaRevision, value.Envelope, "mark_model_call_unknown", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
+		!validID(value.TurnID) || value.ExpectedTurnStateGeneration <= 0 || value.Failure.Validate() != nil {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
 func (value CommitAttemptCommand) Validate() error {
-	if !validWorkerEnvelope(value.SchemaRevision, value.Envelope, "commit_attempt") ||
-		!validID(value.AttemptID) || value.ExpectedAttemptStateGeneration <= 0 ||
-		value.LeaseGeneration <= 0 || !validID(value.LeaseToken) ||
-		value.Result.Validate() != nil || value.Artifact.Validate() != nil ||
-		value.Artifact.AttemptID != value.AttemptID || value.Artifact.CreatedAt.Before(value.Result.CommittedAt) ||
-		!artifactContainsOutput(value.Artifact, value.Result) {
+	if validateAttemptFence(value.SchemaRevision, value.Envelope, "commit_attempt", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
+		!validRecord(value.Result, contracts.OwnerAgentControl, "model_call_result") ||
+		value.Artifact.Validate() != nil {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
+func (value FailAttemptCommand) Validate() error {
+	if validateAttemptFence(value.SchemaRevision, value.Envelope, "fail_attempt", value.AttemptID,
+		value.ExpectedAttemptStateGeneration, value.LeaseGeneration, value.LeaseToken) != nil ||
+		value.Failure.Validate() != nil {
 		return ErrInvalidRuntime
 	}
 	return nil
@@ -473,9 +638,19 @@ func (value RequestChildTaskCommand) Validate() error {
 	if !validWorkerEnvelope(value.SchemaRevision, value.Envelope, "request_child_task") ||
 		!validID(value.ParentTaskID) || !validID(value.AttemptID) ||
 		value.ExpectedAttemptStateGeneration <= 0 || value.LeaseGeneration <= 0 ||
-		!validID(value.LeaseToken) || !validDigest(value.ObjectiveDigest) ||
+		!validID(value.LeaseToken) || !validRuntimeBlob(value.Objective, "task_objective") ||
 		len(value.InputRefs) > AbsoluteMaxReferencesV1 || !validRecordRefs(value.InputRefs) ||
+		!validRevision(value.OutputContract, contracts.OwnerAgentControl, "output_contract_revision") ||
 		!validRunnableLimit(value.RequestedLimit) {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
+func validateAttemptFence(revision uint16, envelope contracts.CommandEnvelope, commandType, attemptID string,
+	stateGeneration, leaseGeneration int64, leaseToken string) error {
+	if !validWorkerEnvelope(revision, envelope, commandType) || !validID(attemptID) ||
+		stateGeneration <= 0 || leaseGeneration <= 0 || !validID(leaseToken) {
 		return ErrInvalidRuntime
 	}
 	return nil
@@ -505,7 +680,8 @@ func validRecordRefs(values []contracts.RecordRef) bool {
 		if value.Validate() != nil {
 			return false
 		}
-		key := string(value.Owner) + "\x00" + value.RecordType + "\x00" + value.RecordID + "\x00" + value.RecordDigest
+		key := string(value.Owner) + "\x00" + value.RecordType + "\x00" + value.RecordID + "\x00" +
+			fmt.Sprint(value.SchemaRevision)
 		if _, exists := seen[key]; exists {
 			return false
 		}
@@ -514,15 +690,9 @@ func validRecordRefs(values []contracts.RecordRef) bool {
 	return true
 }
 
-func artifactContainsOutput(artifact Artifact, result ModelCallResult) bool {
-	for _, section := range artifact.Sections {
-		if section.Content.BlobID == result.Output.BlobID &&
-			section.Content.ContentDigest == result.Output.ContentDigest &&
-			section.Content.SizeBytes == result.Output.SizeBytes {
-			return true
-		}
-	}
-	return false
+func validRuntimeBlob(value blob.BlobRef, recordType string) bool {
+	return value.Validate() == nil && value.Origin.Owner == contracts.OwnerAgentControl &&
+		value.Origin.RecordType == recordType
 }
 
 func budgetWithin(consumed, reserved BudgetUsage, limit BudgetLimit) bool {
@@ -545,9 +715,9 @@ func budgetWithin(consumed, reserved BudgetUsage, limit BudgetLimit) bool {
 	return consumed.ActiveTasks+reserved.ActiveTasks <= limit.MaxParallelism
 }
 
-func validateTerminalTime(terminal bool, created time.Time, value *time.Time) error {
+func validateTerminalTime(terminal bool, created, updated time.Time, value *time.Time) error {
 	if terminal {
-		if value == nil || !validUTC(*value) || value.Before(created) {
+		if value == nil || !validUTC(*value) || value.Before(created) || value.After(updated) {
 			return ErrInvalidRuntime
 		}
 	} else if value != nil {

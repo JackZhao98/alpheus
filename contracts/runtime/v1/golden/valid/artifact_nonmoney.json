@@ -5,6 +5,13 @@
   "task_id": "task-1",
   "session_id": "session-1",
   "attempt_id": "attempt-1",
+  "source_result": {
+    "owner": "agent_control",
+    "record_type": "model_call_result",
+    "record_id": "result-1",
+    "schema_revision": 1,
+    "record_digest": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
   "artifact_type": "decision_draft",
   "output_contract_digest": "3333333333333333333333333333333333333333333333333333333333333333",
   "effect_class": "none",
@@ -19,11 +26,11 @@
         "media_type": "application/json",
         "size_bytes": 128,
         "origin": {
-          "owner": "worker",
-          "record_type": "model_call_output",
-          "record_id": "result-1",
+          "owner": "agent_control",
+          "record_type": "model_call_manifest",
+          "record_id": "call-1",
           "schema_revision": 1,
-          "record_digest": "1111111111111111111111111111111111111111111111111111111111111111"
+          "record_digest": "2222222222222222222222222222222222222222222222222222222222222222"
         },
         "committed_at": "2026-07-20T12:02:00Z"
       }

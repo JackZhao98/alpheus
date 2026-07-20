@@ -21,7 +21,7 @@
     "initiating_actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
     "owner_policy": {
       "owner": "platform_governance",
-      "record_type": "owner_policy",
+      "record_type": "owner_policy_revision",
       "record_id": "owner-policy-1",
       "schema_revision": 1,
       "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

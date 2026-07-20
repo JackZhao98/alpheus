@@ -18,7 +18,7 @@ var transitionGraph = map[RuntimeSubject]map[string]map[string]struct{}{
 		string(SessionOpen): states(SessionClosed),
 	},
 	SubjectAttempt: {
-		string(AttemptLeased):    states(AttemptExecuting, AttemptTimedOut, AttemptCanceled, AttemptSuperseded),
+		string(AttemptLeased):    states(AttemptExecuting, AttemptFailed, AttemptTimedOut, AttemptCanceled, AttemptSuperseded),
 		string(AttemptExecuting): states(AttemptResultCommitted, AttemptFailed, AttemptTimedOut, AttemptCanceled, AttemptSuperseded),
 	},
 	SubjectTurn: {
@@ -56,7 +56,7 @@ func states[T ~string](values ...T) map[string]struct{} {
 
 func knownTriggerKind(value TriggerKind) bool {
 	switch value {
-	case TriggerSchedule, TriggerKernelEvent, TriggerExternalEvent, TriggerSystemMaintenance:
+	case TriggerSchedule, TriggerKernelEvent, TriggerExternalEvent, TriggerSystemMaintenance, TriggerSystemRecovery:
 		return true
 	default:
 		return false

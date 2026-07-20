@@ -32,7 +32,7 @@
       "initial": ["leased"],
       "terminal": ["result_committed", "failed", "timed_out", "canceled", "superseded"],
       "transitions": {
-        "leased": ["executing", "timed_out", "canceled", "superseded"],
+        "leased": ["executing", "failed", "timed_out", "canceled", "superseded"],
         "executing": ["result_committed", "failed", "timed_out", "canceled", "superseded"]
       }
     },
@@ -49,6 +49,11 @@
       "initial": ["open"],
       "terminal": ["closed"],
       "transitions": {"open": ["exhausted", "closed"], "exhausted": ["closed"]}
+    },
+    "publication_intent": {
+      "initial": ["disabled"],
+      "terminal": ["disabled"],
+      "transitions": {"disabled": []}
     }
   },
   "invariants": [
@@ -56,6 +61,9 @@
     "worker_commands_require_authenticated_worker_identity_and_fenced_lease",
     "terminal_states_do_not_transition",
     "committed_results_are_reused_after_delivery_failure",
+    "model_output_blob_origin_is_the_exact_committed_model_call_manifest",
+    "attempt_commit_verifies_result_lineage_output_contract_and_required_output_blob",
+    "durable_revision_and_record_references_must_resolve_canonically",
     "child_work_cannot_widen_parent_budget",
     "artifact_effect_class_is_none_in_ap1",
     "artifact_publication_is_disabled_until_ap8"

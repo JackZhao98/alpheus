@@ -28,11 +28,16 @@
   "commands": [
     "claim_task_command",
     "commit_attempt_command",
+    "dispatch_model_call_command",
+    "fail_attempt_command",
     "heartbeat_attempt_command",
-    "request_child_task_command"
+    "mark_model_call_unknown_command",
+    "request_child_task_command",
+    "resolve_model_call_command",
+    "start_attempt_command"
   ],
   "events": ["runtime_event"],
-  "state_machines": ["attempt", "budget", "run", "session", "task", "turn"],
+  "state_machines": ["attempt", "budget", "publication_intent", "run", "session", "task", "turn"],
   "assets": {
     "schemas": ["schema/runtime.schema.json"],
     "state_machines": "state-machines/runtime.yaml",
