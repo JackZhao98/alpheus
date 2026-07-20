@@ -15,6 +15,9 @@
   Attempt lease chronology correction at `d23215c`; failed-Attempt retry budget
   classification was made explicit at `ce0da6e`. AP1 is not accepted and no
   Runtime behavior or effect is enabled.
+- AP1-2's immutable definitions landed at `bce88cc` and its default-deny
+  durable Runtime state landed at `7671762`; transactional command functions
+  remain in progress, so Workers still cannot claim work or call a model.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money
@@ -41,7 +44,7 @@ milestones and not independent authorization gates.
 | Packet | Status | Scope |
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
-| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions landed at `bce88cc` after AP0 historical certification was frozen at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, and JSON OutputContract definitions are durable, exact-reference-bound, immutable/default-deny, and effect `none`; runtime state, narrow role-derived command functions, idempotency, generation and lease fencing, atomic budget accounting, cancellation, and recovery remain in progress. |
+| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; AP0 historical certification isolated at `714bee2` | OwnerPolicy, RuntimePolicy, TriggerRegistration, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Narrow role-derived transactional command functions and their concurrency probes remain in progress. |
 | AP1-3 Control Plane and bounded Worker execution | Not started | Integrate the existing `agent-runtime` deployable with AP1 persistence; no second service, operation emission, Provider/broker access or Live effect. |
 | AP1-4 crash/concurrency acceptance and stage seal | Not started | Race, crash-window, duplicate-delivery, stale-lease, budget, cancellation, recovery and non-money acceptance evidence. |
 
@@ -101,6 +104,14 @@ The PostgreSQL probe exercises exact retry and conflicting identity behavior,
 stale lease rejection, inbox deduplication, quarantine/replay, dynamic-policy
 compare-and-swap and audit history, capacity limits, role isolation, and 20
 events claimed concurrently by eight dispatchers with no duplicate lease.
+
+The focused AP1 Runtime-state probe loads exactly Agent migrations 0001-0005
+in PostgreSQL 16 and verifies 21 new state tables, exact object/routine
+inventory, initial and terminal state guards, Task slot history, reclaimed
+lease chronology, unresolved model-call containment, forward Checkpoint CAS,
+exact Result/Artifact/Recovery lineage, fail-closed JSON and nullable tuples,
+deferred cross-record invariants, zero non-owner state authority, and effect
+ceiling `none`.
 
 The governance probe exercises all three typed head families, immutable
 revision/receipt/event records, owner-versus-Activator role isolation,

@@ -53,7 +53,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 includes lease chronology at `d23215c` and explicit retry classification at `ce0da6e`; AP1-2 immutable definitions landed at `bce88cc` after historical AP0 certification was isolated at `714bee2`; AP1 behavior and effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-1 includes lease chronology at `d23215c` and explicit retry classification at `ce0da6e`; AP1-2 immutable definitions landed at `bce88cc` and durable Runtime state at `7671762`; transactional commands remain in progress and all effects remain closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |
@@ -105,8 +105,8 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
    Attempt retry budget classification was made explicit at `ce0da6e`.
    Historical AP0 certification was isolated from later-stage files at
    `714bee2`, and AP1-2's immutable/default-deny definition storage landed at
-   `bce88cc`.
-   Runtime state and narrow transactional commands remain in progress.
+   `bce88cc`. Default-deny durable Runtime state landed at `7671762`.
+   Narrow transactional commands remain in progress.
 3. Keep every later milestone behind its own entry gate. AP0 authorizes no
    Runtime operation emission, GRACE model, Delegation grant or Live effect.
 4. Independently review `GRACE_QUANTITATIVE.md`; build representative reference
