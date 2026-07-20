@@ -191,6 +191,29 @@ func newLLMFromEnvironment(sink telemetrySink) (*LLM, error) {
 			return nil, fmt.Errorf("%s_MODEL is required when COGNITION=llm", strings.ToUpper(tier))
 		}
 	}
+	return newConfiguredLLM(transport, models, sink)
+}
+
+// NewOpenAIQuery constructs an OpenAI-backed cognition for one manually
+// initiated query. The API key is retained only by this short-lived value and
+// is never copied into environment variables, telemetry, or persisted state.
+func NewOpenAIQuery(apiKey, model string, opts ...Option) (Cognition, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	model = strings.TrimSpace(model)
+	if apiKey == "" {
+		return nil, errors.New("OpenAI API key is required")
+	}
+	if model == "" {
+		return nil, errors.New("OpenAI model is required")
+	}
+	var cfg options
+	for _, option := range opts {
+		option(&cfg)
+	}
+	return newConfiguredLLM(newOpenAITransport(apiKey), map[string]string{"monitor": model}, cfg.telemetry)
+}
+
+func newConfiguredLLM(transport completionTransport, models map[string]string, sink telemetrySink) (*LLM, error) {
 	tokenBudget, err := positiveInt64Env("SESSION_TOKEN_BUDGET", defaultSessionTokenBudget)
 	if err != nil {
 		return nil, err

@@ -20,7 +20,14 @@ const maxWakeBodyBytes int64 = 1 << 20
 const maxQueryBodyBytes int64 = 16 << 10
 const maxWakeDedupEntries = 4096
 
-type queryRunner func(roles.Role, string, string) (contracts.Output, error)
+type queryResult struct {
+	Output    contracts.Output
+	Cognition string
+	Provider  string
+	Model     string
+}
+
+type queryRunner func(roles.Role, string, string, string) (queryResult, error)
 
 type wakeDeduper struct {
 	mu   sync.Mutex
@@ -155,8 +162,9 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxQueryBodyBytes)
 		var in struct {
-			Symbol string `json:"symbol"`
-			Query  string `json:"query"`
+			Symbol       string `json:"symbol"`
+			Query        string `json:"query"`
+			OpenAIAPIKey string `json:"openai_api_key"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
@@ -172,23 +180,42 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "query must contain 1-4000 bytes"})
 			return
 		}
+		in.OpenAIAPIKey = strings.TrimSpace(in.OpenAIAPIKey)
+		if !validOptionalAPIKey(in.OpenAIAPIKey) {
+			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid OpenAI API token"})
+			return
+		}
 		role, ok := roleByName["scout"]
 		if !ok {
 			wakeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "scout unavailable"})
 			return
 		}
-		output, err := query(role, in.Symbol, in.Query)
+		result, err := query(role, in.Symbol, in.Query, in.OpenAIAPIKey)
 		if err != nil {
 			wakeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent query failed"})
 			return
 		}
 		wakeJSON(w, http.StatusOK, map[string]any{
 			"role":      role.Role,
-			"cognition": env("COGNITION", "stub"),
-			"output":    output,
+			"cognition": result.Cognition,
+			"provider":  result.Provider,
+			"model":     result.Model,
+			"output":    result.Output,
 		})
 	})
 	return mux
+}
+
+func validOptionalAPIKey(value string) bool {
+	if len(value) > 512 {
+		return false
+	}
+	for _, char := range value {
+		if char <= 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func safeOccurrenceID(occurrenceID string) bool {

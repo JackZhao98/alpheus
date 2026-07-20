@@ -43,6 +43,7 @@ byId("login-form").addEventListener("submit", async (event) => {
 
 byId("logout").addEventListener("click", async () => {
   await request("/agent/auth/logout", {method:"POST"}).catch(() => null);
+  byId("openai-token").value = "";
   showAuthenticated(false);
 });
 
@@ -50,8 +51,14 @@ byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const symbol = byId("symbol").value.trim().toUpperCase();
   const query = byId("question").value.trim();
+  const openaiToken = byId("openai-token").value.trim();
   if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !query) {
     byId("query-error").textContent = "请输入有效股票代码和问题。";
+    return;
+  }
+  if (!openaiToken) {
+    byId("query-error").textContent = "请输入 OpenAI API Token。";
+    byId("openai-token").focus();
     return;
   }
   byId("run").disabled = true;
@@ -59,12 +66,13 @@ byId("query-form").addEventListener("submit", async (event) => {
   byId("query-error").textContent = "";
   try {
     const result = await request("/agent/query", {
-      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbol, query})
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({symbol, query, openai_api_key:openaiToken})
     });
     byId("result").textContent = JSON.stringify(result, null, 2);
     byId("status").textContent = result.cognition === "stub"
       ? "STUB PASS · MODEL NOT CONNECTED"
-      : "COMPLETE · NO OPERATION";
+      : `COMPLETE · ${String(result.model || "OPENAI").toUpperCase()} · NO OPERATION`;
   } catch (error) {
     if (error.message === "unauthorized") showAuthenticated(false);
     byId("result").textContent = "No result returned.";

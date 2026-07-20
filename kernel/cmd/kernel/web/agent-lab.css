@@ -17,6 +17,7 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .login-card { max-width:480px; margin:0 auto; }
 .card-head,.result-head { display:flex; justify-content:space-between; gap:16px; align-items:center; }
 .muted { color:#a6beb4; line-height:1.55; }
+.field-note { margin:0 0 4px; color:#86a59a; font-size:12px; line-height:1.5; }
 form { display:grid; gap:10px; }
 label { margin-top:8px; color:#c4d9d0; font-size:14px; font-weight:700; }
 input,textarea,button { width:100%; border-radius:10px; border:1px solid #335d50; font:inherit; }

@@ -33,11 +33,14 @@
       </div>
       <p class="muted">Scout 会收到你的问题、Kernel 标准化的最新可用报价和 30 日 bars。此页面不能创建 operation 或下单。</p>
       <form id="query-form">
+        <label for="openai-token">OpenAI API Token</label>
+        <input id="openai-token" type="password" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore required>
+        <p class="field-note">GPT-5.6 Sol · 仅保存在当前页面内存；不写入数据库、日志或浏览器存储。刷新后需重新输入。当前为本地 HTTP，只在可信 LAN 使用。</p>
         <label for="symbol">股票代码</label>
         <input id="symbol" value="SOFI" maxlength="16" autocomplete="off" spellcheck="false" required>
         <label for="question">问题</label>
         <textarea id="question" rows="5" maxlength="4000" autocomplete="off" spellcheck="false" required>现在的价格走势里，最值得进一步验证的是什么？</textarea>
-        <button id="run" type="submit">Ask Scout</button>
+        <button id="run" type="submit">Ask GPT-5.6 Sol Scout</button>
       </form>
       <div class="result-head"><span>结果</span><strong id="status">READY</strong></div>
       <pre id="result">提交一个问题开始测试。</pre>

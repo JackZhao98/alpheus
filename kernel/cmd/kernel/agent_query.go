@@ -12,8 +12,9 @@ import (
 const maxAgentQueryResponseBytes int64 = 1 << 20
 
 type agentQueryInput struct {
-	Symbol string `json:"symbol"`
-	Query  string `json:"query"`
+	Symbol       string `json:"symbol"`
+	Query        string `json:"query"`
+	OpenAIAPIKey string `json:"openai_api_key"`
 }
 
 // postAgentQuery is a non-trading MVP bridge. Kernel authenticates the user,
@@ -26,8 +27,13 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
 	input.Query = strings.TrimSpace(input.Query)
+	input.OpenAIAPIKey = strings.TrimSpace(input.OpenAIAPIKey)
 	if !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and query are required"})
+		return
+	}
+	if input.OpenAIAPIKey == "" || !validAgentAPIKey(input.OpenAIAPIKey) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OpenAI API token is required"})
 		return
 	}
 
@@ -77,6 +83,18 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 		s.store.Event("agent_query", map[string]string{"role": "scout", "symbol": input.Symbol, "subject": authenticatedSubject(r)})
 	}
 	writeJSON(w, http.StatusOK, output)
+}
+
+func validAgentAPIKey(value string) bool {
+	if len(value) > 512 {
+		return false
+	}
+	for _, char := range value {
+		if char <= 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func validAgentQuerySymbol(symbol string) bool {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -132,22 +133,25 @@ func TestWakeResponseMarksDuplicate(t *testing.T) {
 }
 
 func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
-	var gotSymbol, gotQuery string
+	var gotSymbol, gotQuery, gotAPIKey string
 	handler := newRuntimeHandler("kernel-secret", map[string]roles.Role{
 		"scout": {Role: "scout"},
 	}, func(roles.Role, string, string) {
 		t.Fatal("query must not run the operation session path")
-	}, func(role roles.Role, symbol, query string) (contracts.Output, error) {
-		gotSymbol, gotQuery = symbol, query
-		return contracts.OpportunityBrief{Action: "PASS"}, nil
+	}, func(role roles.Role, symbol, query, apiKey string) (queryResult, error) {
+		gotSymbol, gotQuery, gotAPIKey = symbol, query, apiKey
+		return queryResult{
+			Output:    contracts.OpportunityBrief{Action: "PASS"},
+			Cognition: "llm", Provider: "openai", Model: "gpt-5.6-sol",
+		}, nil
 	})
-	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(`{"symbol":"SOFI","query":"值得研究吗？"}`))
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewBufferString(`{"symbol":"SOFI","query":"值得研究吗？","openai_api_key":"sk-test-secret"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer kernel-secret")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || gotSymbol != "SOFI" || gotQuery != "值得研究吗？" {
-		t.Fatalf("status=%d symbol=%q query=%q body=%s", w.Code, gotSymbol, gotQuery, w.Body.String())
+	if w.Code != http.StatusOK || gotSymbol != "SOFI" || gotQuery != "值得研究吗？" || gotAPIKey != "sk-test-secret" {
+		t.Fatalf("status=%d symbol=%q query=%q api_key_set=%t body=%s", w.Code, gotSymbol, gotQuery, gotAPIKey != "", w.Body.String())
 	}
 	var response map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -156,8 +160,11 @@ func TestQueryRunsScoutWithoutSubmittingOperations(t *testing.T) {
 	if response["role"] != "scout" {
 		t.Fatalf("response=%v", response)
 	}
-	if response["cognition"] != "stub" {
+	if response["cognition"] != "llm" || response["provider"] != "openai" || response["model"] != "gpt-5.6-sol" {
 		t.Fatalf("response=%v", response)
+	}
+	if strings.Contains(w.Body.String(), "sk-test-secret") {
+		t.Fatal("API key leaked into query response")
 	}
 }
 

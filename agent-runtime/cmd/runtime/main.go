@@ -44,10 +44,11 @@ func main() {
 		log.Fatalf("roles: %v", err)
 	}
 	client := assemble.New(kernel, runtimeToken)
-	cog, err := cognition.New(cognition.WithTelemetry(func(event cognition.Telemetry) error {
+	telemetrySink := func(event cognition.Telemetry) error {
 		_, err := postJSON(client, "/telemetry", event)
 		return err
-	}))
+	}
+	cog, err := cognition.New(cognition.WithTelemetry(telemetrySink))
 	if err != nil {
 		log.Fatalf("cognition: %v", err)
 	}
@@ -62,19 +63,32 @@ func main() {
 	}
 	wakeHandler := newRuntimeHandler(kernelToken, roleByName, func(role roles.Role, trigger, occurrenceID string) {
 		go runSession(client, cog, role, trigger, occurrenceID)
-	}, func(role roles.Role, symbol, question string) (contracts.Output, error) {
+	}, func(role roles.Role, symbol, question, openAIAPIKey string) (queryResult, error) {
 		ctx, err := client.AssembleQuery(role, symbol, question)
 		if err != nil {
-			return nil, err
+			return queryResult{}, err
 		}
-		out, err := cog.Run(role, ctx)
+		queryCog := cog
+		result := queryResult{Cognition: env("COGNITION", "stub")}
+		if openAIAPIKey != "" {
+			model := env("MONITOR_MODEL", "gpt-5.6-sol")
+			queryCog, err = cognition.NewOpenAIQuery(openAIAPIKey, model, cognition.WithTelemetry(telemetrySink))
+			if err != nil {
+				return queryResult{}, err
+			}
+			result.Cognition = "llm"
+			result.Provider = "openai"
+			result.Model = model
+		}
+		out, err := queryCog.Run(role, ctx)
 		if err != nil {
-			return nil, err
+			return queryResult{}, err
 		}
 		if err := out.Validate(); err != nil {
-			return nil, err
+			return queryResult{}, err
 		}
-		return out, nil
+		result.Output = out
+		return result, nil
 	})
 	log.Printf("agent-runtime up: roles=%v cognition=%s kernel=%s", names, env("COGNITION", "stub"), kernel)
 	if tick > 0 {
