@@ -9,11 +9,14 @@
 > `agent-platform/inputcontract`. They preserve raw input and attachment
 > `BlobRef` identity before any interpretation. The corresponding immutable,
 > default-deny `agent_input` storage is deployed by the AP schema bootstrapper;
-> no application profile has direct table writes. IntentDraft, PolicyResolution,
-> the sole Input Gateway submission command's contract is now frozen (with
-> distinct Control-API workload actor and authenticated user subject); its
-> database/API implementation, UI transport, interruption and
-> confirmation state machines remain unspecified and unimplemented.
+> no application profile has direct table writes. The sole Input Gateway
+> submission command is implemented at the database boundary: its distinct
+> Control-API workload actor and authenticated user subject, Conversation and
+> request digests, idempotent replay, raw input, attachments, and references
+> are committed atomically. The network API that authenticates a browser and
+> stages raw blobs remains unimplemented; IntentDraft, PolicyResolution, UI
+> transport, interruption, and confirmation state machines also remain
+> unspecified and unimplemented.
 
 ## Purpose
 

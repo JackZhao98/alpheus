@@ -58,10 +58,15 @@
   deduplication and creation time before any model interpretation.  An
   independent immutable `agent_input` schema now persists the facts under
   default-deny grants and defers cross-table attachment validation to commit.
-  The next Input Gateway submission command contract separately binds its
-  Control API workload actor and authenticated user subject. Its database/API
-  implementation, IntentDraft, PolicyResolution, Run admission, question,
-  confirmation, and UI command remain disabled by this slice.
+  The sole admission command now also persists an exact, idempotent request
+  through the scoped Control API database role: it binds the workload actor to
+  its login identity, validates the referenced Conversation digest, and writes
+  the raw input, attachments, and referenced records atomically. The
+  disposable database probe exercises the real restricted role, exact replay,
+  idempotency conflict, and default-deny table boundary. The network-facing
+  Input Gateway API, Blob staging, IntentDraft, PolicyResolution, Run
+  admission, question, confirmation, and UI command remain disabled by this
+  slice.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money

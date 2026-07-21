@@ -91,5 +91,6 @@ run_sql agent-platform/migrations/0008_ap1_attempt_terminalization.sql 0008_ap1_
 run_sql agent-platform/migrations/0009_ap1_child_task_requests.sql 0009_ap1_child_task_requests
 run_sql agent-platform/migrations/0010_ap1_cancellation_submission.sql 0010_ap1_cancellation_submission
 run_sql agent-platform/migrations/0011_ap2_input_facts.sql 0011_ap2_input_facts
+run_sql agent-platform/migrations/0012_ap2_submit_user_request.sql 0012_ap2_submit_user_request
 
 echo "agent-platform migration bootstrap complete"
