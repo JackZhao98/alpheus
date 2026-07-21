@@ -42,6 +42,13 @@
   the stale process cannot overwrite the winner. Recovery reloads the current
   encrypted OpenAI credential rather than persisting it with the Job. This is
   stability for the existing read-only MVP path, not the canonical AP1 Worker.
+- Architecture clarification adopted 2026-07-21: the Agent product is named
+  **Cortex**. Canonical Agent Lab, collaboration and Tool history belong to
+  Cortex Control; Research collection, normalized evidence and point-in-time
+  replay belong to the independent Research Plane. The Kernel-owned query queue
+  remains compatibility-only and must be retired rather than extended into a
+  Cortex workflow owner. See
+  [`CORTEX_RESEARCH_BOUNDARY.md`](CORTEX_RESEARCH_BOUNDARY.md).
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money

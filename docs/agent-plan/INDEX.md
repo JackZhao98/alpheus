@@ -30,8 +30,11 @@ criteria, dependencies, and rollout boundary have been reviewed and frozen.
 5. Read `DELEGATION.md` and then `DELEGATION_POLICY.md` when work concerns
    autonomous authority, GRACE eligibility mapping, capability templates,
    grants, human confirmation interaction, budgets, or Kernel authorization.
-6. Read `SYSTEM_BOUNDARIES.md` before changing ownership, persistence, events,
-   cross-module APIs, Provider access, or failure behavior.
+6. Read `SYSTEM_BOUNDARIES.md` and
+   [`CORTEX_RESEARCH_BOUNDARY.md`](CORTEX_RESEARCH_BOUNDARY.md) before changing
+   ownership, persistence, Agent Lab, Tool execution, research collection,
+   evidence/as-of replay, cross-module APIs, Provider access, or failure
+   behavior.
 7. Read `BUILD_ROADMAP.md` before planning implementation, schemas, services,
    migrations, rollout, or milestone acceptance.
 8. Read `FINAL_ARCHITECTURE_AUDIT.md` before claiming AP0 or any later stage is
@@ -52,7 +55,7 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 | Module | Status | File |
 |---|---|---|
-| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-2 durable foundations now include fenced Worker child-task requests and Control-only cancellation submission; the legacy direct Runtime-to-Kernel operation path is retired. Agent Lab has typed Auto routing, an asynchronous persisted and crash-recoverable read-only Scout -> Decision Desk workflow, deterministic Robinhood price/technical/fundamental/financial/earnings/news context, encrypted database-backed credentials, guarded Brave Search/static Web Fetch, and stable API error codes. Canonical AP1 Worker admission/integration, evidence persistence, and the real Brave provider smoke remain open while all effects stay closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
+| Agent Platform implementation tracker | AP0-1 through AP0-6 accepted; AP1-2 durable foundations now include fenced Worker child-task requests and Control-only cancellation submission; the legacy direct Runtime-to-Kernel operation path is retired. The product name is **Cortex**: canonical Run/Task/Attempt/Turn/Artifact and Agent Lab history belong to Cortex Control, while research collection/evidence/as-of replay belong to the independent Research Plane. The existing Kernel-owned read-only Agent Lab dispatcher remains a compatibility MVP pending canonical AP1 integration and retirement. Canonical Worker admission/integration, evidence persistence, and the real Brave provider smoke remain open while all effects stay closed | [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) |
 | Lean v1 cross-module amendment | Frozen; owner accepted 2026-07-19; authorizes non-money AP0 only | [`LEAN_V1_AMENDMENT.md`](LEAN_V1_AMENDMENT.md) |
 | GRACE architecture | Architecture frozen; no authorization effect | [`GRACE.md`](GRACE.md) |
 | GRACE quantitative evaluation | Draft written; independent model-risk review, exact machine schemas, Calibration Pack, and implementation authorization required | [`GRACE_QUANTITATIVE.md`](GRACE_QUANTITATIVE.md) |

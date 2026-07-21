@@ -47,6 +47,11 @@ one PostgreSQL deployment. Co-location does not grant shared ownership.
 - Evidence Store owns raw sources, Claims/Facts/Metrics, provenance,
   point-in-time Snapshots, freshness, conflicts, and coverage.
 - External documents, websites, attachments, and Tool text are untrusted data.
+- Research is a peer **Research Plane**, not an Agent Control/Cortex submodule
+  or a Kernel extension. Cortex owns Tool selection, capability binding, budget
+  and the durable Tool-call receipt; Research owns connector execution,
+  collection, normalization, evidence/archive writes, and point-in-time query.
+  See [`CORTEX_RESEARCH_BOUNDARY.md`](CORTEX_RESEARCH_BOUNDARY.md).
 
 ### Knowledge and strategy governance
 
@@ -76,6 +81,19 @@ one PostgreSQL deployment. Co-location does not grant shared ownership.
   Kernel trust zone.
 - Agents receive Kernel-published facts and never receive Provider credentials
   or use Robinhood MCP as a normal Agent Tool.
+
+### Named-plane clarification
+
+- **Cortex** is the product name for Agent Control plus cognition: Cortex
+  Control owns durable Agent workflow truth; Cortex Workers execute bounded
+  Attempts only.
+- **Research Plane** owns scheduled external collection and temporal evidence.
+  An `as_of` result may include only observations available to the system at or
+  before the requested time; source publication, observation, availability and
+  ingest times remain distinct.
+- **Kernel** owns trading facts and effects only. Kernel-owned Agent Lab jobs
+  are a read-only MVP compatibility path and cannot become canonical Cortex
+  Run/Task/Attempt/Turn/Artifact state.
 
 ## Logical module graph
 
