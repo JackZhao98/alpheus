@@ -532,23 +532,24 @@ func (p *RobinhoodProvider) equityInstrument(ctx context.Context, symbol string)
 	if match == nil || !looksLikeUUID(match.InstrumentID) {
 		return InstrumentSpec{}, p.dataError("equity instrument identity is not exact")
 	}
-	quote, err := p.equityQuote(ctx, symbol)
-	if err != nil {
-		return InstrumentSpec{}, err
-	}
 	instrument := InstrumentSpec{
 		Symbol: symbol, InstrumentID: strings.ToLower(match.InstrumentID), Kind: "equity", Multiplier: 1,
 		PriceTick: units.MustMicros("0.01"), BelowPriceTick: units.MustMicros("0.0001"),
 		TickCutoff: units.MustMicros("1"), QtyIncrement: units.MustQty("1"),
 		// AsOf marks when this static instrument metadata was observed, not the
-		// market time of the quote used only for the tick-schedule check below.
-		// Tying it to quote.AsOf made the instrument inherit a stale after-hours
-		// venue timestamp and fail the pre-effect freshness barrier. Matches the
-		// option instrument path.
+		// market time of any quote. Matches the option instrument path.
 		Source: robinhoodSource, AsOf: time.Now().UTC(),
 	}
-	if !instrument.SupportsPrice(quote.Bid) || !instrument.SupportsPrice(quote.Ask) {
-		return InstrumentSpec{}, p.dataError("equity quote violates certified tick schedule")
+	// Identity (from search) and the tick schedule are static structural facts.
+	// A live quote is only a drift cross-check: when one is available, verify the
+	// provider's bid/ask sit on the certified schedule, but never make instrument
+	// availability depend on an active market -- after hours / closed the quote is
+	// absent yet the instrument is unchanged, and the order's own limit is
+	// tick-validated separately at the pre-effect barrier.
+	if quote, err := p.equityQuote(ctx, symbol); err == nil {
+		if !instrument.SupportsPrice(quote.Bid) || !instrument.SupportsPrice(quote.Ask) {
+			return InstrumentSpec{}, p.dataError("equity quote violates certified tick schedule")
+		}
 	}
 	return instrument, nil
 }
