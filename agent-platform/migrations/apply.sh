@@ -92,5 +92,6 @@ run_sql agent-platform/migrations/0009_ap1_child_task_requests.sql 0009_ap1_chil
 run_sql agent-platform/migrations/0010_ap1_cancellation_submission.sql 0010_ap1_cancellation_submission
 run_sql agent-platform/migrations/0011_ap2_input_facts.sql 0011_ap2_input_facts
 run_sql agent-platform/migrations/0012_ap2_submit_user_request.sql 0012_ap2_submit_user_request
+run_sql agent-platform/migrations/0013_ap2_blob_adapter.sql 0013_ap2_blob_adapter
 
 echo "agent-platform migration bootstrap complete"

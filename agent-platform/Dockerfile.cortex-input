@@ -1,0 +1,16 @@
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY agent-platform/go.mod agent-platform/go.sum ./
+RUN go mod download
+COPY agent-platform/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /bin/cortex-input ./cmd/cortex-input
+
+FROM alpine:3.20
+RUN apk add --no-cache su-exec \
+    && addgroup -S cortex && adduser -S -G cortex cortex \
+    && mkdir -p /var/lib/alpheus/cortex-blobs \
+    && chown -R cortex:cortex /var/lib/alpheus
+COPY --from=build /bin/cortex-input /usr/local/bin/cortex-input
+COPY agent-platform/cortex-input-entrypoint.sh /usr/local/bin/cortex-input-entrypoint
+EXPOSE 8400
+ENTRYPOINT ["/usr/local/bin/cortex-input-entrypoint"]

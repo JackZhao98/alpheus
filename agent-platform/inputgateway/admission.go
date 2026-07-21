@@ -59,13 +59,16 @@ type Request struct {
 	Actor          contracts.AuditActor
 	Subject        contracts.AuditActor
 	ConversationID string
-	RequestID      string
-	Kind           inputcontract.RequestKind
-	Text           []byte
-	IdempotencyKey string
-	CausationID    string
-	CorrelationID  string
-	Deadline       time.Time
+	// ConversationCreatedAt is a caller-retained immutable fact. A later
+	// request in the same Conversation must replay its original value.
+	ConversationCreatedAt time.Time
+	RequestID             string
+	Kind                  inputcontract.RequestKind
+	Text                  []byte
+	IdempotencyKey        string
+	CausationID           string
+	CorrelationID         string
+	Deadline              time.Time
 }
 
 type Admission struct {
@@ -99,10 +102,11 @@ func (gateway *Gateway) Admit(ctx context.Context, request Request) (Admission, 
 	if now.IsZero() || now.Location() != time.UTC || !now.Before(request.Deadline) {
 		return Admission{}, &Error{Code: CodeInvalidRequest, Message: "request deadline is expired"}
 	}
-	rawID, err := gateway.newID()
-	if err != nil {
-		return Admission{}, &Error{Code: CodeInvalidRequest, Message: "could not allocate raw input identity", Cause: err}
-	}
+	// The immutable Request identity is also the raw-input origin identity.
+	// This is deliberate: a transport retry must address the same Blob stage
+	// and receive the same BlobRef, otherwise the request digest would change
+	// underneath an otherwise identical idempotency key.
+	rawID := request.RequestID
 	raw, err := gateway.blobs.CommitRawInput(ctx, RawBlobRequest{
 		SubjectPrincipalID: request.Subject.PrincipalID, InputID: rawID,
 		Text: request.Text, MediaType: "text/plain; charset=utf-8",
@@ -110,12 +114,14 @@ func (gateway *Gateway) Admit(ctx context.Context, request Request) (Admission, 
 	if err != nil {
 		return Admission{}, &Error{Code: CodeBlobCommit, Message: "raw input was not committed", Cause: err}
 	}
-	if raw.Validate() != nil || raw.CommittedAt.After(now) {
+	acceptedAt := gateway.now().UTC()
+	if raw.Validate() != nil || acceptedAt.IsZero() || acceptedAt.Location() != time.UTC || raw.CommittedAt.After(acceptedAt) ||
+		request.ConversationCreatedAt.After(raw.CommittedAt) {
 		return Admission{}, &Error{Code: CodeBlobCommit, Message: "blob service returned an invalid raw input reference"}
 	}
 	conversation := inputcontract.Conversation{
 		SchemaRevision: inputcontract.SchemaRevisionV1, ConversationID: request.ConversationID,
-		Subject: request.Subject, CreatedAt: now,
+		Subject: request.Subject, CreatedAt: request.ConversationCreatedAt,
 	}
 	conversationRef, err := conversation.Ref()
 	if err != nil {
@@ -124,7 +130,7 @@ func (gateway *Gateway) Admit(ctx context.Context, request Request) (Admission, 
 	userRequest := inputcontract.UserRequest{
 		SchemaRevision: inputcontract.SchemaRevisionV1, RequestID: request.RequestID,
 		Conversation: conversationRef, Subject: request.Subject, Kind: request.Kind,
-		RawInput: raw, CreatedAt: now,
+		RawInput: raw, CreatedAt: raw.CommittedAt,
 	}
 	requestRef, err := userRequest.Ref()
 	if err != nil {
@@ -158,10 +164,12 @@ func validRequest(request Request) bool {
 	return request.Actor.Validate() == nil && request.Actor.Kind == contracts.PrincipalWorkload &&
 		request.Actor.Audience == contracts.AudienceControlAPI && request.Subject.Validate() == nil &&
 		request.Subject.Kind == contracts.PrincipalUser && request.Subject.Audience == contracts.AudienceControlAPI &&
-		request.ConversationID != "" && request.RequestID != "" && request.Kind != "" &&
+		request.ConversationID != "" && validUTC(request.ConversationCreatedAt) && request.RequestID != "" && request.Kind != "" &&
 		len(request.Text) > 0 && request.IdempotencyKey != "" && request.CausationID != "" &&
 		request.CorrelationID != "" && !request.Deadline.IsZero() && request.Deadline.Location() == time.UTC
 }
+
+func validUTC(value time.Time) bool { return !value.IsZero() && value.Location() == time.UTC }
 
 func newUUID() (string, error) {
 	var value [16]byte

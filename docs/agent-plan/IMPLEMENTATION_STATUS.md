@@ -63,10 +63,19 @@
   its login identity, validates the referenced Conversation digest, and writes
   the raw input, attachments, and referenced records atomically. The
   disposable database probe exercises the real restricted role, exact replay,
-  idempotency conflict, and default-deny table boundary. The network-facing
-  Input Gateway API, Blob staging, IntentDraft, PolicyResolution, Run
-  admission, question, confirmation, and UI command remain disabled by this
-  slice.
+  idempotency conflict, and default-deny table boundary. The deployed Input
+  Gateway now supplies a strict authenticated HTTP API, real
+  owner-only local content-addressed Blob persistence, PostgreSQL Blob and
+  submission adapters, exact transport-retry recovery, and a separately
+  provisioned `cortex-control-1` NOINHERIT LOGIN/container on localhost port
+  8400. All Agent Platform race tests, vet, shell syntax, Compose validation,
+  the 17-migration disposable PostgreSQL replay/role probe, container health,
+  owner-only Blob mode, and exact duplicate HTTP write smoke pass. The target
+  database contains one immutable smoke request and one committed 28-byte Blob;
+  the Blob root is mode 0700 and content is mode 0400 under `cortex:cortex`.
+  IntentDraft, PolicyResolution,
+  Run admission, question, confirmation, and Agent Lab UI routing remain
+  disabled by this slice.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money
@@ -100,6 +109,27 @@ milestones and not independent authorization gates.
 AP1-1 freezes data shape and fail-closed validation only. It does not create
 tables, start a scheduler, claim work, call a model, publish a behavior event,
 or authorize any Kernel-facing effect.
+
+## Cortex cutover execution ledger
+
+This ledger counts only accepted completion, not code written or unit-tested.
+
+| Step | Scope | Current status |
+|---|---|---|
+| 1 | Freeze Kernel / Cortex / Research boundary | Complete and frozen |
+| 2 | Immutable Conversation / UserRequest and default-deny storage | Complete |
+| 3 | Restricted idempotent Control API submission | Complete |
+| 4 | Blob-first Input Gateway admission orchestration | Complete |
+| 5 | Independent HTTP input API | Complete; deployed and exact-replay smoke passed |
+| 6 | Real local Blob persistence and PostgreSQL adapters | Complete; database and owner-only file probes passed |
+| 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete; healthy on `127.0.0.1:8400` |
+| 8 | Canonical Run / Task / Attempt admission | Not started |
+| 9 | Verified OpenAI Worker with durable Turn / Artifact | Not started |
+| 10 | Agent Lab cutover and Kernel queue retirement | Not started |
+
+Accepted cutover completion is now **7 / 10**. Cortex can persist authenticated
+raw input independently, but it still creates no Run/Task and calls no model.
+The old Kernel-owned Agent Lab query path remains the only deployed model path.
 
 ## Current read-only Research Gateway slice
 

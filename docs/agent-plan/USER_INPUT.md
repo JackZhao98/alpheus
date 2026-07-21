@@ -13,9 +13,14 @@
 > submission command is implemented at the database boundary: its distinct
 > Control-API workload actor and authenticated user subject, Conversation and
 > request digests, idempotent replay, raw input, attachments, and references
-> are committed atomically. The network API that authenticates a browser and
-> stages raw blobs remains unimplemented; IntentDraft, PolicyResolution, UI
-> transport, interruption, and confirmation state machines also remain
+> are committed atomically. The deployed Cortex Input service now adds the
+> strict authenticated HTTP boundary, retry-stable local content-addressed
+> Blob staging, PostgreSQL adapters, and a dedicated Control API LOGIN/container
+> on localhost port 8400. Its race tests, disposable PostgreSQL migration/role
+> probe, container health check, owner-only file-mode check, and exact duplicate
+> HTTP replay smoke passed on 2026-07-21. Agent Lab has not been switched to
+> this endpoint. IntentDraft,
+> PolicyResolution, interruption, and confirmation state machines remain
 > unspecified and unimplemented.
 
 ## Purpose

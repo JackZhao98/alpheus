@@ -105,6 +105,21 @@ func (store *LocalStore) Stage(ctx context.Context, grant StageGrant, input io.R
 	path := store.stagePath(grant.StageID)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if grant.ExpectedDigest == "" || grant.ExpectedSizeBytes == nil {
+				return StagedBlob{}, ErrInvalidBlob
+			}
+			existing, openErr := openRegularOwnerOnly(path)
+			if openErr != nil {
+				return StagedBlob{}, openErr
+			}
+			defer existing.Close()
+			if verifyErr := verifyOpenFile(ctx, existing, *grant.ExpectedSizeBytes, grant.ExpectedDigest); verifyErr != nil {
+				return StagedBlob{}, verifyErr
+			}
+			return StagedBlob{SchemaRevision: SchemaRevisionV1, Grant: grant,
+				ContentDigest: grant.ExpectedDigest, SizeBytes: *grant.ExpectedSizeBytes, StagedAt: grant.IssuedAt}, nil
+		}
 		return StagedBlob{}, fmt.Errorf("create staged blob: %w", err)
 	}
 	keep := false

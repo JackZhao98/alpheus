@@ -76,6 +76,46 @@ services:
       db: { condition: service_healthy }
     restart: "no"
 
+  # Provisions one credential-isolated NOINHERIT LOGIN for Cortex Control.
+  # The password comes from an owner-only local file and is never shared with
+  # Kernel, Worker, Research Gateway, or the migration process at runtime.
+  cortex-control-login:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      CORTEX_DATABASE_PASSWORD_FILE: /run/secrets/cortex/database-password
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-control-login.sh"]
+    depends_on:
+      agent-platform-migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  cortex-input:
+    build:
+      context: .
+      dockerfile: agent-platform/Dockerfile.cortex-input
+    environment:
+      CORTEX_PRINCIPAL_ID: cortex-control-1
+      CORTEX_SUBJECT_PRINCIPAL_ID: ${CORTEX_SUBJECT_PRINCIPAL_ID:-owner-1}
+      CORTEX_DATABASE_URL_FILE: /run/secrets/cortex/database-url
+      CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
+      CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
+      CORTEX_INPUT_ADDR: :8400
+    ports: ["127.0.0.1:8400:8400"]
+    volumes:
+      - cortex_blobdata:/var/lib/alpheus/cortex-blobs
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8400/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      cortex-control-login: { condition: service_completed_successfully }
+
   agent-runtime:
     build: ./agent-runtime
     environment:
@@ -98,3 +138,4 @@ services:
 
 volumes:
   pgdata:
+  cortex_blobdata:

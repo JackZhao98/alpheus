@@ -6,4 +6,6 @@ toolchain go1.23.2
 
 require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 
+require github.com/lib/pq v1.10.9
+
 require golang.org/x/text v0.14.0 // indirect

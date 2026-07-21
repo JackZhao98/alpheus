@@ -3,6 +3,7 @@ package inputgateway
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,8 @@ func (fake *testSubmitter) SubmitUserRequest(_ context.Context, command inputcon
 func validAdmissionRequest() Request {
 	return Request{Actor: contracts.AuditActor{PrincipalID: "control-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI},
 		Subject:        contracts.AuditActor{PrincipalID: "owner-1", Kind: contracts.PrincipalUser, Audience: contracts.AudienceControlAPI},
-		ConversationID: "conversation-1", RequestID: "request-1", Kind: inputcontract.RequestNew, Text: []byte("test"),
+		ConversationID: "conversation-1", ConversationCreatedAt: time.Date(2026, 7, 21, 15, 59, 0, 0, time.UTC),
+		RequestID: "request-1", Kind: inputcontract.RequestNew, Text: []byte("test"),
 		IdempotencyKey: "idem-1", CausationID: "cause-1", CorrelationID: "correlation-1", Deadline: time.Date(2026, 7, 21, 16, 5, 0, 0, time.UTC)}
 }
 
@@ -81,5 +83,28 @@ func TestAdmitReturnsStableCodedFailures(t *testing.T) {
 	_, err = gateway.Admit(context.Background(), validAdmissionRequest())
 	if !errors.As(err, &coded) || coded.Code != CodeAdmission {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestAdmitTransportRetryReplaysExactImmutableRequest(t *testing.T) {
+	blobs, submitted := &testBlobCommitter{}, &testSubmitter{}
+	gateway, err := New(blobs, submitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 21, 16, 1, 0, 0, time.UTC)
+	gateway.now = func() time.Time { return now }
+	first, err := gateway.Admit(context.Background(), validAdmissionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	second, err := gateway.Admit(context.Background(), validAdmissionRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.Command.Request, second.Command.Request) || first.Command.Conversation != second.Command.Conversation ||
+		first.Command.Envelope.RequestDigest != second.Command.Envelope.RequestDigest {
+		t.Fatalf("retry changed immutable request: first=%+v second=%+v", first.Command, second.Command)
 	}
 }
