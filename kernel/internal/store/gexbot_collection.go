@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type GEXBotCollectionConfig struct {
@@ -30,7 +32,7 @@ func (s *Store) LoadGEXBotCollectionConfig() (GEXBotCollectionConfig, error) {
 	defer cancel()
 	var value GEXBotCollectionConfig
 	err := s.DB.QueryRowContext(ctx, `SELECT enabled,symbols,interval_minutes,updated_at
-		FROM gexbot_collection_config WHERE singleton=true`).Scan(&value.Enabled, &value.Symbols, &value.IntervalMinutes, &value.UpdatedAt)
+		FROM gexbot_collection_config WHERE singleton=true`).Scan(&value.Enabled, pq.Array(&value.Symbols), &value.IntervalMinutes, &value.UpdatedAt)
 	if err != nil {
 		return GEXBotCollectionConfig{}, normalizeDBError(err)
 	}
