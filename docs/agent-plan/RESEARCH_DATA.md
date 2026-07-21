@@ -184,13 +184,16 @@ versioned decision.
 
 ## GEXBot options-data Plugin reservation
 
-GEXBot Classic is a planned **read-only market-data Plugin**, initially for a
+GEXBot Classic is a **read-only market-data Plugin** direction, initially for a
 two-week options-data collection window and later as research evidence for a
-single-day options strategy. It is not a Kernel Provider, an execution Plugin,
-or an authority to permit an order.
+single-day options strategy. A GEXBot-specific interim collector already stores
+raw snapshots under owner-configured symbols and cadence; it is not a general
+Data Plane yet. Neither form is a Kernel Provider, an execution Plugin, or an
+authority to permit an order.
 
-The future registration belongs in AP3's Capability Registry; its collector,
-raw retention, normalization, and point-in-time query path belong in AP4. The
+The generalized registration belongs in AP3's Capability Registry; its
+collector, raw retention, normalization, and point-in-time query path belong in
+AP4. The interim collector must remain read-only until that migration. The
 Plugin must have a credential-isolated connector and expose one or more
 versioned read capabilities. It must not receive a Robinhood mutation
 credential, a Kernel mutation path, or a Delegation grant.

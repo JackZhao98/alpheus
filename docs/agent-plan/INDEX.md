@@ -90,10 +90,11 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 
 ## Product reservation
 
-GEXBot Classic is reserved as a future read-only options-data Plugin: first for
-an owner-configured two-week collection window, then for point-in-time research
-evidence in a later single-day options strategy. Registration is an AP3 concern
-and durable collection/evidence is AP4 work. It grants no Kernel or broker
+GEXBot Classic already has a GEXBot-specific read-only collection path and is
+reserved to mature into an options-data Plugin: first for an owner-configured
+two-week collection window, then for point-in-time research evidence in a later
+single-day options strategy. General registration is an AP3 concern and durable
+Data Plane collection/evidence is AP4 work. It grants no Kernel or broker
 authority, and it does not advance or authorize the separate options-execution
 capability track. See [`RESEARCH_DATA.md`](RESEARCH_DATA.md).
 
