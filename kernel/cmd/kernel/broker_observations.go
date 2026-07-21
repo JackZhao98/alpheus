@@ -531,6 +531,11 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		ctx, snapshot, attempt, row, op, facts.Quote, facts.Instrument, facts.TargetOrder, replay,
 	)
 	if err != nil {
+		// The aggregate gate lumps ~8 distinct sub-checks (snapshot/instrument
+		// freshness, proposal TTL, external-aggregate re-classification, funds,
+		// exposure) under one category; keep the specific cause in the log so a
+		// refusal is diagnosable rather than an opaque proposal_stale.
+		log.Printf("pre-effect aggregate gate failed: attempt_id=%s detail=%q", attempt.ID, err.Error())
 		s.recordPreEffectRefusal(attempt, "aggregate_gate_failed")
 		return nil, err
 	}

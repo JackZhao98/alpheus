@@ -540,7 +540,12 @@ func (p *RobinhoodProvider) equityInstrument(ctx context.Context, symbol string)
 		Symbol: symbol, InstrumentID: strings.ToLower(match.InstrumentID), Kind: "equity", Multiplier: 1,
 		PriceTick: units.MustMicros("0.01"), BelowPriceTick: units.MustMicros("0.0001"),
 		TickCutoff: units.MustMicros("1"), QtyIncrement: units.MustQty("1"),
-		Source: robinhoodSource, AsOf: quote.AsOf,
+		// AsOf marks when this static instrument metadata was observed, not the
+		// market time of the quote used only for the tick-schedule check below.
+		// Tying it to quote.AsOf made the instrument inherit a stale after-hours
+		// venue timestamp and fail the pre-effect freshness barrier. Matches the
+		// option instrument path.
+		Source: robinhoodSource, AsOf: time.Now().UTC(),
 	}
 	if !instrument.SupportsPrice(quote.Bid) || !instrument.SupportsPrice(quote.Ask) {
 		return InstrumentSpec{}, p.dataError("equity quote violates certified tick schedule")
