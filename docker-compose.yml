@@ -93,6 +93,32 @@ services:
       agent-platform-migrate: { condition: service_completed_successfully }
     restart: "no"
 
+  cortex-activator-login:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      CORTEX_ACTIVATOR_PASSWORD_FILE: /run/secrets/cortex/activator-database-password
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-activator-login.sh"]
+    depends_on:
+      agent-platform-migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  cortex-owner-policy-activate:
+    image: postgres:16-alpine
+    environment:
+      CORTEX_ACTIVATOR_DATABASE_URL_FILE: /run/secrets/cortex/activator-database-url
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/activate-cortex-owner-policy.sh"]
+    depends_on:
+      cortex-activator-login: { condition: service_completed_successfully }
+    restart: "no"
+
   cortex-input:
     build:
       context: .
@@ -115,6 +141,7 @@ services:
       retries: 20
     depends_on:
       cortex-control-login: { condition: service_completed_successfully }
+      cortex-owner-policy-activate: { condition: service_completed_successfully }
 
   agent-runtime:
     build: ./agent-runtime

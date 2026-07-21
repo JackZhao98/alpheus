@@ -93,5 +93,7 @@ run_sql agent-platform/migrations/0010_ap1_cancellation_submission.sql 0010_ap1_
 run_sql agent-platform/migrations/0011_ap2_input_facts.sql 0011_ap2_input_facts
 run_sql agent-platform/migrations/0012_ap2_submit_user_request.sql 0012_ap2_submit_user_request
 run_sql agent-platform/migrations/0013_ap2_blob_adapter.sql 0013_ap2_blob_adapter
+run_sql agent-platform/migrations/0014_cortex_run_admission.sql 0014_cortex_run_admission
+run_sql agent-platform/migrations/0015_runtime_deferred_guard_identity.sql 0015_runtime_deferred_guard_identity
 
 echo "agent-platform migration bootstrap complete"

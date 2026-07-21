@@ -1,6 +1,7 @@
 package inputgateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -12,10 +13,22 @@ import (
 	"alpheus/agentplatform/inputcontract"
 )
 
-// NewHandler exposes Cortex intake independently from Kernel.  It deliberately
-// admits immutable user facts only; scheduling cognition is a later Cortex
-// Control responsibility and cannot occur as an HTTP side effect here.
+// NewHandler preserves the immutable-input-only surface used by admission
+// tests and bounded callers. NewRuntimeHandler additionally invokes the
+// canonical Control admission boundary after the UserRequest is durable.
 func NewHandler(gateway *Gateway, actor contracts.AuditActor, subjectFromRequest func(*http.Request) (contracts.AuditActor, error)) http.Handler {
+	return newHandler(gateway, nil, actor, subjectFromRequest)
+}
+
+type RunAdmitter interface {
+	AdmitRun(context.Context, Admission) (RunAdmission, error)
+}
+
+func NewRuntimeHandler(gateway *Gateway, runtime RunAdmitter, actor contracts.AuditActor, subjectFromRequest func(*http.Request) (contracts.AuditActor, error)) http.Handler {
+	return newHandler(gateway, runtime, actor, subjectFromRequest)
+}
+
+func newHandler(gateway *Gateway, runtime RunAdmitter, actor contracts.AuditActor, subjectFromRequest func(*http.Request) (contracts.AuditActor, error)) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeHTTPJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "cortex-input-gateway"})
@@ -80,10 +93,26 @@ func NewHandler(gateway *Gateway, actor contracts.AuditActor, subjectFromRequest
 			writeHTTPError(w, http.StatusInternalServerError, "input_gateway_internal_error", "Cortex input admission failed")
 			return
 		}
-		writeHTTPJSON(w, http.StatusAccepted, map[string]any{"status": "accepted",
+		var run RunAdmission
+		if runtime != nil {
+			run, err = runtime.AdmitRun(request.Context(), result)
+			if err != nil {
+				log.Printf("Cortex Run admission failed after immutable request commit: %v", err)
+				writeHTTPError(w, http.StatusServiceUnavailable, "cortex_run_admission_failed", "UserRequest was recorded but its Cortex Run was not admitted; retry the same request")
+				return
+			}
+		}
+		response := map[string]any{"status": "accepted",
 			"conversation_id": result.Command.Conversation.ConversationID, "conversation_created_at": result.Command.Conversation.CreatedAt,
 			"request_id": result.Command.Request.RequestID, "request_created_at": result.Command.Request.CreatedAt,
-			"request_digest": result.Command.Envelope.RequestDigest})
+			"request_digest": result.Command.Envelope.RequestDigest}
+		if runtime != nil {
+			response["run_id"] = run.RunID
+			response["root_task_id"] = run.RootTaskID
+			response["run_state"] = run.RunState
+			response["task_state"] = run.TaskState
+		}
+		writeHTTPJSON(w, http.StatusAccepted, response)
 	})
 	return mux
 }

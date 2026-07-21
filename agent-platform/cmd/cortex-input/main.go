@@ -56,6 +56,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	outputSchema := map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type":    "object", "additionalProperties": false,
+		"required":   []string{"text"},
+		"properties": map[string]any{"text": map[string]any{"type": "string"}},
+	}
+	schemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
+		"agent-platform.contract.output_contract_schema.v1", outputSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex output schema: %w", err)
+	}
+	if err := adapter.EnsureRuntimeDefinitions(ctx, schemaRef); err != nil {
+		return fmt.Errorf("select Cortex runtime definitions: %w", err)
+	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
 		return err
@@ -65,7 +79,7 @@ func run() error {
 	if actor.Validate() != nil || subject.Validate() != nil {
 		return fmt.Errorf("invalid Cortex actor configuration")
 	}
-	handler := inputgateway.NewHandler(gateway, actor, bearerSubject(serviceToken, subject))
+	handler := inputgateway.NewRuntimeHandler(gateway, adapter, actor, bearerSubject(serviceToken, subject))
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
 		Handler:           handler,
