@@ -16,18 +16,25 @@ import (
 // constructed separately from the retrying read client and is never present in
 // shadow or read-only modes.
 type RobinhoodExecution struct {
-	read        *Robinhood
-	mutation    rhmcp.MutationCaller
-	instruments InstrumentReader
-	allowOption bool
+	read         *Robinhood
+	mutation     rhmcp.MutationCaller
+	instruments  InstrumentReader
+	allowOption  bool
+	cancelDelays []time.Duration
 }
 
-var cancelConfirmationDelays = [...]time.Duration{
-	0,
-	100 * time.Millisecond,
-	250 * time.Millisecond,
-	500 * time.Millisecond,
+// defaultCancelConfirmationDelays is the wait before each successive poll for a
+// cancel to reach a terminal state. It starts at 1s because Robinhood does not
+// reflect a cancel for a second or two; polling earlier is wasted and pushed the
+// attempt into an unknown latch that stalled all live execution. Polls land at
+// ~1s, 2s, 5s and 8s -- all four inside brokerCallTimeout with room for the
+// mutation and reads; if that deadline fires first the last known state is
+// returned, exactly as before.
+var defaultCancelConfirmationDelays = []time.Duration{
 	1 * time.Second,
+	1 * time.Second,
+	3 * time.Second,
+	3 * time.Second,
 }
 
 func NewRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instruments InstrumentReader) (*RobinhoodExecution, error) {
@@ -38,7 +45,10 @@ func newRobinhoodExecution(read *Robinhood, mutation rhmcp.MutationCaller, instr
 	if read == nil || mutation == nil || instruments == nil {
 		return nil, fmt.Errorf("Robinhood execution provider requires mutation and instrument capabilities")
 	}
-	return &RobinhoodExecution{read: read, mutation: mutation, instruments: instruments, allowOption: allowOption}, nil
+	return &RobinhoodExecution{
+		read: read, mutation: mutation, instruments: instruments,
+		allowOption: allowOption, cancelDelays: defaultCancelConfirmationDelays,
+	}, nil
 }
 
 func (r *RobinhoodExecution) SupportsOrderKind(kind string) bool {
@@ -243,7 +253,7 @@ func (r *RobinhoodExecution) CancelOrder(ctx context.Context, brokerOrderID stri
 
 func (r *RobinhoodExecution) confirmCancelState(ctx context.Context, brokerOrderID, kind string, last OrderResult) (OrderResult, error) {
 	var lastErr error
-	for _, delay := range cancelConfirmationDelays {
+	for _, delay := range r.cancelDelays {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
 			select {

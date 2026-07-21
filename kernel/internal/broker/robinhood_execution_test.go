@@ -497,6 +497,7 @@ func TestRobinhoodEquityCancelMutatesOnceAndTerminalRetryIsReadOnly(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter.cancelDelays = []time.Duration{0, 0, 0, 0} // poll immediately; timing is not under test here
 	result, err := adapter.CancelOrder(context.Background(), executionOrderID)
 	if err != nil || result.State != "cancelled" {
 		t.Fatalf("cancel result=%+v err=%v", result, err)
@@ -533,6 +534,7 @@ func TestRobinhoodEquityCancelPollsFreshUntilTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter.cancelDelays = []time.Duration{0, 0, 0, 0} // poll immediately; timing is not under test here
 	result, err := adapter.CancelOrder(context.Background(), executionOrderID)
 	if err != nil || result.State != "cancelled" {
 		t.Fatalf("cancel result=%+v err=%v", result, err)
