@@ -88,6 +88,15 @@ model, acceptance probes, dependencies, and rollout are separately frozen.
 - Each module must define context-growth behavior and failure behavior before
   implementation. Risk-relevant context is never silently truncated.
 
+## Product reservation
+
+GEXBot Classic is reserved as a future read-only options-data Plugin: first for
+an owner-configured two-week collection window, then for point-in-time research
+evidence in a later single-day options strategy. Registration is an AP3 concern
+and durable collection/evidence is AP4 work. It grants no Kernel or broker
+authority, and it does not advance or authorize the separate options-execution
+capability track. See [`RESEARCH_DATA.md`](RESEARCH_DATA.md).
+
 ## Next planning work
 
 1. Amendment v1.9.5 recertified M11 after the working-close incident. Keep

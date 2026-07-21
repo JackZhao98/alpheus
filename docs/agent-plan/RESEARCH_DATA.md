@@ -182,6 +182,38 @@ opportunities. Broad discovery does not require permanent ingestion of the
 entire market. Selected candidates enter tracked state through a durable,
 versioned decision.
 
+## GEXBot options-data Plugin reservation
+
+GEXBot Classic is a planned **read-only market-data Plugin**, initially for a
+two-week options-data collection window and later as research evidence for a
+single-day options strategy. It is not a Kernel Provider, an execution Plugin,
+or an authority to permit an order.
+
+The future registration belongs in AP3's Capability Registry; its collector,
+raw retention, normalization, and point-in-time query path belong in AP4. The
+Plugin must have a credential-isolated connector and expose one or more
+versioned read capabilities. It must not receive a Robinhood mutation
+credential, a Kernel mutation path, or a Delegation grant.
+
+Each collection result must preserve:
+
+- the configured coverage (for example, SPX or SPY), collection-policy revision,
+  source/provider revision, and request identity;
+- exact observation and retrieval times, market timezone/session, response
+  checksum, schema revision, and raw immutable BlobRef;
+- an explicit collection gap/failure record when a scheduled observation was
+  missed, stale, malformed, or rate-limited; and
+- typed normalized GEX/option-surface facts and versioned derived metrics whose
+  complete input Snapshot remains reconstructable.
+
+The initial two-week history is observational evidence, not a sufficient
+backtest, performance claim, or authorization for an options strategy. A later
+strategy may consume only point-in-time snapshots that existed at its decision
+time; it must surface missing coverage and cannot silently substitute a newer
+snapshot. Any later options execution still requires its own separately frozen
+Kernel/Provider product-capability track, liquidity and order-lifecycle
+evidence, Shadow acceptance, and activation gates.
+
 ## Research funnel
 
 Research progresses by information value and cost:
