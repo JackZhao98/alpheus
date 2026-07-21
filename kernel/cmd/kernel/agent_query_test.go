@@ -181,6 +181,9 @@ func TestAgentQueryRequiresConfiguredOpenAIAPIKey(t *testing.T) {
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "OpenAI API token is not configured") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"error_code":"agent_query_openai_credential_unavailable"`) {
+		t.Fatalf("missing stable error code: %s", response.Body.String())
+	}
 }
 
 func TestAgentQueryRejectsBrowserSuppliedCredential(t *testing.T) {
@@ -188,5 +191,8 @@ func TestAgentQueryRejectsBrowserSuppliedCredential(t *testing.T) {
 	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"symbol":"SOFI","query":"test","openai_api_key":"must-not-cross-browser-boundary"}`, "runtime-secret")
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid JSON body") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"error_code":"request_json_invalid"`) {
+		t.Fatalf("missing stable error code: %s", response.Body.String())
 	}
 }

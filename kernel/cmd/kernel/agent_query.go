@@ -44,23 +44,23 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Query = strings.TrimSpace(input.Query)
 	if (input.Workflow != "auto" && input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and query are required"})
+		writeAgentQueryError(w, http.StatusBadRequest, "agent_query_input_invalid", "symbol and query are required")
 		return
 	}
 	openAIAPIKey, err := s.loadAgentSecret("openai")
 	if err != nil || !validAgentAPIKey(openAIAPIKey) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OpenAI API token is not configured"})
+		writeAgentQueryError(w, http.StatusBadRequest, "agent_query_openai_credential_unavailable", "OpenAI API token is not configured")
 		return
 	}
 	input.OpenAIAPIKey = openAIAPIKey
 
 	if s.store == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
+		writeAgentQueryError(w, http.StatusServiceUnavailable, "agent_query_store_unavailable", "agent query store unavailable")
 		return
 	}
 	job, err := s.store.CreateAgentQueryJob(authenticatedSubject(r), input.Workflow, input.Symbol, input.Query)
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
+		writeAgentQueryError(w, http.StatusServiceUnavailable, "agent_query_store_unavailable", "agent query store unavailable")
 		return
 	}
 	go s.executeAgentQuery(job.ID)
@@ -69,16 +69,16 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) getAgentQueryJob(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
+		writeAgentQueryError(w, http.StatusServiceUnavailable, "agent_query_store_unavailable", "agent query store unavailable")
 		return
 	}
 	job, err := s.store.GetAgentQueryJob(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent query store unavailable"})
+		writeAgentQueryError(w, http.StatusServiceUnavailable, "agent_query_store_unavailable", "agent query store unavailable")
 		return
 	}
 	if job == nil || job.Subject != authenticatedSubject(r) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent query job not found"})
+		writeAgentQueryError(w, http.StatusNotFound, "agent_query_job_not_found", "agent query job not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
@@ -200,4 +200,8 @@ func validAgentQuerySymbol(symbol string) bool {
 		return false
 	}
 	return true
+}
+
+func writeAgentQueryError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"error_code": code, "error": message})
 }

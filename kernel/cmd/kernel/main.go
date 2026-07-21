@@ -334,10 +334,10 @@ func main() {
 		providerReplayWindowBoundVerified: brokerName == "fake" ||
 			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive &&
 				config.Env("ROBINHOOD_EQUITY_AUTO_REPLAY", "false") == "true"),
-		runtimeURL:                        config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
-		researchURL:                       config.Env("RESEARCH_URL", "http://research-gateway:8300"),
-		consoleOrigin:                     consoleOrigin,
-		marketTZ:                          marketTZ,
+		runtimeURL:    config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		researchURL:   config.Env("RESEARCH_URL", "http://research-gateway:8300"),
+		consoleOrigin: consoleOrigin,
+		marketTZ:      marketTZ,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
@@ -447,6 +447,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError keeps API failures diagnosable without exposing internal database
+// or provider details. Existing callers can continue to display error while
+// clients and logs key on the stable error_code.
+func writeError(w http.ResponseWriter, status int, errorCode, message string) {
+	writeJSON(w, status, map[string]string{"error_code": errorCode, "error": message})
+}
+
 const maxJSONBodyBytes int64 = 1 << 20
 const maxLessonsLimit = 100
 
@@ -456,7 +463,7 @@ const maxLessonsLimit = 100
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content-type must be application/json"})
+		writeError(w, http.StatusBadRequest, "request_content_type_invalid", "content-type must be application/json")
 		return false
 	}
 
@@ -466,18 +473,18 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := dec.Decode(dst); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body exceeds 1 MiB")
 		} else {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			writeError(w, http.StatusBadRequest, "request_json_invalid", "invalid JSON body")
 		}
 		return false
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+			writeError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body exceeds 1 MiB")
 		} else {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain exactly one JSON value"})
+			writeError(w, http.StatusBadRequest, "request_json_multiple_values", "request body must contain exactly one JSON value")
 		}
 		return false
 	}
@@ -486,24 +493,24 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 func writeInternalError(w http.ResponseWriter, context string, err error) {
 	log.Printf("%s: %v", context, err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+	writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 }
 
 func writeStoreError(w http.ResponseWriter, context string, err error) {
 	if errors.Is(err, errMarketDayAdvanced) {
 		log.Printf("%s: %v", context, err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "market day advanced; retry"})
+		writeError(w, http.StatusServiceUnavailable, "market_day_advanced", "market day advanced; retry")
 		return
 	}
 	if errors.Is(err, store.ErrUnavailable) {
 		log.Printf("%s: %v", context, err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "database unavailable"})
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "database unavailable")
 		return
 	}
 	if errors.Is(err, store.ErrLiveCanaryAuthorityMissing) ||
 		errors.Is(err, store.ErrLiveCanaryAuthorityInvalid) {
 		log.Printf("%s: %v", context, err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live canary authority unavailable"})
+		writeError(w, http.StatusServiceUnavailable, "live_canary_authority_unavailable", "live canary authority unavailable")
 		return
 	}
 	writeInternalError(w, context, err)
