@@ -64,7 +64,7 @@
   the raw input, attachments, and referenced records atomically. The
   disposable database probe exercises the real restricted role, exact replay,
   idempotency conflict, and default-deny table boundary. The deployed Input
-  Gateway now supplies a strict authenticated HTTP API, real
+  Gateway landed at `126057f` and now supplies a strict authenticated HTTP API, real
   owner-only local content-addressed Blob persistence, PostgreSQL Blob and
   submission adapters, exact transport-retry recovery, and a separately
   provisioned `cortex-control-1` NOINHERIT LOGIN/container on localhost port
@@ -120,9 +120,9 @@ This ledger counts only accepted completion, not code written or unit-tested.
 | 2 | Immutable Conversation / UserRequest and default-deny storage | Complete |
 | 3 | Restricted idempotent Control API submission | Complete |
 | 4 | Blob-first Input Gateway admission orchestration | Complete |
-| 5 | Independent HTTP input API | Complete; deployed and exact-replay smoke passed |
-| 6 | Real local Blob persistence and PostgreSQL adapters | Complete; database and owner-only file probes passed |
-| 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete; healthy on `127.0.0.1:8400` |
+| 5 | Independent HTTP input API | Complete at `126057f`; deployed and exact-replay smoke passed |
+| 6 | Real local Blob persistence and PostgreSQL adapters | Complete at `126057f`; database and owner-only file probes passed |
+| 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete at `126057f`; healthy on `127.0.0.1:8400` |
 | 8 | Canonical Run / Task / Attempt admission | Not started |
 | 9 | Verified OpenAI Worker with durable Turn / Artifact | Not started |
 | 10 | Agent Lab cutover and Kernel queue retirement | Not started |
