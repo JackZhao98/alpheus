@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	ModeSim      = "sim"
-	ModeShadow   = "shadow"
-	ModeReadOnly = "read_only"
-	ModeLive     = "live"
+	ModeSim              = "sim"
+	ModeShadow           = "shadow"
+	ModeReadOnly         = "read_only"
+	ModeLive             = "live"
+	AgentWebAuthPassword = "password"
+	AgentWebAuthLocal    = "local"
 )
 
 // ModeConfig owns process-level safety boundaries. Secret/binding fields are
@@ -23,6 +25,7 @@ type ModeConfig struct {
 	KernelToken        string `json:"-" yaml:"-"`
 	AgentWebPassword   string `json:"-" yaml:"-"`
 	AgentWebSessionKey string `json:"-" yaml:"-"`
+	AgentWebAuthMode   string `json:"-" yaml:"-"`
 	LiveTradingEnabled bool
 	LiveAccountID      string `json:"-" yaml:"-"`
 }
@@ -40,6 +43,7 @@ func LoadModeConfig() (ModeConfig, error) {
 		KernelToken:        osValue("KERNEL_TOKEN"),
 		AgentWebPassword:   osValue("AGENT_WEB_PASSWORD"),
 		AgentWebSessionKey: osValue("AGENT_WEB_SESSION_KEY"),
+		AgentWebAuthMode:   strings.TrimSpace(Env("AGENT_WEB_AUTH_MODE", AgentWebAuthPassword)),
 		LiveTradingEnabled: strings.EqualFold(strings.TrimSpace(osValue("LIVE_TRADING_ENABLED")), "true"),
 		LiveAccountID:      liveAccountID,
 	}
@@ -111,8 +115,18 @@ func (c ModeConfig) Validate() error {
 			return fmt.Errorf("LIVE_ACCOUNT_ID required in live mode")
 		}
 	}
-	if (c.AgentWebPassword == "") != (c.AgentWebSessionKey == "") {
+	authMode := c.AgentWebAuthMode
+	if authMode == "" {
+		authMode = AgentWebAuthPassword
+	}
+	if authMode != AgentWebAuthPassword && authMode != AgentWebAuthLocal {
+		return fmt.Errorf("AGENT_WEB_AUTH_MODE must be password or local")
+	}
+	if authMode == AgentWebAuthPassword && (c.AgentWebPassword == "") != (c.AgentWebSessionKey == "") {
 		return fmt.Errorf("AGENT_WEB_PASSWORD and AGENT_WEB_SESSION_KEY must be set together")
+	}
+	if authMode == AgentWebAuthLocal && c.AgentWebSessionKey == "" {
+		return fmt.Errorf("AGENT_WEB_SESSION_KEY is required for local Agent Lab access")
 	}
 	if c.AgentWebPassword != "" && len(c.AgentWebPassword) < 12 {
 		return fmt.Errorf("AGENT_WEB_PASSWORD must contain at least 12 bytes")

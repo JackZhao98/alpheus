@@ -46,12 +46,30 @@ func TestAgentLabIsSeparateFromCockpit(t *testing.T) {
 	s := &server{}
 	handler := s.routes()
 	lab := routeRequest(handler, http.MethodGet, "/agent-lab", "", "")
-	if lab.Code != http.StatusOK || !strings.Contains(lab.Body.String(), "Ask Scout") || !strings.Contains(lab.Body.String(), "login-form") {
+	if lab.Code != http.StatusOK || !strings.Contains(lab.Body.String(), "Ask Scout") || strings.Contains(lab.Body.String(), "login-form") {
 		t.Fatalf("agent lab status=%d", lab.Code)
 	}
 	cockpit := routeRequest(handler, http.MethodGet, "/cockpit", "", "")
 	if strings.Contains(cockpit.Body.String(), "agent-query-form") || strings.Contains(cockpit.Body.String(), "AGENT MVP PREVIEW") {
 		t.Fatal("agent lab leaked into cockpit")
+	}
+}
+
+func TestAgentLabLocalAccessDoesNotRequirePassword(t *testing.T) {
+	s := &server{mode: config.ModeConfig{TradingMode: config.ModeReadOnly, AgentWebAuthMode: config.AgentWebAuthLocal, AgentWebSessionKey: strings.Repeat("k", 32)}}
+	req := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
+	req.RemoteAddr = "10.0.10.42:60000"
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"auth_mode":"local"`) {
+		t.Fatalf("local session status=%d body=%s", w.Code, w.Body.String())
+	}
+	blocked := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
+	blocked.RemoteAddr = "203.0.113.42:60000"
+	w = httptest.NewRecorder()
+	s.routes().ServeHTTP(w, blocked)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "agent_local_network_required") {
+		t.Fatalf("public session status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

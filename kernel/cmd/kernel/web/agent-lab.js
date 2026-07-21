@@ -38,41 +38,14 @@ function renderTrace(job) {
   byId("trace").textContent = JSON.stringify(summary, null, 2);
 }
 
-function showAuthenticated(authenticated) {
-  byId("login-panel").classList.toggle("hidden", authenticated);
-  byId("query-panel").classList.toggle("hidden", !authenticated);
-  byId("logout").classList.toggle("hidden", !authenticated);
-  if (!authenticated) byId("password").focus();
-}
-
 async function restoreSession() {
   try {
     await request("/agent/auth/session");
-    showAuthenticated(true);
     await refreshCredentialStatus();
-  } catch (_) {
-    showAuthenticated(false);
+  } catch (error) {
+    byId("query-error").textContent = formatError(error);
   }
 }
-
-byId("login-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  byId("login").disabled = true;
-  byId("login-error").textContent = "";
-  try {
-    await request("/agent/auth/login", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({password:byId("password").value})
-    });
-    byId("password").value = "";
-    showAuthenticated(true);
-    await refreshCredentialStatus();
-  } catch (_) {
-    byId("login-error").textContent = "密码错误。";
-  } finally {
-    byId("login").disabled = false;
-  }
-});
 
 async function refreshCredentialStatus() {
   const payload = await request("/agent/secrets");
@@ -176,15 +149,6 @@ byId("save-robinhood-research").addEventListener("click", async () => {
   }
 });
 
-byId("logout").addEventListener("click", async () => {
-  await request("/agent/auth/logout", {method:"POST"}).catch(() => null);
-  byId("openai-token").value = "";
-  byId("brave-token").value = "";
-  byId("gexbot-token").value = "";
-  byId("robinhood-research-token").value = "";
-  showAuthenticated(false);
-});
-
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function waitForAgentQuery(job) {
@@ -227,7 +191,6 @@ byId("query-form").addEventListener("submit", async (event) => {
       ? "STUB PASS · MODEL NOT CONNECTED"
       : `COMPLETE · ${String(result.model || "OPENAI").toUpperCase()} · NO OPERATION`;
   } catch (error) {
-    if (error.message === "unauthorized") showAuthenticated(false);
     byId("result").textContent = "No result returned.";
     byId("status").textContent = "FAILED CLOSED";
     byId("query-error").textContent = formatError(error);

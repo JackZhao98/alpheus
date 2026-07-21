@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"alpheus/kernel/internal/config"
 )
 
 const (
@@ -19,6 +22,10 @@ const (
 
 func (s *server) agentWebEnabled() bool {
 	return s.mode.AgentWebPassword != "" && s.mode.AgentWebSessionKey != ""
+}
+
+func (s *server) agentWebLocalAccess() bool {
+	return s.mode.AgentWebAuthMode == config.AgentWebAuthLocal
 }
 
 func (s *server) postAgentLogin(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +53,14 @@ func (s *server) postAgentLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getAgentSession(w http.ResponseWriter, r *http.Request) {
+	if s.agentWebLocalAccess() {
+		if !trustedPrivateClient(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error_code": "agent_local_network_required", "error": "Agent Lab is available only on the local private network"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "auth_mode": config.AgentWebAuthLocal})
+		return
+	}
 	if !s.agentSessionValid(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]bool{"authenticated": false})
 		return
@@ -63,6 +78,14 @@ func (s *server) postAgentLogout(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) authorizeAgentWeb(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.agentWebLocalAccess() {
+			if !trustedPrivateClient(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error_code": "agent_local_network_required", "error": "Agent Lab is available only on the local private network"})
+				return
+			}
+			next(w, r.WithContext(contextWithSubject(r.Context(), "local-agent-web")))
+			return
+		}
 		if s.agentSessionValid(r) {
 			ctx := r.Context()
 			ctx = contextWithSubject(ctx, "agent-web")
@@ -79,6 +102,15 @@ func (s *server) authorizeAgentWeb(next http.HandlerFunc) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	}
+}
+
+func trustedPrivateClient(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 func contextWithSubject(ctx context.Context, subject string) context.Context {

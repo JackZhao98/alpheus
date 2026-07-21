@@ -10,23 +10,11 @@
 <body>
   <header>
     <div><p class="eyebrow">ALPHEUS / AGENT LAB</p><h1>Ask Scout</h1></div>
-    <nav><a href="/cockpit">Trading Cockpit</a><button id="logout" class="secondary hidden" type="button">退出登录</button></nav>
+    <nav><a href="/cockpit">Trading Cockpit</a></nav>
   </header>
 
   <main>
-    <section id="login-panel" class="card login-card">
-      <p class="eyebrow">LOCAL LOGIN</p>
-      <h2>登录 Agent Lab</h2>
-      <p class="muted">输入本地密码即可。密码不会保存在浏览器；登录后使用 12 小时 HttpOnly 会话。</p>
-      <form id="login-form">
-        <label for="password">密码</label>
-        <input id="password" type="password" maxlength="256" autocomplete="current-password" required autofocus>
-        <button id="login" type="submit">登录</button>
-      </form>
-      <p id="login-error" class="error" role="alert"></p>
-    </section>
-
-    <section id="query-panel" class="card hidden">
+    <section id="query-panel" class="card">
       <div class="card-head">
         <div><p class="eyebrow">READ-ONLY MVP</p><h2>测试 Agent Team</h2></div>
         <span class="badge">NO ORDERS</span>

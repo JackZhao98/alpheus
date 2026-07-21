@@ -29,6 +29,8 @@ services:
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
       AGENT_WEB_PASSWORD: ${AGENT_WEB_PASSWORD:-}
       AGENT_WEB_SESSION_KEY: ${AGENT_WEB_SESSION_KEY:-}
+      # Local-only Agent Lab: no browser password, but only RFC1918/loopback clients.
+      AGENT_WEB_AUTH_MODE: ${AGENT_WEB_AUTH_MODE:-local}
       RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
       RESEARCH_URL: ${RESEARCH_URL:-http://research-gateway:8300}
       CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
