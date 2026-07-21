@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -8,19 +9,30 @@ import (
 )
 
 type AgentQueryJob struct {
-	ID             string          `json:"id"`
-	Subject        string          `json:"-"`
-	Workflow       string          `json:"workflow"`
-	Symbol         string          `json:"symbol"`
-	Query          string          `json:"-"`
-	Status         string          `json:"status"`
-	Result         json.RawMessage `json:"result,omitempty"`
-	ErrorCode      string          `json:"error_code,omitempty"`
-	Attempt        int             `json:"attempt"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
-	ClaimToken     string          `json:"-"`
-	LeaseExpiresAt time.Time       `json:"-"`
+	ID             string                 `json:"id"`
+	Subject        string                 `json:"-"`
+	Workflow       string                 `json:"workflow"`
+	Symbol         string                 `json:"symbol"`
+	Query          string                 `json:"-"`
+	Status         string                 `json:"status"`
+	Result         json.RawMessage        `json:"result,omitempty"`
+	ErrorCode      string                 `json:"error_code,omitempty"`
+	Attempt        int                    `json:"attempt"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	ClaimToken     string                 `json:"-"`
+	LeaseExpiresAt time.Time              `json:"-"`
+	Trace          []AgentQueryTraceEvent `json:"trace"`
+}
+
+// AgentQueryTraceEvent is a durable, secret-free dispatcher event for Agent
+// Lab debugging. It intentionally contains no input prompt or runtime body.
+type AgentQueryTraceEvent struct {
+	Sequence  int64     `json:"sequence"`
+	Attempt   int       `json:"attempt"`
+	Stage     string    `json:"stage"`
+	ErrorCode string    `json:"error_code,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 const agentQueryJobColumns = `id::text,authenticated_subject,workflow,symbol,query,status,
@@ -30,11 +42,25 @@ func (s *Store) CreateAgentQueryJob(subject, workflow, symbol, query string) (*A
 	ctx, cancel := s.deadline()
 	defer cancel()
 	job := &AgentQueryJob{ID: NewID()}
-	row := s.DB.QueryRowContext(ctx, `INSERT INTO agent_query_job
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `INSERT INTO agent_query_job
 		(id,authenticated_subject,workflow,symbol,query,status)
 		VALUES ($1,$2,$3,$4,$5,'queued') RETURNING `+agentQueryJobColumns,
 		job.ID, subject, workflow, symbol, query)
 	if err := scanAgentQueryJob(row, job); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := insertAgentQueryTrace(ctx, tx, job.ID, 0, "submitted", ""); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := loadAgentQueryTrace(ctx, tx, job); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, normalizeDBError(err)
 	}
 	return job, nil
@@ -47,8 +73,13 @@ func (s *Store) ClaimAgentQueryJob(id string, leaseDuration time.Duration) (*Age
 	}
 	ctx, cancel := s.deadline()
 	defer cancel()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	defer tx.Rollback()
 	job := &AgentQueryJob{}
-	err := scanAgentQueryJob(s.DB.QueryRowContext(ctx, `UPDATE agent_query_job
+	err = scanAgentQueryJob(tx.QueryRowContext(ctx, `UPDATE agent_query_job
 		SET status='running',attempt=attempt+1,claim_token=$2,
 			lease_expires_at=clock_timestamp()+($3 * interval '1 millisecond'),
 			updated_at=clock_timestamp()
@@ -61,27 +92,92 @@ func (s *Store) ClaimAgentQueryJob(id string, leaseDuration time.Duration) (*Age
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
+	if err := insertAgentQueryTrace(ctx, tx, job.ID, job.Attempt, "claimed", ""); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := loadAgentQueryTrace(ctx, tx, job); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, normalizeDBError(err)
+	}
 	return job, nil
 }
 
 func (s *Store) CompleteClaimedAgentQueryJob(id, claimToken string, result json.RawMessage) (bool, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
-	updated, err := s.DB.ExecContext(ctx, `UPDATE agent_query_job
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	var attempt int
+	err = tx.QueryRowContext(ctx, `UPDATE agent_query_job
 		SET status='succeeded',result=$3,error_code=NULL,claim_token=NULL,
 			lease_expires_at=NULL,updated_at=clock_timestamp()
-		WHERE id=$1 AND status='running' AND claim_token=$2`, id, claimToken, string(result))
-	return changed(updated, err)
+		WHERE id=$1 AND status='running' AND claim_token=$2 RETURNING attempt`, id, claimToken, string(result)).Scan(&attempt)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	if err := insertAgentQueryTrace(ctx, tx, id, attempt, "completed", ""); err != nil {
+		return false, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, normalizeDBError(err)
+	}
+	return true, nil
 }
 
 func (s *Store) FailClaimedAgentQueryJob(id, claimToken, errorCode string) (bool, error) {
 	ctx, cancel := s.deadline()
 	defer cancel()
-	result, err := s.DB.ExecContext(ctx, `UPDATE agent_query_job
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	defer tx.Rollback()
+	var attempt int
+	err = tx.QueryRowContext(ctx, `UPDATE agent_query_job
 		SET status='failed',result=NULL,error_code=$3,claim_token=NULL,
 			lease_expires_at=NULL,updated_at=clock_timestamp()
-		WHERE id=$1 AND status='running' AND claim_token=$2`, id, claimToken, errorCode)
-	return changed(result, err)
+		WHERE id=$1 AND status='running' AND claim_token=$2 RETURNING attempt`, id, claimToken, errorCode).Scan(&attempt)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	if err := insertAgentQueryTrace(ctx, tx, id, attempt, "failed", errorCode); err != nil {
+		return false, normalizeDBError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, normalizeDBError(err)
+	}
+	return true, nil
+}
+
+// RecordAgentQueryJobTrace appends a lifecycle event only while the current
+// worker still owns this job. This prevents a timed-out worker from writing a
+// misleading trace after another worker reclaimed the lease.
+func (s *Store) RecordAgentQueryJobTrace(id, claimToken, stage, errorCode string) (bool, error) {
+	ctx, cancel := s.deadline()
+	defer cancel()
+	var sequence int64
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO agent_query_job_trace (job_id,attempt,stage,error_code)
+		SELECT id,attempt,$3,NULLIF($4,'') FROM agent_query_job
+		WHERE id=$1 AND status='running' AND claim_token=$2
+		RETURNING sequence`, id, claimToken, stage, errorCode).Scan(&sequence)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, normalizeDBError(err)
+	}
+	return true, nil
 }
 
 func (s *Store) ListRecoverableAgentQueryJobs(limit int) ([]AgentQueryJob, error) {
@@ -124,7 +220,42 @@ func (s *Store) GetAgentQueryJob(id string) (*AgentQueryJob, error) {
 	if err != nil {
 		return nil, normalizeDBError(err)
 	}
+	if err := loadAgentQueryTrace(ctx, s.DB, job); err != nil {
+		return nil, normalizeDBError(err)
+	}
 	return job, nil
+}
+
+type agentQueryTraceQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func insertAgentQueryTrace(ctx context.Context, tx *sql.Tx, jobID string, attempt int, stage, errorCode string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO agent_query_job_trace (job_id,attempt,stage,error_code)
+		VALUES ($1,$2,$3,NULLIF($4,''))`, jobID, attempt, stage, errorCode)
+	return err
+}
+
+func loadAgentQueryTrace(ctx context.Context, db agentQueryTraceQueryer, job *AgentQueryJob) error {
+	rows, err := db.QueryContext(ctx, `SELECT sequence,attempt,stage,error_code,created_at
+		FROM agent_query_job_trace WHERE job_id=$1 ORDER BY sequence`, job.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	job.Trace = make([]AgentQueryTraceEvent, 0)
+	for rows.Next() {
+		var event AgentQueryTraceEvent
+		var errorCode sql.NullString
+		if err := rows.Scan(&event.Sequence, &event.Attempt, &event.Stage, &errorCode, &event.CreatedAt); err != nil {
+			return err
+		}
+		if errorCode.Valid {
+			event.ErrorCode = errorCode.String
+		}
+		job.Trace = append(job.Trace, event)
+	}
+	return rows.Err()
 }
 
 type agentQueryJobScanner interface {

@@ -101,6 +101,7 @@ type memoryStore struct {
 	controlTrackedFilled     map[string]units.Qty
 	controlExternalFilled    map[string]units.Qty
 	agentQueryJobs           map[string]store.AgentQueryJob
+	agentQueryTraceSequence  int64
 	agentSecrets             map[string][]byte
 }
 
@@ -2206,8 +2207,9 @@ func (m *memoryStore) CreateAgentQueryJob(subject, workflow, symbol, query strin
 		ID: store.NewID(), Subject: subject, Workflow: workflow, Symbol: symbol, Query: query,
 		Status: "queued", CreatedAt: now, UpdatedAt: now,
 	}
+	m.appendAgentQueryTraceLocked(&job, "submitted", "")
 	m.agentQueryJobs[job.ID] = job
-	copy := job
+	copy := copyAgentQueryJob(job)
 	return &copy, nil
 }
 
@@ -2223,8 +2225,9 @@ func (m *memoryStore) ClaimAgentQueryJob(id string, leaseDuration time.Duration)
 	job.Attempt++
 	job.ClaimToken = store.NewID()
 	job.LeaseExpiresAt = now.Add(leaseDuration)
+	m.appendAgentQueryTraceLocked(&job, "claimed", "")
 	m.agentQueryJobs[id] = job
-	copy := job
+	copy := copyAgentQueryJob(job)
 	return &copy, nil
 }
 
@@ -2238,6 +2241,7 @@ func (m *memoryStore) CompleteClaimedAgentQueryJob(id, claimToken string, result
 	job.Status, job.UpdatedAt = "succeeded", time.Now().UTC()
 	job.Result = append(json.RawMessage(nil), result...)
 	job.ClaimToken, job.LeaseExpiresAt = "", time.Time{}
+	m.appendAgentQueryTraceLocked(&job, "completed", "")
 	m.agentQueryJobs[id] = job
 	return true, nil
 }
@@ -2252,6 +2256,19 @@ func (m *memoryStore) FailClaimedAgentQueryJob(id, claimToken, errorCode string)
 	job.Status, job.UpdatedAt = "failed", time.Now().UTC()
 	job.ErrorCode = errorCode
 	job.ClaimToken, job.LeaseExpiresAt = "", time.Time{}
+	m.appendAgentQueryTraceLocked(&job, "failed", errorCode)
+	m.agentQueryJobs[id] = job
+	return true, nil
+}
+
+func (m *memoryStore) RecordAgentQueryJobTrace(id, claimToken, stage, errorCode string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.agentQueryJobs[id]
+	if !ok || job.Status != "running" || job.ClaimToken != claimToken {
+		return false, nil
+	}
+	m.appendAgentQueryTraceLocked(&job, stage, errorCode)
 	m.agentQueryJobs[id] = job
 	return true, nil
 }
@@ -2263,7 +2280,7 @@ func (m *memoryStore) ListRecoverableAgentQueryJobs(limit int) ([]store.AgentQue
 	jobs := make([]store.AgentQueryJob, 0)
 	for _, job := range m.agentQueryJobs {
 		if job.Status == "queued" || (job.Status == "running" && !job.LeaseExpiresAt.After(now)) {
-			jobs = append(jobs, job)
+			jobs = append(jobs, copyAgentQueryJob(job))
 			if len(jobs) == limit {
 				break
 			}
@@ -2279,8 +2296,22 @@ func (m *memoryStore) GetAgentQueryJob(id string) (*store.AgentQueryJob, error) 
 	if !ok {
 		return nil, nil
 	}
+	copy := copyAgentQueryJob(job)
+	return &copy, nil
+}
+
+func (m *memoryStore) appendAgentQueryTraceLocked(job *store.AgentQueryJob, stage, errorCode string) {
+	m.agentQueryTraceSequence++
+	job.Trace = append(job.Trace, store.AgentQueryTraceEvent{
+		Sequence: m.agentQueryTraceSequence, Attempt: job.Attempt, Stage: stage,
+		ErrorCode: errorCode, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func copyAgentQueryJob(job store.AgentQueryJob) store.AgentQueryJob {
 	job.Result = append(json.RawMessage(nil), job.Result...)
-	return &job, nil
+	job.Trace = append([]store.AgentQueryTraceEvent(nil), job.Trace...)
+	return job
 }
 
 func (m *memoryStore) PutAgentSecret(name string, ciphertext []byte) error {

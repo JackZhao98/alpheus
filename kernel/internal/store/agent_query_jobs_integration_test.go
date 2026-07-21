@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,9 @@ func TestAgentQueryJobLeaseRecoveryAndFencingPostgres(t *testing.T) {
 	if first == nil || first.Attempt != 1 || first.ClaimToken == "" {
 		t.Fatalf("first claim=%+v", first)
 	}
+	if updated, err := s.RecordAgentQueryJobTrace(job.ID, first.ClaimToken, "credential_loaded", ""); err != nil || !updated {
+		t.Fatalf("first trace updated=%v err=%v", updated, err)
+	}
 	if _, err := s.DB.Exec(`UPDATE agent_query_job
 		SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`, job.ID); err != nil {
 		t.Fatal(err)
@@ -76,5 +80,12 @@ func TestAgentQueryJobLeaseRecoveryAndFencingPostgres(t *testing.T) {
 	if err != nil || completed == nil || completed.Status != "succeeded" || completed.Attempt != 2 ||
 		completed.ClaimToken != "" || !completed.LeaseExpiresAt.IsZero() {
 		t.Fatalf("completed=%+v err=%v", completed, err)
+	}
+	stages := make([]string, 0, len(completed.Trace))
+	for _, event := range completed.Trace {
+		stages = append(stages, event.Stage)
+	}
+	if got, want := strings.Join(stages, ","), "submitted,claimed,credential_loaded,claimed,completed"; got != want {
+		t.Fatalf("trace stages=%q want=%q", got, want)
 	}
 }

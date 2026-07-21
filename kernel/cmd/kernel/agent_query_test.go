@@ -73,6 +73,11 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	if completed.Status != "succeeded" || !strings.Contains(string(completed.Result), `"role":"desk_master"`) {
 		t.Fatalf("completed=%+v", completed)
 	}
+	for _, stage := range []string{"submitted", "claimed", "credential_loaded", "runtime_request_started", "runtime_response_received", "completed"} {
+		if !agentQueryTraceHasStage(completed.Trace, stage) {
+			t.Fatalf("trace missing %q: %+v", stage, completed.Trace)
+		}
+	}
 	hasEvent := false
 	eventDeadline := time.Now().Add(time.Second)
 	for time.Now().Before(eventDeadline) {
@@ -89,6 +94,70 @@ func TestAgentQueryProxiesThroughKernelWithoutOperationEffect(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "sk-test-secret") || strings.Contains(string(completed.Result), "sk-test-secret") {
 		t.Fatal("API key leaked into query response")
+	}
+}
+
+func agentQueryTraceHasStage(trace []store.AgentQueryTraceEvent, stage string) bool {
+	for _, event := range trace {
+		if event.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAgentQueryTraceExposesRuntimeFailureCode(t *testing.T) {
+	client := &http.Client{Transport: watchdogRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error_code":"runtime_overloaded","error":"busy"}`)),
+			Request:    r,
+		}, nil
+	})}
+	st := newMemoryStore()
+	s := &server{
+		mode:  config.ModeConfig{TradingMode: config.ModeSim, RuntimeToken: "runtime-secret", KernelToken: "kernel-secret", AgentWebSessionKey: strings.Repeat("k", 32)},
+		store: st, runtimeURL: "http://runtime.test", runtimeHTTP: client,
+	}
+	ciphertext, err := sealAgentSecret(s.mode.AgentWebSessionKey, "openai", "sk-test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutAgentSecret("openai", ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	response := routeRequest(s.routes(), http.MethodPost, "/agent/query", `{"workflow":"scout","symbol":"SOFI","query":"trace failure"}`, "runtime-secret")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var submitted store.AgentQueryJob
+	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil {
+		t.Fatal(err)
+	}
+	var completed *store.AgentQueryJob
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := st.GetAgentQueryJob(submitted.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job != nil && job.Status == "failed" {
+			completed = job
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if completed == nil || completed.ErrorCode != "runtime_rejected" {
+		t.Fatalf("failed job=%+v", completed)
+	}
+	if !agentQueryTraceHasStage(completed.Trace, "runtime_request_failed") || !agentQueryTraceHasStage(completed.Trace, "failed") {
+		t.Fatalf("failure trace=%+v", completed.Trace)
+	}
+	for _, event := range completed.Trace {
+		if event.Stage == "runtime_request_failed" && event.ErrorCode != "runtime_rejected" {
+			t.Fatalf("runtime failure event=%+v", event)
+		}
 	}
 }
 

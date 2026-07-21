@@ -126,6 +126,7 @@ type storeAPI interface {
 	ClaimAgentQueryJob(id string, leaseDuration time.Duration) (*store.AgentQueryJob, error)
 	CompleteClaimedAgentQueryJob(id, claimToken string, result json.RawMessage) (bool, error)
 	FailClaimedAgentQueryJob(id, claimToken, errorCode string) (bool, error)
+	RecordAgentQueryJobTrace(id, claimToken, stage, errorCode string) (bool, error)
 	ListRecoverableAgentQueryJobs(limit int) ([]store.AgentQueryJob, error)
 	GetAgentQueryJob(id string) (*store.AgentQueryJob, error)
 	PutAgentSecret(name string, ciphertext []byte) error

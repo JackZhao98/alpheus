@@ -3,8 +3,39 @@ const byId = (id) => document.getElementById(id);
 async function request(path, options = {}) {
   const response = await fetch(path, {...options, cache:"no-store"});
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error || `HTTP_${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload?.error || `HTTP_${response.status}`);
+    error.code = payload?.error_code || `http_${response.status}`;
+    throw error;
+  }
   return payload;
+}
+
+function formatError(error) {
+  return error?.code ? `[${error.code}] ${error.message}` : error.message;
+}
+
+function renderTrace(job) {
+  const trace = Array.isArray(job?.trace) ? job.trace : [];
+  byId("trace-status").textContent = job?.id
+    ? `${String(job.status || "unknown").toUpperCase()} · ATTEMPT ${job.attempt || 0}`
+    : "NO JOB";
+  const summary = {
+    job_id: job?.id,
+    status: job?.status,
+    workflow: job?.workflow,
+    symbol: job?.symbol,
+    attempt: job?.attempt,
+    error_code: job?.error_code || undefined,
+    trace: trace.map((event) => ({
+      sequence: event.sequence,
+      at: event.created_at,
+      attempt: event.attempt,
+      stage: event.stage,
+      error_code: event.error_code || undefined,
+    })),
+  };
+  byId("trace").textContent = JSON.stringify(summary, null, 2);
 }
 
 function showAuthenticated(authenticated) {
@@ -161,9 +192,11 @@ async function waitForAgentQuery(job) {
   while (job.status === "queued" || job.status === "running") {
     if (Date.now() >= deadline) throw new Error("Agent Team 仍在运行，请稍后重试。");
     byId("status").textContent = job.status === "queued" ? "QUERY QUEUED" : "AGENTS WORKING";
+    renderTrace(job);
     await wait(750);
     job = await request(`/agent/query-jobs/${encodeURIComponent(job.id)}`);
   }
+  renderTrace(job);
   return job;
 }
 
@@ -179,6 +212,8 @@ byId("query-form").addEventListener("submit", async (event) => {
   byId("run").disabled = true;
   byId("status").textContent = "SCOUT WORKING";
   byId("query-error").textContent = "";
+  byId("result").textContent = "Awaiting dispatcher…";
+  renderTrace(null);
   try {
     let job = await request("/agent/query", {
       method:"POST", headers:{"Content-Type":"application/json"},
@@ -195,7 +230,7 @@ byId("query-form").addEventListener("submit", async (event) => {
     if (error.message === "unauthorized") showAuthenticated(false);
     byId("result").textContent = "No result returned.";
     byId("status").textContent = "FAILED CLOSED";
-    byId("query-error").textContent = error.message;
+    byId("query-error").textContent = formatError(error);
   } finally {
     byId("run").disabled = false;
   }

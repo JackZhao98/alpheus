@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"alpheus/kernel/internal/store"
 )
 
 const maxAgentQueryResponseBytes int64 = 1 << 20
@@ -96,11 +98,23 @@ func (s *server) executeAgentQuery(jobID string) {
 		return
 	}
 	input.OpenAIAPIKey = openAIAPIKey
+	if !s.traceAgentQuery(job, "credential_loaded", "") {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 390*time.Second)
 	defer cancel()
+	if !s.traceAgentQuery(job, "runtime_request_started", "") {
+		return
+	}
 	result, errorCode := s.callAgentRuntime(ctx, input)
 	if errorCode != "" {
+		if !s.traceAgentQuery(job, "runtime_request_failed", errorCode) {
+			return
+		}
 		_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, errorCode)
+		return
+	}
+	if !s.traceAgentQuery(job, "runtime_response_received", "") {
 		return
 	}
 	completed, err := s.store.CompleteClaimedAgentQueryJob(job.ID, job.ClaimToken, result)
@@ -108,6 +122,15 @@ func (s *server) executeAgentQuery(jobID string) {
 		return
 	}
 	s.store.Event("agent_query", map[string]any{"workflow": input.Workflow, "symbol": input.Symbol, "attempt": job.Attempt})
+}
+
+func (s *server) traceAgentQuery(job *store.AgentQueryJob, stage, errorCode string) bool {
+	recorded, err := s.store.RecordAgentQueryJobTrace(job.ID, job.ClaimToken, stage, errorCode)
+	if err == nil && recorded {
+		return true
+	}
+	_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, "agent_query_trace_unavailable")
+	return false
 }
 
 func startAgentQueryRecovery(s *server) error {
