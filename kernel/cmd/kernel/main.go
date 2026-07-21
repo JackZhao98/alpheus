@@ -1626,6 +1626,15 @@ func minQty(left, right units.Qty) units.Qty {
 	return right
 }
 
+// priceBoundedOpen reports whether an open order's fill is capped by its own
+// declared limit (limit or stop-limit with an explicit limit). Such an order
+// can be priced and risk-bounded without a live quote, so the quote-freshness
+// gates at propose and pre-effect do not apply to it. Market and stop-market
+// orders (unbounded fill) and shadow paper fills are never price-bounded here.
+func priceBoundedOpen(op risk.Operation) bool {
+	return (op.OrderType == "limit" || op.OrderType == "stop_limit") && !op.Shadow && op.Limit != nil
+}
+
 func executionLimit(op risk.Operation, quote *broker.Quote, maxAgeSec int) (units.Micros, error) {
 	if op.Action == "open" {
 		if op.OrderType == "market" || op.OrderType == "stop_market" {
@@ -2412,8 +2421,7 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 	// limit price, so it can be risk-capped and priced without a live quote.
 	// Market and stop-market orders (unbounded fill, need marketability) and
 	// shadow paper fills still require a usable quote and reject without one.
-	priceBounded := (op.OrderType == "limit" || op.OrderType == "stop_limit") && !op.Shadow && op.Limit != nil
-	if !quoteUsable && !priceBounded {
+	if !quoteUsable && !priceBoundedOpen(op) {
 		op.RejectReason = "market_data_unavailable"
 		return op
 	}

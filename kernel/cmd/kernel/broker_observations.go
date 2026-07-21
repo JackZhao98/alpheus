@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -456,13 +457,27 @@ func (s *server) captureLivePreEffect(ctx context.Context, attempt *store.Execut
 		if maxAge <= 0 {
 			maxAge = s.limits.QuoteMaxAgeSec
 		}
-		if quoteErr != nil || !quote.Usable(maxAge, time.Now().UTC()) ||
-			instrumentErr != nil || !preEffectInstrumentMatches(op, attempt, instrument) ||
-			!preEffectQuoteMatches(op, quote, instrument) {
+		// Instrument identity/precision (which validates the limit price without a
+		// quote) and the account snapshot above always gate the effect. A usable
+		// live quote does not: a price-bounded order is capped by its own limit,
+		// so after hours (no active/fresh quote) it still proceeds; the aggregate
+		// gate below already tolerates a nil quote. Other order types still
+		// require the quote for marketability.
+		if instrumentErr != nil || !preEffectInstrumentMatches(op, attempt, instrument) {
+			s.recordPreEffectRefusal(attempt, "instrument_facts_invalid")
+			return nil, fmt.Errorf("%w: instrument facts", errPreEffectUnavailable)
+		}
+		facts.Instrument = &instrument
+		if quoteErr == nil && quote.Usable(maxAge, time.Now().UTC()) {
+			if !preEffectQuoteMatches(op, quote, instrument) {
+				s.recordPreEffectRefusal(attempt, "market_facts_invalid")
+				return nil, fmt.Errorf("%w: market facts", errPreEffectUnavailable)
+			}
+			facts.Quote = &quote
+		} else if !priceBoundedOpen(op) {
 			s.recordPreEffectRefusal(attempt, "market_facts_invalid")
 			return nil, fmt.Errorf("%w: market facts", errPreEffectUnavailable)
 		}
-		facts.Quote, facts.Instrument = &quote, &instrument
 	case "cancel":
 		if op.Action == "cancel" {
 			effect = "cancel_order"
@@ -951,6 +966,7 @@ func preEffectQuoteMatches(op risk.Operation, quote broker.Quote, instrument bro
 }
 
 func (s *server) recordPreEffectRefusal(attempt *store.ExecutionAttempt, reason string) {
+	log.Printf("pre-effect refused: attempt_id=%s reason=%s", attempt.ID, reason)
 	_ = s.store.InsertEvent("execution_pre_effect_refused", map[string]any{
 		"attempt_id": attempt.ID, "fencing_token": attempt.Attempt, "reason": reason,
 	})
