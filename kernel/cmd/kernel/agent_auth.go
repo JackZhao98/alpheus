@@ -110,7 +110,7 @@ func trustedPrivateClient(r *http.Request) bool {
 		return false
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
 }
 
 func contextWithSubject(ctx context.Context, subject string) context.Context {

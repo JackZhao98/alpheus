@@ -34,6 +34,7 @@ func TestAgentPasswordLoginCreatesHttpOnlySession(t *testing.T) {
 		t.Fatalf("session cookie=%+v", session)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
+	req.RemoteAddr = "10.0.10.42:60000"
 	req.AddCookie(session)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -63,6 +64,13 @@ func TestAgentLabLocalAccessDoesNotRequirePassword(t *testing.T) {
 	s.routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"auth_mode":"local"`) {
 		t.Fatalf("local session status=%d body=%s", w.Code, w.Body.String())
+	}
+	linkLocal := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
+	linkLocal.RemoteAddr = "[fe80::1]:60000"
+	w = httptest.NewRecorder()
+	s.routes().ServeHTTP(w, linkLocal)
+	if w.Code != http.StatusOK {
+		t.Fatalf("link-local session status=%d body=%s", w.Code, w.Body.String())
 	}
 	blocked := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
 	blocked.RemoteAddr = "203.0.113.42:60000"
