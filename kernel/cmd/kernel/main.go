@@ -52,6 +52,7 @@ type server struct {
 	runtimeHTTP                       *http.Client
 	researchURL                       string
 	researchHTTP                      *http.Client
+	gexHTTP                           *http.Client
 	consoleOrigin                     string
 	marketTZ                          string
 	haltMu                            sync.RWMutex
@@ -347,6 +348,9 @@ func main() {
 	}
 	if err := startAgentQueryRecovery(s); err != nil {
 		log.Fatalf("agent query recovery startup: %v", err)
+	}
+	if err := startGEXBotCollector(s); err != nil {
+		log.Fatalf("GEXBot collector startup: %v", err)
 	}
 	st.Event("kernel_start", map[string]any{
 		"broker": os.Getenv("BROKER"), "mode": mode.TradingMode,

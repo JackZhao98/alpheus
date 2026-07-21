@@ -22,6 +22,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /agent/secrets", s.authorizeAgentWeb(s.getAgentSecrets))
 	mux.HandleFunc("PUT /agent/secrets/{name}", s.authorizeAgentWeb(s.putAgentSecret))
 	mux.HandleFunc("DELETE /agent/secrets/{name}", s.authorizeAgentWeb(s.deleteAgentSecret))
+	mux.HandleFunc("GET /agent/gexbot/config", s.authorizeAgentWeb(s.getGEXBotCollectionConfig))
+	mux.HandleFunc("PUT /agent/gexbot/config", s.authorizeAgentWeb(s.putGEXBotCollectionConfig))
 	mux.HandleFunc("GET /limits", s.authorize(permissionRead, s.getLimits))
 	mux.HandleFunc("GET /auth/capabilities", s.authorize(permissionRead, s.getAuthCapabilities))
 	mux.HandleFunc("GET /state", s.authorize(permissionRead, s.getState))

@@ -50,10 +50,28 @@ async function refreshCredentialStatus() {
   const braveConfigured = Boolean(payload?.configured?.brave);
   byId("brave-status").textContent = braveConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   const gexbotConfigured = Boolean(payload?.configured?.gexbot);
-  byId("gexbot-status").textContent = gexbotConfigured ? "已加密保存在数据库中。SPX collector 准备就绪。" : "尚未配置。";
+  byId("gexbot-status").textContent = gexbotConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   const robinhoodConfigured = Boolean(payload?.configured?.robinhood_research);
   byId("robinhood-research-status").textContent = robinhoodConfigured ? "已加密保存在数据库中。" : "尚未配置。";
+  await refreshGEXBotCollector();
   return configured;
+}
+
+async function refreshGEXBotCollector() {
+  try {
+    const payload = await request("/agent/gexbot/config");
+    const config = payload?.config;
+    if (!config) throw new Error("configuration unavailable");
+    byId("gexbot-symbols").value = config.symbols.join(",");
+    byId("gexbot-interval").value = String(config.interval_minutes);
+    byId("gexbot-enabled").checked = Boolean(config.enabled);
+    const configured = Boolean(payload.credential_configured);
+    byId("gexbot-collector-status").textContent = config.enabled
+      ? (configured ? "采集已启用；等待下一个间隔。" : "采集已启用，但 GEXBot Key 缺失。")
+      : "采集未启用。保存设置后才会开始。";
+  } catch (_) {
+    byId("gexbot-collector-status").textContent = "采集配置暂不可用。";
+  }
 }
 
 byId("save-openai").addEventListener("click", async () => {
@@ -122,6 +140,29 @@ byId("save-gexbot").addEventListener("click", async () => {
   }
 });
 
+byId("save-gexbot-config").addEventListener("click", async () => {
+  const symbols = byId("gexbot-symbols").value.split(",").map((value) => value.trim()).filter(Boolean);
+  const interval_minutes = Number(byId("gexbot-interval").value);
+  const enabled = byId("gexbot-enabled").checked;
+  byId("query-error").textContent = "";
+  if (!symbols.length) {
+    byId("query-error").textContent = "请至少输入一个 GEXBot 标的。";
+    return;
+  }
+  byId("save-gexbot-config").disabled = true;
+  try {
+    await request("/agent/gexbot/config", {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({enabled, symbols, interval_minutes})
+    });
+    await refreshGEXBotCollector();
+  } catch (error) {
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("save-gexbot-config").disabled = false;
+  }
+});
+
 byId("save-robinhood-research").addEventListener("click", async () => {
   const file = byId("robinhood-research-token").files?.[0];
   byId("query-error").textContent = "";
@@ -150,6 +191,7 @@ byId("logout").addEventListener("click", async () => {
   byId("openai-token").value = "";
   byId("brave-token").value = "";
   byId("gexbot-token").value = "";
+  byId("gexbot-enabled").checked = false;
   byId("robinhood-research-token").value = "";
   showAuthenticated(false);
 });

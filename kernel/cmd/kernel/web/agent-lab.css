@@ -19,6 +19,12 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .credential-row { display:flex; justify-content:space-between; gap:16px; align-items:end; }
 .credential-row > div { flex:1; }
 .credential-row button { width:auto; margin:0; }
+.collector-config { margin:4px 0 10px; padding:14px; border:1px solid #244b3e; border-radius:12px; background:rgba(6,19,15,.55); }
+.collector-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; align-items:center; }
+.collector-controls label { margin:0; }
+.toggle { grid-column:1 / -1; display:flex; gap:8px; align-items:center; font-weight:600; }
+.toggle input { width:auto; accent-color:#3bd79f; }
+code { color:#9de8ca; }
 .muted { color:#a6beb4; line-height:1.55; }
 .field-note { margin:0 0 4px; color:#86a59a; font-size:12px; line-height:1.5; }
 form { display:grid; gap:10px; }
