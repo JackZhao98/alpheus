@@ -867,6 +867,11 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	var window marketWindow
 	var quote *broker.Quote
+	// marketDataDiag preserves the specific reason a quote was missing or
+	// unusable. Without it, a fetch failure, a stale quote, and an insane quote
+	// all collapse into the generic "market_data_unavailable" reject with no
+	// trace of the underlying provider error.
+	var marketDataDiag string
 	var closeInstrument *broker.Instrument
 	var decisionSnapshot *providerSnapshot
 	if !op.Shadow && (op.Action == "close" || op.Action == "cancel") {
@@ -890,14 +895,19 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 			sym = op.Underlying
 		}
 		quoteProvider := s.marketProvider()
+		quoteProviderLabel := "base"
 		if s.tradingMode() == config.ModeLive && !op.Shadow {
 			quoteProvider = s.authorityMarketProvider()
+			quoteProviderLabel = "authority"
 		}
 		quoteCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
 		q, quoteErr := quoteProvider.Quote(quoteCtx, sym)
 		cancel()
 		if quoteErr == nil {
 			quote = &q
+		} else {
+			marketDataDiag = fmt.Sprintf("quote_fetch_failed(provider=%s): %v", quoteProviderLabel, quoteErr)
+			log.Printf("propose %s: %s symbol=%s", op.Action, marketDataDiag, sym)
 		}
 		if op.Action == "close" && s.tradingMode() == config.ModeLive && !op.Shadow {
 			instrumentCtx, cancel := context.WithTimeout(r.Context(), s.brokerCallTimeout())
@@ -1379,6 +1389,10 @@ func (s *server) propose(w http.ResponseWriter, r *http.Request) {
 	case "REJECT":
 		resp := map[string]any{"operation_id": opID, "status": "rejected", "class": v.Class, "reasons": v.Reasons}
 		addRiskFacts(resp, op)
+		if detail := marketDataRejectionDetail(marketDataDiag, v.Reasons, quote, s.limits.QuoteMaxAgeSec); detail != "" {
+			resp["market_data_detail"] = detail
+			log.Printf("propose %s rejected: operation_id=%s market_data_detail=%s", op.Action, opID, detail)
+		}
 		writeJSON(w, 200, resp)
 		return
 	case "C":
@@ -2563,6 +2577,38 @@ func supportsOrderKind(execution broker.ExecutionProvider, kind string) bool {
 		return support.SupportsOrderKind(kind)
 	}
 	return true
+}
+
+// marketDataRejectionDetail turns a generic "market_data_unavailable" reject
+// into a specific, loggable cause: the raw provider fetch error (with which
+// provider path failed), an insane bid/ask, or a stale quote with its age. It
+// returns "" when the reject was not about market data, so the field is only
+// attached when it explains something.
+func marketDataRejectionDetail(fetchDiag string, reasons []string, quote *broker.Quote, maxAgeSec int) string {
+	marketData := false
+	for _, reason := range reasons {
+		if reason == "market_data_unavailable" {
+			marketData = true
+			break
+		}
+	}
+	if !marketData {
+		return ""
+	}
+	if fetchDiag != "" {
+		return fetchDiag
+	}
+	if quote == nil {
+		return "quote_missing"
+	}
+	if !quote.Sane() {
+		return fmt.Sprintf("quote_not_sane(bid=%d,ask=%d)", quote.Bid, quote.Ask)
+	}
+	if !quote.Fresh(maxAgeSec, time.Now().UTC()) {
+		return fmt.Sprintf("quote_stale(age=%s,max=%ds,as_of=%s)",
+			time.Since(quote.AsOf).Round(time.Second), maxAgeSec, quote.AsOf.UTC().Format(time.RFC3339))
+	}
+	return "quote_unusable"
 }
 
 func addRiskFacts(response map[string]any, op risk.Operation) {
