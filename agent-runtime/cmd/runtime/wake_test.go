@@ -31,6 +31,7 @@ func TestWakeRequiresKernelToken(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("token=%q status=%d body=%s", token, w.Code, w.Body.String())
 		}
+		assertRuntimeErrorCode(t, w, "runtime_auth_invalid")
 	}
 	if runs != 0 {
 		t.Fatalf("unauthorized wake ran %d sessions", runs)
@@ -100,6 +101,7 @@ func TestWakeRejectsUnknownRoleAndInvalidOccurrence(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown role status=%d body=%s", w.Code, w.Body.String())
 	}
+	assertRuntimeErrorCode(t, w, "runtime_role_unknown")
 
 	for _, body := range []string{
 		`{"role":"scout","trigger":"spine"}`,
@@ -110,6 +112,9 @@ func TestWakeRejectsUnknownRoleAndInvalidOccurrence(t *testing.T) {
 		handler.ServeHTTP(w, authenticatedWakeRequest(body))
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d response=%s", body, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), `"error_code":"runtime_`) {
+			t.Fatalf("body=%s missing stable error code: %s", body, w.Body.String())
 		}
 	}
 }
@@ -177,4 +182,18 @@ func authenticatedWakeRequest(body string) *http.Request {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer kernel-secret")
 	return req
+}
+
+func assertRuntimeErrorCode(t *testing.T, recorder *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var response struct {
+		Code    string `json:"error_code"`
+		Message string `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode error response: %v body=%s", err, recorder.Body.String())
+	}
+	if response.Code != want || response.Message == "" {
+		t.Fatalf("error response=%+v want_code=%s", response, want)
+	}
 }

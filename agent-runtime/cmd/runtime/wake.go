@@ -93,12 +93,12 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /wake", func(w http.ResponseWriter, r *http.Request) {
 		if !wakeTokenMatches(wakeBearerToken(r), token) {
-			wakeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			wakeError(w, http.StatusUnauthorized, "runtime_auth_invalid", "unauthorized")
 			return
 		}
 		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "content-type must be application/json"})
+			wakeError(w, http.StatusBadRequest, "runtime_content_type_invalid", "content-type must be application/json")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxWakeBodyBytes)
@@ -112,34 +112,34 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 		if err := decoder.Decode(&in); err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				wakeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+				wakeError(w, http.StatusRequestEntityTooLarge, "runtime_wake_body_too_large", "request body exceeds 1 MiB")
 			} else {
-				wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				wakeError(w, http.StatusBadRequest, "runtime_wake_json_invalid", "invalid JSON body")
 			}
 			return
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				wakeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body exceeds 1 MiB"})
+				wakeError(w, http.StatusRequestEntityTooLarge, "runtime_wake_body_too_large", "request body exceeds 1 MiB")
 			} else {
-				wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain exactly one JSON value"})
+				wakeError(w, http.StatusBadRequest, "runtime_wake_json_multiple_values", "request body must contain exactly one JSON value")
 			}
 			return
 		}
 		role, ok := roleByName[in.Role]
 		if !ok {
-			wakeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown role"})
+			wakeError(w, http.StatusNotFound, "runtime_role_unknown", "unknown role")
 			return
 		}
 		trigger := strings.TrimSpace(in.Trigger)
 		if trigger != "spine" {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "trigger must be spine"})
+			wakeError(w, http.StatusBadRequest, "runtime_wake_trigger_invalid", "trigger must be spine")
 			return
 		}
 		occurrenceID := strings.TrimSpace(in.OccurrenceID)
 		if !safeOccurrenceID(occurrenceID) {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid occurrence_id"})
+			wakeError(w, http.StatusBadRequest, "runtime_occurrence_id_invalid", "invalid occurrence_id")
 			return
 		}
 		accepted := deduper.accept(role.Role, occurrenceID)
@@ -153,16 +153,16 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 	})
 	mux.HandleFunc("POST /query", func(w http.ResponseWriter, r *http.Request) {
 		if !wakeTokenMatches(wakeBearerToken(r), token) {
-			wakeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			wakeError(w, http.StatusUnauthorized, "runtime_auth_invalid", "unauthorized")
 			return
 		}
 		if query == nil {
-			wakeJSON(w, http.StatusNotFound, map[string]string{"error": "query unavailable"})
+			wakeError(w, http.StatusNotFound, "runtime_query_unavailable", "query unavailable")
 			return
 		}
 		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || mediaType != "application/json" {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "content-type must be application/json"})
+			wakeError(w, http.StatusBadRequest, "runtime_content_type_invalid", "content-type must be application/json")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxQueryBodyBytes)
@@ -175,20 +175,25 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&in); err != nil {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				wakeError(w, http.StatusRequestEntityTooLarge, "runtime_query_body_too_large", "request body exceeds 16 KiB")
+			} else {
+				wakeError(w, http.StatusBadRequest, "runtime_query_json_invalid", "invalid JSON body")
+			}
 			return
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain exactly one JSON value"})
+			wakeError(w, http.StatusBadRequest, "runtime_query_json_multiple_values", "request body must contain exactly one JSON value")
 			return
 		}
 		if len(strings.TrimSpace(in.Query)) == 0 || len(in.Query) > 4000 {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "query must contain 1-4000 bytes"})
+			wakeError(w, http.StatusBadRequest, "runtime_query_invalid", "query must contain 1-4000 bytes")
 			return
 		}
 		in.OpenAIAPIKey = strings.TrimSpace(in.OpenAIAPIKey)
 		if !validOptionalAPIKey(in.OpenAIAPIKey) {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid OpenAI API token"})
+			wakeError(w, http.StatusBadRequest, "runtime_query_api_key_invalid", "invalid OpenAI API token")
 			return
 		}
 		in.Workflow = strings.TrimSpace(in.Workflow)
@@ -196,12 +201,12 @@ func newRuntimeHandler(token string, roleByName map[string]roles.Role, run func(
 			in.Workflow = "scout"
 		}
 		if in.Workflow != "auto" && in.Workflow != "scout" && in.Workflow != "team" {
-			wakeJSON(w, http.StatusBadRequest, map[string]string{"error": "workflow must be auto, scout or team"})
+			wakeError(w, http.StatusBadRequest, "runtime_query_workflow_invalid", "workflow must be auto, scout or team")
 			return
 		}
 		result, err := query(in.Workflow, in.Symbol, in.Query, in.OpenAIAPIKey)
 		if err != nil {
-			wakeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent query failed"})
+			wakeError(w, http.StatusBadGateway, "runtime_query_execution_failed", "agent query failed")
 			return
 		}
 		response := map[string]any{
@@ -256,4 +261,10 @@ func wakeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// wakeError keeps a machine-stable diagnosis next to the user-safe message.
+// Do not pass provider responses, credentials, or untrusted content here.
+func wakeError(w http.ResponseWriter, status int, code, message string) {
+	wakeJSON(w, status, map[string]string{"error_code": code, "error": message})
 }
