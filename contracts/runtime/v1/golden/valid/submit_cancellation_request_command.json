@@ -1,0 +1,26 @@
+{
+  "schema_revision": 1,
+  "envelope": {
+    "schema_revision": 1,
+    "command_id": "cancel-request-1",
+    "actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+    "audience": "control_api",
+    "command_type": "submit_cancellation_request",
+    "idempotency_key": "cancel-request-1",
+    "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "causation_id": "cause-cancel-1",
+    "correlation_id": "correlation-1",
+    "deadline": "2026-07-20T13:00:00Z"
+  },
+  "request": {
+    "schema_revision": 1,
+    "request_id": "cancel-request-logical-1",
+    "target": "task",
+    "target_id": "task-1",
+    "expected_state_generation": 4,
+    "mode": "cancel",
+    "actor": {"principal_id": "control-1", "kind": "workload", "audience": "control_api"},
+    "reason_code": "user_cancel",
+    "requested_at": "2026-07-20T12:03:00Z"
+  }
+}

@@ -602,6 +602,16 @@ type CancellationRequest struct {
 	RequestedAt             time.Time            `json:"requested_at"`
 }
 
+// SubmitCancellationRequestCommand records a Control Plane cancellation
+// intent. The request is durable and fenced, but recording it never discards
+// an unresolved model call or creates an external effect. A later reconciler
+// must re-check the target generation before changing runtime state.
+type SubmitCancellationRequestCommand struct {
+	SchemaRevision uint16                    `json:"schema_revision"`
+	Envelope       contracts.CommandEnvelope `json:"envelope"`
+	Request        CancellationRequest       `json:"request"`
+}
+
 type RecoveryRecord struct {
 	SchemaRevision         uint16               `json:"schema_revision"`
 	RecoveryID             string               `json:"recovery_id"`

@@ -76,6 +76,9 @@ var runtimeTypes = map[string]func() validatable{
 	"attempt":                     func() validatable { return &runtimecontract.Attempt{} },
 	"budget_ledger":               func() validatable { return &runtimecontract.BudgetLedger{} },
 	"cancellation_request":        func() validatable { return &runtimecontract.CancellationRequest{} },
+	"submit_cancellation_request_command": func() validatable {
+		return &runtimecontract.SubmitCancellationRequestCommand{}
+	},
 	"checkpoint":                  func() validatable { return &runtimecontract.Checkpoint{} },
 	"claim_task_command":          func() validatable { return &runtimecontract.ClaimTaskCommand{} },
 	"commit_attempt_command":      func() validatable { return &runtimecontract.CommitAttemptCommand{} },

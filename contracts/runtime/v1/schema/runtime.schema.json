@@ -21,6 +21,7 @@
     {"$ref": "#/$defs/Checkpoint"},
     {"$ref": "#/$defs/BudgetLedger"},
     {"$ref": "#/$defs/CancellationRequest"},
+    {"$ref": "#/$defs/SubmitCancellationRequestCommand"},
     {"$ref": "#/$defs/RecoveryRecord"},
     {"$ref": "#/$defs/RuntimeEvent"},
     {"$ref": "#/$defs/ClaimTaskCommand"},
@@ -83,6 +84,25 @@
             },
             "audience": {"const": "control_api"},
             "command_type": {"const": "record_output_validation"}
+          }
+        }
+      ]
+    },
+    "SubmitCancellationRequestEnvelope": {
+      "allOf": [
+        {"$ref": "#/$defs/CommandEnvelope"},
+        {
+          "type": "object",
+          "properties": {
+            "actor": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "workload"},
+                "audience": {"const": "control_api"}
+              }
+            },
+            "audience": {"const": "control_api"},
+            "command_type": {"const": "submit_cancellation_request"}
           }
         }
       ]
@@ -805,6 +825,15 @@
         "input_refs": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/RecordRef"}},
         "output_contract": {"$ref": "#/$defs/OutputContractRevisionRef"},
         "requested_limit": {"$ref": "#/$defs/BudgetLimit"}
+      }
+    },
+    "SubmitCancellationRequestCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "envelope", "request"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/SubmitCancellationRequestEnvelope"},
+        "request": {"$ref": "#/$defs/CancellationRequest"}
       }
     }
   }

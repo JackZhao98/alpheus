@@ -28,6 +28,7 @@ type fixture struct {
 	checkpoint       Checkpoint
 	ledger           BudgetLedger
 	cancellation     CancellationRequest
+	cancelSubmit     SubmitCancellationRequestCommand
 	recovery         RecoveryRecord
 	event            RuntimeEvent
 	claim            ClaimTaskCommand
@@ -63,6 +64,7 @@ func TestContractsValidate(t *testing.T) {
 		"checkpoint":        value.checkpoint,
 		"ledger":            value.ledger,
 		"cancellation":      value.cancellation,
+		"cancel_submit":     value.cancelSubmit,
 		"recovery":          value.recovery,
 		"event":             value.event,
 		"claim":             value.claim,
@@ -215,6 +217,19 @@ func TestContractsFailClosed(t *testing.T) {
 		value.Envelope.CommandType = "commit_attempt"
 		if value.Validate() == nil {
 			t.Fatal("wrong validation command type passed")
+		}
+	})
+
+	t.Run("cancellation submission requires the authenticated control actor", func(t *testing.T) {
+		value := validFixture().cancelSubmit
+		value.Envelope.Actor.Audience = contracts.AudienceWorker
+		if value.Validate() == nil {
+			t.Fatal("worker-authored cancellation submission passed")
+		}
+		value = validFixture().cancelSubmit
+		value.Request.Actor.PrincipalID = "other-control"
+		if value.Validate() == nil {
+			t.Fatal("cancellation request actor mismatch passed")
 		}
 	})
 
@@ -634,6 +649,14 @@ func validFixture() fixture {
 			SchemaRevision: 1, RequestID: "cancel-1", Target: CancellationTask, TargetID: "task-1",
 			ExpectedStateGeneration: 4, Mode: CancellationCancel, Actor: control,
 			ReasonCode: "user_cancel", RequestedAt: t3,
+		},
+		cancelSubmit: SubmitCancellationRequestCommand{
+			SchemaRevision: 1, Envelope: controlEnvelope("submit_cancellation_request", '0'),
+			Request: CancellationRequest{
+				SchemaRevision: 1, RequestID: "cancel-request-1",
+				Target: CancellationTask, TargetID: "task-1", ExpectedStateGeneration: 4,
+				Mode: CancellationCancel, Actor: control, ReasonCode: "user_cancel", RequestedAt: t3,
+			},
 		},
 		recovery: RecoveryRecord{
 			SchemaRevision: 1, RecoveryID: "recovery-1", RunID: "run-1", TaskID: "task-1",

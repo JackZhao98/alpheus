@@ -37,7 +37,8 @@
     "record_output_validation_command",
     "request_child_task_command",
     "resolve_model_call_command",
-    "start_attempt_command"
+    "start_attempt_command",
+    "submit_cancellation_request_command"
   ],
   "events": ["runtime_event"],
   "state_machines": ["attempt", "budget", "publication_intent", "run", "session", "task", "turn"],
@@ -58,6 +59,7 @@
       "golden/valid/output_validation_receipt.json",
       "golden/valid/publication_disabled.json",
       "golden/valid/record_output_validation_command.json",
+      "golden/valid/submit_cancellation_request_command.json",
       "golden/valid/recovery_reuse.json",
       "golden/valid/run_queued.json",
       "golden/valid/runtime_policy.json"
@@ -84,6 +86,7 @@
       "golden/digest/output_validation_receipt.sha256",
       "golden/digest/publication_disabled.sha256",
       "golden/digest/record_output_validation_command.sha256",
+      "golden/digest/submit_cancellation_request_command.sha256",
       "golden/digest/recovery_reuse.sha256",
       "golden/digest/run_queued.sha256",
       "golden/digest/runtime_policy.sha256"

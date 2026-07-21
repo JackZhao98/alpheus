@@ -546,6 +546,14 @@ func (value CancellationRequest) Validate() error {
 	return nil
 }
 
+func (value SubmitCancellationRequestCommand) Validate() error {
+	if !validControlEnvelope(value.SchemaRevision, value.Envelope, "submit_cancellation_request") ||
+		value.Request.Validate() != nil || value.Request.Actor != value.Envelope.Actor {
+		return ErrInvalidRuntime
+	}
+	return nil
+}
+
 func (value RecoveryRecord) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.RecoveryID) ||
 		!validID(value.RunID) || !validID(value.TaskID) || !validID(value.PreviousAttemptID) ||
