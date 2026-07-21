@@ -17,6 +17,7 @@ import (
 	"alpheus/agentplatform/canonical"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputcontract"
+	"alpheus/agentplatform/outputcontract"
 )
 
 const (
@@ -136,7 +137,7 @@ func (adapter *PostgresAdapter) PrepareRootSession(ctx context.Context, admissio
 
 // CommitModelOutput is the Control-owned bridge used after a durable model
 // dispatch. The manifest digest is supplied by Control's dispatch response.
-func (adapter *PostgresAdapter) CommitModelOutput(ctx context.Context, callID, manifestDigest string, raw []byte) (blob.BlobRef, error) {
+func (adapter *PostgresAdapter) CommitModelOutput(ctx context.Context, callID, manifestDigest string, raw []byte, validation outputcontract.Evidence) (blob.BlobRef, error) {
 	if callID == "" || len(manifestDigest) != 64 || len(raw) < 1 || len(raw) > maxRawInputBytes {
 		return blob.BlobRef{}, fmt.Errorf("invalid model output")
 	}
@@ -149,10 +150,11 @@ func (adapter *PostgresAdapter) CommitModelOutput(ctx context.Context, callID, m
 		return blob.BlobRef{}, err
 	}
 	encoded, _ := json.Marshal(result)
+	validationRaw, _ := json.Marshal(validation)
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
 		var responseRaw []byte
-		return tx.QueryRowContext(ctx, `SELECT agent_control.publish_cortex_model_output_v2($1,$2,$3::JSONB,$4)::TEXT`,
-			callID, manifestDigest, string(encoded), "cortex-worker-1").Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.publish_cortex_model_output_v3($1,$2,$3::JSONB,$4,$5::JSONB)::TEXT`,
+			callID, manifestDigest, string(encoded), "cortex-worker-1", string(validationRaw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return blob.BlobRef{}, fmt.Errorf("publish model output: %w", err)

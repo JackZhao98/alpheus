@@ -84,7 +84,7 @@ func run() error {
 	}
 	w := &worker{db: db, store: store, principal: env("CORTEX_WORKER_PRINCIPAL_ID", "cortex-worker-1"), apiKey: apiKey,
 		controlURL: strings.TrimRight(env("CORTEX_CONTROL_URL", "http://cortex-input:8400"), "/"), controlToken: controlToken,
-		model: env("CORTEX_MODEL", "gpt-5.6-sol"), http: &http.Client{Timeout: 90 * time.Second}}
+		model: env("CORTEX_MODEL", "gpt-5.6-sol"), http: &http.Client{Timeout: 85 * time.Second}}
 	interval := 2 * time.Second
 	log.Printf("Cortex Worker listening for canonical Tasks as %s with %s", w.principal, w.model)
 	for {
@@ -135,7 +135,7 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	requestRaw, _ := json.Marshal(requestBody)
 	requestDigest := digest(requestRaw)
 	promptDigest := digest(prompt)
-	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: started.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: 2000, ReservedInputTokens: 100000, ReservedExternalCostMicroUSD: 0, TimeoutMS: 80000, TemperatureMicros: 0}}
+	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: started.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: 2000, ReservedInputTokens: reservedInputTokens(requestRaw), ReservedExternalCostMicroUSD: 0, TimeoutMS: 75000, TemperatureMicros: 0}}
 	var dispatched struct {
 		Status         string `json:"status"`
 		ManifestDigest string `json:"manifest_digest"`
@@ -147,24 +147,37 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	if dispatched.Status != "committed" {
 		return fmt.Errorf("dispatch denied")
 	}
+	providerCtx, cancelProvider := context.WithTimeout(ctx, 75*time.Second)
+	heartbeatDone := make(chan error, 1)
+	go func() {
+		heartbeatDone <- w.heartbeatLoop(providerCtx, item, claim, started.AttemptGeneration, 20*time.Second)
+	}()
 	startedAt := time.Now()
-	response, uncertain, err := w.callOpenAI(ctx, requestBody, idem)
+	response, uncertain, err := w.callOpenAI(providerCtx, requestBody, idem)
+	cancelProvider()
+	if heartbeatErr := <-heartbeatDone; heartbeatErr != nil {
+		log.Printf("Attempt %s heartbeat stopped: %v", claim.AttemptID, heartbeatErr)
+	}
 	wall := time.Since(startedAt).Milliseconds()
 	if err != nil {
 		failure := contracts.Failure{Code: "openai_request_failed", Message: bounded(err.Error()), Retryable: true}
 		if uncertain {
 			_ = w.markUnknown(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, failure)
 		} else {
-			_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, failure)
+			_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
 		}
 		return err
 	}
 	outputRaw, err := extractOutput(response)
 	if err != nil {
+		failure := contracts.Failure{Code: "openai_output_invalid", Message: bounded(err.Error()), Retryable: true}
+		_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInvalidOutput, failure)
 		return err
 	}
-	outputRef, err := w.publish(ctx, callID, dispatched.ManifestDigest, outputRaw)
+	outputRef, err := w.publishWithRetry(ctx, callID, dispatched.ManifestDigest, outputRaw)
 	if err != nil {
+		failure := contracts.Failure{Code: "model_output_commit_failed", Message: bounded(err.Error()), Retryable: true}
+		_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
 		return err
 	}
 	resultCandidate := runtimecontract.ModelCallResultCandidate{CallID: callID, RequestDigest: requestDigest, ProviderRequestID: response.ID, Output: outputRef, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ExternalCostMicroUSD: 0, WallTimeMS: wall, FinishReason: runtimecontract.FinishStop}
@@ -348,7 +361,56 @@ func (w *worker) publish(ctx context.Context, call, digestValue string, output [
 	err = json.NewDecoder(resp.Body).Decode(&ref)
 	return ref, err
 }
-func (w *worker) resolveFailure(ctx context.Context, item workItem, c claimResult, gen int64, turn string, turnGen int64, f contracts.Failure) error {
+
+func (w *worker) publishWithRetry(ctx context.Context, call, digestValue string, output []byte) (blob.BlobRef, error) {
+	delays := []time.Duration{0, 150 * time.Millisecond, 500 * time.Millisecond}
+	var last error
+	for _, delay := range delays {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return blob.BlobRef{}, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		ref, err := w.publish(ctx, call, digestValue, output)
+		if err == nil {
+			return ref, nil
+		}
+		last = err
+	}
+	return blob.BlobRef{}, last
+}
+
+func (w *worker) heartbeatLoop(ctx context.Context, item workItem, c claimResult, attemptGeneration int64, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			key := c.AttemptID + "-heartbeat-" + uuid()
+			command := runtimecontract.HeartbeatAttemptCommand{
+				SchemaRevision: 1,
+				Envelope:       w.envelope("heartbeat_attempt", key, item.Deadline),
+				AttemptID:      c.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration,
+				LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken,
+				RequestedExtensionSeconds: 120,
+			}
+			var result struct {
+				Status string `json:"status"`
+			}
+			if err := w.command(ctx, "heartbeat_attempt", command, &result); err != nil {
+				return err
+			}
+			if result.Status != "committed" {
+				return fmt.Errorf("heartbeat denied")
+			}
+		}
+	}
+}
+func (w *worker) resolveFailure(ctx context.Context, item workItem, c claimResult, gen int64, turn string, turnGen int64, retryClass runtimecontract.RetryClass, f contracts.Failure) error {
 	resolve := runtimecontract.ResolveModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("resolve_model_call", turn+"-failed", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, TurnID: turn, ExpectedTurnStateGeneration: turnGen, Outcome: runtimecontract.TurnFailed, Failure: &f}
 	var resolved struct {
 		Status string `json:"status"`
@@ -359,11 +421,17 @@ func (w *worker) resolveFailure(ctx context.Context, item workItem, c claimResul
 	if resolved.Status != "committed" {
 		return fmt.Errorf("failure resolution denied")
 	}
-	fail := runtimecontract.FailAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("fail_attempt", turn+"-attempt-failed", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, RetryClass: runtimecontract.RetryInfrastructure, Failure: f}
+	fail := runtimecontract.FailAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("fail_attempt", turn+"-attempt-failed", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, RetryClass: retryClass, Failure: f}
 	var failed struct {
 		Status string `json:"status"`
 	}
-	return w.command(ctx, "fail_attempt", fail, &failed)
+	if err := w.command(ctx, "fail_attempt", fail, &failed); err != nil {
+		return err
+	}
+	if failed.Status != "committed" {
+		return fmt.Errorf("attempt failure denied")
+	}
+	return nil
 }
 func (w *worker) markUnknown(ctx context.Context, item workItem, c claimResult, gen int64, turn string, turnGen int64, f contracts.Failure) error {
 	command := runtimecontract.MarkModelCallUnknownCommand{SchemaRevision: 1, Envelope: w.envelope("mark_model_call_unknown", turn+"-unknown", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, TurnID: turn, ExpectedTurnStateGeneration: turnGen, Failure: f}
@@ -406,4 +474,14 @@ func bounded(s string) string {
 		return "request failed"
 	}
 	return s
+}
+
+func reservedInputTokens(request []byte) int64 {
+	// UTF-8 byte length is a conservative token ceiling for ordinary BPE input;
+	// double it and add framing headroom for provider-side message encoding.
+	reserved := int64(len(request))*2 + 2048
+	if reserved > 1000000 {
+		return 1000000
+	}
+	return reserved
 }

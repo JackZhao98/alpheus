@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -15,6 +16,7 @@ import (
 	"alpheus/agentplatform/blob"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputgateway"
+	"alpheus/agentplatform/outputcontract"
 	"alpheus/agentplatform/security"
 	_ "github.com/lib/pq"
 )
@@ -67,6 +69,10 @@ func run() error {
 		"required":   []string{"text"},
 		"properties": map[string]any{"text": map[string]any{"type": "string"}},
 	}
+	outputSchemaRaw, err := json.Marshal(outputSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex output schema: %w", err)
+	}
 	schemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", outputSchema)
 	if err != nil {
@@ -117,7 +123,13 @@ func run() error {
 			http.Error(w, "invalid model output", http.StatusBadRequest)
 			return
 		}
-		ref, err := adapter.CommitModelOutput(request.Context(), strings.TrimSpace(body.CallID), strings.TrimSpace(body.ManifestDigest), body.Output)
+		validation, err := validateModelOutput(outputSchemaRaw, schemaRef.ContentDigest, body.Output)
+		if err != nil {
+			log.Printf("Cortex model output validation failed: %v", err)
+			http.Error(w, "model output failed its contract", http.StatusUnprocessableEntity)
+			return
+		}
+		ref, err := adapter.CommitModelOutput(request.Context(), strings.TrimSpace(body.CallID), strings.TrimSpace(body.ManifestDigest), body.Output, validation)
 		if err != nil {
 			log.Printf("Cortex model output commit failed: %v", err)
 			http.Error(w, "model output commit failed", http.StatusServiceUnavailable)
@@ -138,6 +150,17 @@ func run() error {
 	}
 	log.Printf("Cortex Input Gateway listening on %s as %s", server.Addr, principal)
 	return server.ListenAndServe()
+}
+
+func validateModelOutput(schema []byte, expectedSchemaDigest string, output []byte) (outputcontract.Evidence, error) {
+	evidence, err := outputcontract.Validate(bytes.NewReader(schema), bytes.NewReader(output))
+	if err != nil {
+		return outputcontract.Evidence{}, err
+	}
+	if evidence.SchemaSHA256 != expectedSchemaDigest {
+		return outputcontract.Evidence{}, fmt.Errorf("output schema digest mismatch")
+	}
+	return evidence, nil
 }
 
 func validBearer(request *http.Request, token string) bool {
