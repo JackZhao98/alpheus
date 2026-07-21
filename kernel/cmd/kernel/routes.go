@@ -34,6 +34,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /lessons", s.authorize(permissionRead, s.getLessons))
 	mux.HandleFunc("GET /blackboard/{day}", s.authorize(permissionRead, s.getBlackboard))
 	mux.HandleFunc("GET /market/quote/{symbol}", s.authorize(permissionRead, s.getMarketQuote))
+	mux.HandleFunc("GET /market/authority-quote/{symbol}", s.authorize(permissionRead, s.getAuthorityMarketQuote))
 	mux.HandleFunc("GET /market/chain/{underlying}", s.authorize(permissionRead, s.getMarketChain))
 	mux.HandleFunc("GET /market/expirations/{underlying}", s.authorize(permissionRead, s.getMarketExpirations))
 	mux.HandleFunc("GET /market/bars/{symbol}", s.authorize(permissionRead, s.getMarketBars))

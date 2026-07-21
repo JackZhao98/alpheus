@@ -81,6 +81,37 @@ func (s *server) getMarketQuote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, quote)
 }
 
+// getAuthorityMarketQuote is a diagnostic-only, read-only view of the same
+// forced-fresh market provider used by live admission. It deliberately returns
+// a decoded quote even when its venue timestamp is too old for a trade, so an
+// operator can distinguish a fetch failure from freshness rejection without
+// sending an order.
+func (s *server) getAuthorityMarketQuote(w http.ResponseWriter, r *http.Request) {
+	symbol, err := normalizedSymbol(r.PathValue("symbol"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	provider := s.authorityMarketProvider()
+	if provider == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "authority market data unavailable"})
+		return
+	}
+	quote, err := provider.Quote(r.Context(), symbol)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "authority market data unavailable"})
+		return
+	}
+	now := time.Now().UTC()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider_view": "authority",
+		"quote":         quote,
+		"age_ms":        now.Sub(quote.AsOf).Milliseconds(),
+		"usable":        quote.Usable(s.limits.QuoteMaxAgeSec, now),
+		"max_age_sec":   s.limits.QuoteMaxAgeSec,
+	})
+}
+
 func (s *server) getMarketChain(w http.ResponseWriter, r *http.Request) {
 	underlying, err := normalizedSymbol(r.PathValue("underlying"))
 	if err != nil {

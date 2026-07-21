@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"strings"
@@ -159,7 +160,27 @@ func (p *RobinhoodProvider) normalizedEquityQuote(record equityQuoteRecord) (bro
 	if strings.Contains(err.Error(), "drift") {
 		return broker.Quote{}, p.schemaError("quote schema drift")
 	}
+	// Diagnostic only: an authority (forced-fresh) read can reject a quote the
+	// base (cacheable) read accepts. Record exactly what this read saw so the
+	// disagreement can be attributed to real venue state vs a path defect. Bid,
+	// ask, and has_traded are guaranteed non-nil here (the schema check above
+	// routes nil fields to the "drift" branch).
+	log.Printf("equity quote not executable: symbol=%s reason=%s state=%q has_traded=%t bid=%v ask=%v venue_bid_time=%s venue_ask_time=%s",
+		record.Symbol, inexecutableEquityQuoteReason(record), record.State, *record.HasTraded,
+		*record.BidPrice, *record.AskPrice, record.VenueBidTime, record.VenueAskTime)
 	return broker.Quote{}, p.dataError("quote data is not executable")
+}
+
+// inexecutableEquityQuoteReason names which condition made a decoded equity
+// quote non-executable, for the diagnostic log above.
+func inexecutableEquityQuoteReason(record equityQuoteRecord) string {
+	if record.HasTraded != nil && !*record.HasTraded {
+		return "has_traded_false"
+	}
+	if record.State != "active" {
+		return "state_not_active"
+	}
+	return "bid_ask_not_sane"
 }
 
 func (p *RobinhoodProvider) normalizedOptionQuote(record optionQuoteRecord) (broker.Quote, error) {
