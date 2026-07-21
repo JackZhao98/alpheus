@@ -46,6 +46,7 @@ type server struct {
 	brokerTimeout                     time.Duration
 	claimTimeout                      time.Duration
 	attemptStale                      time.Duration
+	replayCreationGuard               time.Duration
 	providerDedupeVerified            bool
 	providerReplayWindowBoundVerified bool
 	runtimeURL                        string
@@ -322,12 +323,17 @@ func main() {
 		mcpLab: mcpLab, simVenue: simVenue, broker: compatibilityBroker(simVenue), store: st,
 		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
+		replayCreationGuard: attemptConfig.replayCreationGuard,
 		providerDedupeVerified: brokerName == "fake" ||
 			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive),
 		// FakeBroker completes synchronously inside the bounded call. Robinhood
-		// ref-id dedupe is empirically verified, but its server-side order-created
-		// latency is not; automatic replay therefore remains fail-closed there.
-		providerReplayWindowBoundVerified: brokerName == "fake",
+		// ref-id dedupe is empirically verified; its server-side order-created
+		// latency is bounded by REPLAY_CREATION_GUARD_MS (added to the call
+		// timeout), so equity auto-replay may be turned on deliberately per
+		// deployment. It stays fail-closed unless ROBINHOOD_EQUITY_AUTO_REPLAY=true.
+		providerReplayWindowBoundVerified: brokerName == "fake" ||
+			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive &&
+				config.Env("ROBINHOOD_EQUITY_AUTO_REPLAY", "false") == "true"),
 		runtimeURL:                        config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
 		researchURL:                       config.Env("RESEARCH_URL", "http://research-gateway:8300"),
 		consoleOrigin:                     consoleOrigin,
@@ -381,9 +387,10 @@ func databaseTimeout() (time.Duration, error) {
 }
 
 type attemptTimingConfig struct {
-	brokerTimeout time.Duration
-	claimTimeout  time.Duration
-	attemptStale  time.Duration
+	brokerTimeout       time.Duration
+	claimTimeout        time.Duration
+	attemptStale        time.Duration
+	replayCreationGuard time.Duration
 }
 
 func loadAttemptConfig() (attemptTimingConfig, error) {
@@ -399,10 +406,21 @@ func loadAttemptConfig() (attemptTimingConfig, error) {
 	if err != nil {
 		return attemptTimingConfig{}, err
 	}
+	// The same-ref replay guard must cover the provider send call plus the
+	// server's order-creation latency, so the replayed order's created_at stays
+	// inside the send window and can never orphan. Added on top of the broker
+	// call timeout at the call site.
+	replayCreationGuard, err := durationFromMillis("REPLAY_CREATION_GUARD_MS", 15_000)
+	if err != nil {
+		return attemptTimingConfig{}, err
+	}
 	if claimTimeout <= brokerTimeout {
 		return attemptTimingConfig{}, fmt.Errorf("CLAIM_TIMEOUT_MS must exceed BROKER_TIMEOUT_MS")
 	}
-	return attemptTimingConfig{brokerTimeout: brokerTimeout, claimTimeout: claimTimeout, attemptStale: attemptStale}, nil
+	return attemptTimingConfig{
+		brokerTimeout: brokerTimeout, claimTimeout: claimTimeout,
+		attemptStale: attemptStale, replayCreationGuard: replayCreationGuard,
+	}, nil
 }
 
 func durationFromMillis(key string, fallback int) (time.Duration, error) {
@@ -1824,7 +1842,7 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 	}
 	if s.tradingMode() == config.ModeLive {
 		marked, markErr := s.store.MarkAttemptSentWithManifest(
-			attempt.ID, attempt.Attempt, replay, s.brokerCallTimeout(), replayEvidence, preEffect.ID,
+			attempt.ID, attempt.Attempt, replay, s.brokerCallTimeout()+s.replayCreationGuard, replayEvidence, preEffect.ID,
 		)
 		if errors.Is(markErr, store.ErrReplayWindowExpired) {
 			unknownErr := s.keepAttemptUnknown(attempt, "same-ref replay window expired", "replay_window_expired", "")
