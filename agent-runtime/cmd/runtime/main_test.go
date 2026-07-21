@@ -174,7 +174,7 @@ func (f fixedCognition) Run(_ roles.Role, ctx map[string]json.RawMessage) (contr
 	return f.decision, nil
 }
 
-func TestRunSessionSubmitsOnlyTheTypedContractOperation(t *testing.T) {
+func TestRunSessionRejectsOperationOutputBeforeKernel(t *testing.T) {
 	var submitted map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		response := &http.Response{
@@ -213,11 +213,8 @@ func TestRunSessionSubmitsOnlyTheTypedContractOperation(t *testing.T) {
 	runSession(client, fixedCognition{t: t, decision: decision}, roles.Role{
 		Role: "desk_master", Version: 1, InjectedContext: []string{"lessons"},
 	}, "test", "instruction-boundary")
-	if submitted == nil {
-		t.Fatal("operation was not submitted")
-	}
-	if submitted["qty"] != json.Number("1") || submitted["thesis"] != "typed contract" {
-		t.Fatalf("untrusted lesson changed submitted operation: %+v", submitted)
+	if submitted != nil {
+		t.Fatalf("AP1 session sent a forbidden operation: %+v", submitted)
 	}
 }
 

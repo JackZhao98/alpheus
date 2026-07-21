@@ -278,13 +278,14 @@ func runSession(client *assemble.Client, cog cognition.Cognition, role roles.Rol
 	}
 	log.Printf("[%s] -> %T", sid, out)
 
-	for _, op := range extractOps(out) {
-		res, err := submit(client, op, role)
-		if err != nil {
-			log.Printf("[%s] submit: %v", sid, err)
-			continue
-		}
-		log.Printf("[%s] kernel: %s %v", sid, res["status"], res["reasons"])
+	// AP1 has no effect authority. The former direct role-output -> Kernel
+	// operation path is intentionally retired before the canonical Worker is
+	// admitted: a role may produce research, but never an operation as a side
+	// effect of a timer/wake. Keep this explicit rather than relying on prompt
+	// wording or a particular model's behavior.
+	if operations := extractOps(out); len(operations) != 0 {
+		log.Printf("[%s] agent_output_operation_forbidden_ap1: count=%d", sid, len(operations))
+		return
 	}
 	// TODO: apply DeskDecision.BlackboardPatch via PUT /blackboard
 	// TODO: persist coach lessons through the kernel
