@@ -61,6 +61,21 @@ services:
       timeout: 3s
       retries: 20
 
+  # Installs only the separately owned AP0/AP1 Agent Platform schemas and
+  # default-deny command surface.  It deliberately runs to completion before
+  # Cortex Control/Worker are introduced; no Runtime behavior is enabled here.
+  agent-platform-migrate:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/migrations/apply.sh"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
   agent-runtime:
     build: ./agent-runtime
     environment:
@@ -79,6 +94,7 @@ services:
     depends_on:
       kernel: { condition: service_healthy }
       research-gateway: { condition: service_healthy }
+      agent-platform-migrate: { condition: service_completed_successfully }
 
 volumes:
   pgdata:
