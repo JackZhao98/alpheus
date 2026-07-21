@@ -75,6 +75,36 @@ func TestInputContractsFailClosed(t *testing.T) {
 	}
 }
 
+func TestSubmitUserRequestCommandBindsGatewayAndRawRequest(t *testing.T) {
+	conversation := testConversation()
+	conversationRef, err := conversation.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testRequest(conversationRef)
+	requestRef, err := request.Ref()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := SubmitUserRequestCommand{
+		SchemaRevision: SchemaRevisionV1, Conversation: conversation, Request: request,
+		Envelope: contracts.CommandEnvelope{
+			SchemaRevision: contracts.SchemaRevisionV1, CommandID: "command-1",
+			Actor:    contracts.AuditActor{PrincipalID: "control-api-1", Kind: contracts.PrincipalWorkload, Audience: contracts.AudienceControlAPI},
+			Audience: contracts.AudienceControlAPI, CommandType: "submit_user_request",
+			IdempotencyKey: "input-1", RequestDigest: requestRef.RecordDigest,
+			CausationID: "cause-1", CorrelationID: "correlation-1", Deadline: inputTestNow.Add(time.Minute),
+		},
+	}
+	if err := command.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	command.Envelope.Actor = request.Subject
+	if command.Validate() == nil {
+		t.Fatal("user subject was accepted as the Control API workload actor")
+	}
+}
+
 func testConversation() Conversation {
 	return Conversation{
 		SchemaRevision: SchemaRevisionV1, ConversationID: "conversation-1",

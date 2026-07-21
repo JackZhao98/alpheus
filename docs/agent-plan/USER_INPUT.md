@@ -10,7 +10,9 @@
 > `BlobRef` identity before any interpretation. The corresponding immutable,
 > default-deny `agent_input` storage is deployed by the AP schema bootstrapper;
 > no application profile has direct table writes. IntentDraft, PolicyResolution,
-> the sole Input Gateway submission command, UI transport, interruption and
+> the sole Input Gateway submission command's contract is now frozen (with
+> distinct Control-API workload actor and authenticated user subject); its
+> database/API implementation, UI transport, interruption and
 > confirmation state machines remain unspecified and unimplemented.
 
 ## Purpose

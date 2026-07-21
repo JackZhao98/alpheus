@@ -58,8 +58,10 @@
   deduplication and creation time before any model interpretation.  An
   independent immutable `agent_input` schema now persists the facts under
   default-deny grants and defers cross-table attachment validation to commit.
-  No Input Gateway submission command, IntentDraft, PolicyResolution, Run
-  admission, question, confirmation, or UI command is enabled by this slice.
+  The next Input Gateway submission command contract separately binds its
+  Control API workload actor and authenticated user subject. Its database/API
+  implementation, IntentDraft, PolicyResolution, Run admission, question,
+  confirmation, and UI command remain disabled by this slice.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money

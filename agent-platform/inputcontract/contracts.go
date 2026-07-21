@@ -66,6 +66,17 @@ type UserRequest struct {
 	CreatedAt        time.Time             `json:"created_at"`
 }
 
+// SubmitUserRequestCommand is the only future Input Gateway write intent. Its
+// workload Actor and human Subject are deliberately distinct: a Control API
+// process may submit a verified user's request, but must never become that
+// user or turn the request prose into authority.
+type SubmitUserRequestCommand struct {
+	SchemaRevision uint16                    `json:"schema_revision"`
+	Envelope       contracts.CommandEnvelope `json:"envelope"`
+	Conversation   Conversation              `json:"conversation"`
+	Request        UserRequest               `json:"request"`
+}
+
 func (value Conversation) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ConversationID) ||
 		value.Subject.Validate() != nil || value.Subject.Kind != contracts.PrincipalUser ||
@@ -138,6 +149,28 @@ func (value UserRequest) Ref() (contracts.RecordRef, error) {
 		RecordID: value.RequestID, SchemaRevision: SchemaRevisionV1,
 		RecordDigest: digest,
 	}, nil
+}
+
+func (value SubmitUserRequestCommand) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || value.Envelope.Validate() != nil ||
+		value.Envelope.Actor.Kind != contracts.PrincipalWorkload ||
+		value.Envelope.Actor.Audience != contracts.AudienceControlAPI ||
+		value.Envelope.Audience != contracts.AudienceControlAPI ||
+		value.Envelope.CommandType != "submit_user_request" ||
+		value.Conversation.Validate() != nil || value.Request.Validate() != nil ||
+		value.Conversation.Subject != value.Request.Subject ||
+		value.Request.CreatedAt.After(value.Envelope.Deadline) {
+		return ErrInvalidInput
+	}
+	conversationRef, err := value.Conversation.Ref()
+	if err != nil || value.Request.Conversation != conversationRef {
+		return ErrInvalidInput
+	}
+	requestRef, err := value.Request.Ref()
+	if err != nil || value.Envelope.RequestDigest != requestRef.RecordDigest {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 func validConversationRef(value contracts.RecordRef) bool {
