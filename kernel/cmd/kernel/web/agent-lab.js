@@ -189,6 +189,8 @@ byId("query-form").addEventListener("submit", async (event) => {
     byId("result").textContent = JSON.stringify(result, null, 2);
     if (result.workflow === "ask_user") {
       byId("status").textContent = "NEEDS YOUR INPUT · NO OPERATION";
+      byId("question").value = `${query}\n\n补充回答：`;
+      byId("question").focus();
     } else {
       byId("status").textContent = result.cognition === "stub"
         ? "STUB PASS · MODEL NOT CONNECTED"
