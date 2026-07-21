@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpheus · SPX Gamma</title>
+  <meta name="description" content="SPX GEXBot intraday data dashboard">
+  <link rel="stylesheet" href="/assets/gex.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">ALPHEUS / MARKET DATA</p><h1>SPX Gamma</h1></div>
+    <div class="status"><span class="pulse"></span><span id="collection-status">Loading collection status…</span></div>
+  </header>
+  <main>
+    <section class="controls" aria-label="Chart controls">
+      <div class="category-tabs" role="tablist" aria-label="GEX aggregation">
+        <button class="tab active" data-category="gex_full" role="tab" aria-selected="true">Full <small>all expiries</small></button>
+        <button class="tab" data-category="gex_zero" role="tab" aria-selected="false">0DTE <small>today</small></button>
+        <button class="tab" data-category="gex_one" role="tab" aria-selected="false">1DTE <small>next expiry</small></button>
+      </div>
+      <label class="date-control">Session <input id="session-date" type="date"></label>
+    </section>
+
+    <section class="metrics" aria-live="polite">
+      <article><span>SPOT</span><strong id="metric-spot">—</strong></article>
+      <article><span>ZERO GAMMA</span><strong id="metric-zero">—</strong></article>
+      <article><span>MAJOR +γ</span><strong id="metric-pos">—</strong></article>
+      <article><span>MAJOR −γ</span><strong id="metric-neg">—</strong></article>
+      <article><span>LAST SNAPSHOT</span><strong id="metric-time">—</strong></article>
+    </section>
+
+    <section class="chart-card">
+      <div class="chart-heading"><div><h2 id="chart-title">SPX Gamma Exposure</h2><p>Wheel to zoom strike range · move pointer for exact levels</p></div><div class="legend"><span class="oi">OI GEX</span><span class="vol">Volume GEX</span><span class="spot">Spot</span><span class="zero">Zero Gamma</span></div></div>
+      <div id="profile-wrap" class="canvas-wrap"><canvas id="profile-chart" aria-label="SPX Gamma Exposure by strike"></canvas><div id="profile-tooltip" class="tooltip hidden"></div></div>
+    </section>
+
+    <section class="chart-card history-card">
+      <div class="chart-heading"><div><h2>Intraday price & gamma levels</h2><p>Persisted 30-second observations · America/New_York</p></div><span id="sample-count" class="sample-count"></span></div>
+      <div id="history-wrap" class="canvas-wrap"><canvas id="history-chart" aria-label="Intraday SPX price and gamma level history"></canvas><div id="history-tooltip" class="tooltip hidden"></div></div>
+    </section>
+    <p id="empty-note" class="empty-note hidden">No snapshots for this session yet. Collection runs automatically on weekdays from 09:00 to 16:00 Eastern.</p>
+  </main>
+  <script src="/assets/gex.js" defer></script>
+</body>
+</html>

@@ -16,64 +16,31 @@ import (
 )
 
 const gexbotCollectionSecret = "gexbot"
+const gexbotCollectionSymbol = "SPX"
+const gexbotCollectionCadence = 30 * time.Second
+
+var gexbotClassicCategories = []string{"gex_full", "gex_zero", "gex_one"}
 
 type gexbotCollectionStore interface {
-	LoadGEXBotCollectionConfig() (store.GEXBotCollectionConfig, error)
-	SaveGEXBotCollectionConfig(store.GEXBotCollectionConfig) (store.GEXBotCollectionConfig, error)
 	RecordGEXBotObservation(store.GEXBotObservationInput) error
 }
 
 type gexbotClassicSnapshot struct {
 	Symbol          string
+	Category        string
 	SourceTimestamp time.Time
 	Spot            *float64
 	ZeroGamma       *float64
+	MajorPosVol     *float64
+	MajorPosOI      *float64
+	MajorNegVol     *float64
+	MajorNegOI      *float64
 	Payload         json.RawMessage
 }
 
 func (s *server) gexbotStore() (gexbotCollectionStore, bool) {
 	value, ok := s.store.(gexbotCollectionStore)
 	return value, ok
-}
-
-func (s *server) getGEXBotCollectionConfig(w http.ResponseWriter, _ *http.Request) {
-	data, ok := s.gexbotStore()
-	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GEXBot collection unavailable"})
-		return
-	}
-	config, err := data.LoadGEXBotCollectionConfig()
-	if err != nil {
-		writeStoreError(w, "load GEXBot collection config", err)
-		return
-	}
-	_, secretErr := s.loadAgentSecret(gexbotCollectionSecret)
-	writeJSON(w, http.StatusOK, map[string]any{"config": config, "credential_configured": secretErr == nil})
-}
-
-func (s *server) putGEXBotCollectionConfig(w http.ResponseWriter, r *http.Request) {
-	data, ok := s.gexbotStore()
-	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GEXBot collection unavailable"})
-		return
-	}
-	var input store.GEXBotCollectionConfig
-	if !decodeJSONBody(w, r, &input) {
-		return
-	}
-	if input.Enabled {
-		if _, err := s.loadAgentSecret(gexbotCollectionSecret); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "GEXBot API key is not configured"})
-			return
-		}
-	}
-	config, err := data.SaveGEXBotCollectionConfig(input)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBot collection configuration"})
-		return
-	}
-	s.store.Event("gexbot_collection_configured", map[string]any{"enabled": config.Enabled, "symbols": config.Symbols, "interval_minutes": config.IntervalMinutes})
-	writeJSON(w, http.StatusOK, map[string]any{"config": config})
 }
 
 // postGEXBotTest performs one explicit read-only provider request. It neither
@@ -91,7 +58,7 @@ func (s *server) postGEXBotTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBot symbol"})
 		return
 	}
-	snapshot, err := s.fetchGEXBotClassic(r.Context(), symbol)
+	snapshot, err := s.fetchGEXBotClassic(r.Context(), symbol, "gex_full")
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBot test request failed"})
 		return
@@ -110,41 +77,37 @@ func startGEXBotCollector(s *server) error {
 		return nil
 	}
 	go func() {
-		var mu sync.Mutex
 		last := map[string]time.Time{}
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for now := range ticker.C {
 			if !gexbotCollectionWindow(now) {
+				continue
+			}
+			if now.Second()%int(gexbotCollectionCadence/time.Second) > 2 {
 				continue
 			}
 			data, ok := s.gexbotStore()
 			if !ok {
 				continue
 			}
-			config, err := data.LoadGEXBotCollectionConfig()
-			if err != nil || !config.Enabled {
-				continue
-			}
-			bucket := now.UTC().Truncate(time.Minute)
-			if now.Minute()%config.IntervalMinutes != 0 || now.Second() > 10 {
-				continue
-			}
-			for _, symbol := range config.Symbols {
-				mu.Lock()
-				duplicate := last[symbol].Equal(bucket)
-				mu.Unlock()
+			bucket := now.UTC().Truncate(gexbotCollectionCadence)
+			var waits sync.WaitGroup
+			for _, category := range gexbotClassicCategories {
+				duplicate := last[category].Equal(bucket)
 				if duplicate {
 					continue
 				}
-				if err := s.collectGEXBotClassic(context.Background(), data, symbol, bucket); err != nil {
-					log.Printf("gexbot collector %s: %v", symbol, err)
-					continue
-				}
-				mu.Lock()
-				last[symbol] = bucket
-				mu.Unlock()
+				last[category] = bucket
+				waits.Add(1)
+				go func(category string) {
+					defer waits.Done()
+					if err := s.collectGEXBotClassic(context.Background(), data, gexbotCollectionSymbol, category, bucket); err != nil {
+						log.Printf("gexbot collector %s/%s: %v", gexbotCollectionSymbol, category, err)
+					}
+				}(category)
 			}
+			waits.Wait()
 		}
 	}()
 	return nil
@@ -160,29 +123,37 @@ func gexbotCollectionWindow(now time.Time) bool {
 		return false
 	}
 	minute := local.Hour()*60 + local.Minute()
-	return minute >= 9*60 && minute < 20*60
+	return minute >= 9*60 && minute < 16*60
 }
 
-func (s *server) collectGEXBotClassic(ctx context.Context, data gexbotCollectionStore, symbol string, observedAt time.Time) error {
-	snapshot, err := s.fetchGEXBotClassic(ctx, symbol)
+func (s *server) collectGEXBotClassic(ctx context.Context, data gexbotCollectionStore, symbol, category string, observedAt time.Time) error {
+	snapshot, err := s.fetchGEXBotClassic(ctx, symbol, category)
 	if err != nil {
 		return err
 	}
 	return data.RecordGEXBotObservation(store.GEXBotObservationInput{
 		ID:              store.NewID(),
 		Symbol:          snapshot.Symbol,
+		Category:        snapshot.Category,
 		ObservedAt:      observedAt,
 		SourceTimestamp: snapshot.SourceTimestamp,
 		Spot:            snapshot.Spot,
 		ZeroGamma:       snapshot.ZeroGamma,
+		MajorPosVol:     snapshot.MajorPosVol,
+		MajorPosOI:      snapshot.MajorPosOI,
+		MajorNegVol:     snapshot.MajorNegVol,
+		MajorNegOI:      snapshot.MajorNegOI,
 		Payload:         snapshot.Payload,
 	})
 }
 
-func (s *server) fetchGEXBotClassic(ctx context.Context, symbol string) (gexbotClassicSnapshot, error) {
+func (s *server) fetchGEXBotClassic(ctx context.Context, symbol, category string) (gexbotClassicSnapshot, error) {
 	symbol, err := normalizeGEXBotSymbol(symbol)
 	if err != nil {
 		return gexbotClassicSnapshot{}, err
+	}
+	if !validGEXBotClassicCategory(category) {
+		return gexbotClassicSnapshot{}, fmt.Errorf("invalid GEXBot Classic category")
 	}
 	key, err := s.loadAgentSecret(gexbotCollectionSecret)
 	if err != nil {
@@ -190,7 +161,7 @@ func (s *server) fetchGEXBotClassic(ctx context.Context, symbol string) (gexbotC
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.gex.bot/v2/"+symbol+"/classic/gex_full", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.gex.bot/v2/"+symbol+"/classic/"+category, nil)
 	if err != nil {
 		return gexbotClassicSnapshot{}, err
 	}
@@ -211,16 +182,26 @@ func (s *server) fetchGEXBotClassic(ctx context.Context, symbol string) (gexbotC
 		return gexbotClassicSnapshot{}, fmt.Errorf("invalid response")
 	}
 	var payload struct {
-		Timestamp int64    `json:"timestamp"`
-		Ticker    string   `json:"ticker"`
-		Spot      *float64 `json:"spot"`
-		ZeroGamma *float64 `json:"zero_gamma"`
+		Timestamp   int64    `json:"timestamp"`
+		Ticker      string   `json:"ticker"`
+		Spot        *float64 `json:"spot"`
+		ZeroGamma   *float64 `json:"zero_gamma"`
+		MajorPosVol *float64 `json:"major_pos_vol"`
+		MajorPosOI  *float64 `json:"major_pos_oi"`
+		MajorNegVol *float64 `json:"major_neg_vol"`
+		MajorNegOI  *float64 `json:"major_neg_oi"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if err := decoder.Decode(&payload); err != nil || payload.Timestamp <= 0 || strings.ToUpper(payload.Ticker) != symbol {
 		return gexbotClassicSnapshot{}, fmt.Errorf("response schema mismatch")
 	}
-	return gexbotClassicSnapshot{Symbol: symbol, SourceTimestamp: time.Unix(payload.Timestamp, 0).UTC(), Spot: payload.Spot, ZeroGamma: payload.ZeroGamma, Payload: raw}, nil
+	return gexbotClassicSnapshot{Symbol: symbol, Category: category, SourceTimestamp: time.Unix(payload.Timestamp, 0).UTC(), Spot: payload.Spot,
+		ZeroGamma: payload.ZeroGamma, MajorPosVol: payload.MajorPosVol, MajorPosOI: payload.MajorPosOI,
+		MajorNegVol: payload.MajorNegVol, MajorNegOI: payload.MajorNegOI, Payload: raw}, nil
+}
+
+func validGEXBotClassicCategory(category string) bool {
+	return category == "gex_full" || category == "gex_zero" || category == "gex_one"
 }
 
 func normalizeGEXBotSymbol(raw string) (string, error) {

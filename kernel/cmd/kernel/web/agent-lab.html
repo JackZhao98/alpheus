@@ -50,22 +50,7 @@
           <button id="save-gexbot" class="secondary" type="button">加密保存</button>
         </div>
         <input id="gexbot-token" type="password" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore>
-        <p class="field-note">仅保存 AES-256-GCM 密文；不会写入日志、任务或浏览器存储。</p>
-        <div class="collector-config">
-          <div class="credential-row">
-            <div><label for="gexbot-symbols">GEXBot 采集标的</label><p id="gexbot-collector-status" class="field-note">读取采集配置中…</p></div>
-            <button id="save-gexbot-config" class="secondary" type="button">保存采集设置</button>
-          </div>
-          <input id="gexbot-symbols" value="SPX" maxlength="512" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="gexbot-collector-status">
-          <p class="field-note">用逗号分隔，例如 <code>SPX,SPY</code>。每个标的采集 Classic <code>gex_full</code> 原始快照。</p>
-          <div class="collector-controls">
-            <label for="gexbot-interval">采集间隔</label>
-            <select id="gexbot-interval"><option value="1">每 1 分钟</option><option value="5">每 5 分钟</option><option value="10">每 10 分钟</option><option value="15">每 15 分钟</option></select>
-            <label class="toggle"><input id="gexbot-enabled" type="checkbox"> 启用自动采集（美东工作日 09:00–20:00）</label>
-          </div>
-          <button id="test-gexbot" class="secondary" type="button">测试 GEXBot 连接（只读，不保存）</button>
-          <p id="gexbot-test-status" class="field-note">测试会读取当前输入框中的第一个标的。</p>
-        </div>
+        <p class="field-note">仅保存 AES-256-GCM 密文；不会写入日志、任务或浏览器存储。保存后，公开的 <a href="/gex">SPX Gamma 页面</a>会在美东工作日 09:00–16:00 自动每 30 秒记录 Full、0DTE、1DTE。</p>
         <div class="credential-row">
           <div><label for="robinhood-research-token">Robinhood Research Credential</label><p id="robinhood-research-status" class="field-note">检查配置中…</p></div>
           <button id="save-robinhood-research" class="secondary" type="button">加密导入</button>
