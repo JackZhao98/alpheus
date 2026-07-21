@@ -222,6 +222,59 @@ func TestMalformedOrStaleQuoteRejects(t *testing.T) {
 	}
 }
 
+func TestPriceBoundedOrderProceedsWithoutUsableQuote(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	limits := limitsForTest()
+	limits.QuoteMaxAgeSec = 15
+	limit, stop := units.MustMicros("4.40"), units.MustMicros("4.50")
+	equityLimit := func() Operation {
+		op := testOpen("35")
+		op.Kind, op.Multiplier = "equity", 1
+		op.OrderType = "limit"
+		op.Limit = &limit
+		return op
+	}
+
+	// An equity limit is capped by its own price, and its liquidity is not
+	// quote-dependent, so a missing or stale quote auto-approves (Class-B)
+	// rather than rejecting or stalling in review.
+	if v := ClassifyAt(equityLimit(), limits, testDay(), nil, now); v.Class != "B" {
+		t.Fatalf("nil-quote equity limit=%+v, want B", v)
+	}
+	stale := &broker.Quote{Bid: units.MustMicros("4.20"), Ask: units.MustMicros("4.40"), AsOf: now.Add(-20 * time.Second)}
+	if v := ClassifyAt(equityLimit(), limits, testDay(), stale, now); v.Class != "B" {
+		t.Fatalf("stale-quote equity limit=%+v, want B", v)
+	}
+	// Stop-limit is price-bounded too; it also clears without a quote.
+	stopLimit := equityLimit()
+	stopLimit.OrderType, stopLimit.StopPrice = "stop_limit", &stop
+	if v := ClassifyAt(stopLimit, limits, testDay(), nil, now); v.Class != "B" {
+		t.Fatalf("nil-quote equity stop-limit=%+v, want B", v)
+	}
+
+	// An option cannot verify open interest (exit liquidity) without a quote, so
+	// it falls to Class-C review rather than auto-approving.
+	option := equityLimit()
+	option.Kind, option.Multiplier = "option", 100
+	if v := ClassifyAt(option, limits, testDay(), nil, now); v.Class != "C" {
+		t.Fatalf("nil-quote option limit=%+v, want C", v)
+	}
+
+	// Unbounded and shadow orders still require a usable quote and reject.
+	for name, mutate := range map[string]func(*Operation){
+		"market":      func(o *Operation) { o.OrderType = "market" },
+		"stop_market": func(o *Operation) { o.OrderType = "stop_market"; o.StopPrice = &stop },
+		"no_limit":    func(o *Operation) { o.Limit = nil },
+		"shadow":      func(o *Operation) { o.Shadow = true },
+	} {
+		op := equityLimit()
+		mutate(&op)
+		if v := ClassifyAt(op, limits, testDay(), nil, now); v.Class != "REJECT" || v.Reasons[0] != "market_data_unavailable" {
+			t.Fatalf("%s without quote=%+v, want REJECT market_data_unavailable", name, v)
+		}
+	}
+}
+
 func TestRiskPackageContainsNoFloatingMoneyType(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {

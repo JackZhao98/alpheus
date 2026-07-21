@@ -123,7 +123,13 @@ func ClassifyAt(op Operation, limits config.Limits, day DayState, quote *broker.
 	if day.Equity <= 0 {
 		return reject("nonpositive_equity")
 	}
-	if quote == nil || !quote.Usable(limits.QuoteMaxAgeSec, now) {
+	// A price-bounded order (limit or stop-limit) has its fill capped by its own
+	// limit price, so it may proceed without a usable quote. Market and
+	// stop-market orders (unbounded fill) and shadow paper fills still require a
+	// usable quote for marketability.
+	quoteUsable := quote != nil && quote.Usable(limits.QuoteMaxAgeSec, now)
+	priceBounded := (op.OrderType == "limit" || op.OrderType == "stop_limit") && !op.Shadow && op.Limit != nil
+	if !quoteUsable && !priceBounded {
 		return reject("market_data_unavailable")
 	}
 	if op.DerivedMaxRisk <= 0 || op.RequiredCash <= 0 || op.Multiplier <= 0 {
@@ -162,11 +168,20 @@ func ClassifyAt(op Operation, limits config.Limits, day DayState, quote *broker.
 		}
 	}
 	checks["plan_complete"] = planOK
-	checks["liquidity_spread"] = units.SpreadWithin(
-		quote.Bid, quote.Ask, limits.InstrumentRules.MaxRelativeSpread,
-	)
-	checks["liquidity_oi"] = op.Kind != "option" ||
-		quote.OpenInterest >= limits.InstrumentRules.MinOpenInterest
+	if quoteUsable {
+		checks["liquidity_spread"] = units.SpreadWithin(
+			quote.Bid, quote.Ask, limits.InstrumentRules.MaxRelativeSpread,
+		)
+		checks["liquidity_oi"] = op.Kind != "option" ||
+			quote.OpenInterest >= limits.InstrumentRules.MinOpenInterest
+	} else {
+		// No quote. A price-bounded order's fill is capped by its own limit, so
+		// the spread check (a market-order protection) does not apply. Open
+		// interest still cannot be verified, so an option cannot auto-approve and
+		// falls to Class-C review; an equity limit clears on the checks above.
+		checks["liquidity_spread"] = true
+		checks["liquidity_oi"] = op.Kind != "option"
+	}
 
 	order := []string{
 		"whitelist", "per_trade_budget", "total_open_risk",

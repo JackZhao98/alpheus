@@ -2407,7 +2407,13 @@ func (s *server) deriveOpenOperation(ctx context.Context, op risk.Operation, quo
 }
 
 func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Operation, quote *broker.Quote, limits config.Limits) risk.Operation {
-	if quote == nil || !quote.Usable(limits.QuoteMaxAgeSec, time.Now().UTC()) {
+	quoteUsable := quote != nil && quote.Usable(limits.QuoteMaxAgeSec, time.Now().UTC())
+	// A price-bounded order (limit or stop-limit) has its fill capped by its own
+	// limit price, so it can be risk-capped and priced without a live quote.
+	// Market and stop-market orders (unbounded fill, need marketability) and
+	// shadow paper fills still require a usable quote and reject without one.
+	priceBounded := (op.OrderType == "limit" || op.OrderType == "stop_limit") && !op.Shadow && op.Limit != nil
+	if !quoteUsable && !priceBounded {
 		op.RejectReason = "market_data_unavailable"
 		return op
 	}
@@ -2455,7 +2461,9 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 		return op
 	}
 
-	op.WorkingPrice = quote.Ask
+	if quoteUsable {
+		op.WorkingPrice = quote.Ask
+	}
 	if op.StopPrice != nil {
 		if op.Shadow {
 			op.RejectReason = "shadow_stop_orders_not_supported"
@@ -2464,7 +2472,9 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 		// A newly proposed buy stop must rest above the market. Once approved,
 		// crossing the trigger during the short pre-effect refresh is still the
 		// user's authorized intent; the risk cap below remains authoritative.
-		if *op.StopPrice <= quote.Ask && op.ApprovedPriceCap == 0 {
+		// Without a usable quote this intent check cannot run; a stop-limit's
+		// fill stays bounded by its own limit, so it proceeds unchecked here.
+		if quoteUsable && *op.StopPrice <= quote.Ask && op.ApprovedPriceCap == 0 {
 			op.RejectReason = "buy_stop_must_be_above_market"
 			return op
 		}
@@ -2519,8 +2529,12 @@ func (s *server) deriveOpenOperationWithLimits(ctx context.Context, op risk.Oper
 	}
 	if op.OrderType == "stop_limit" {
 		op.WorkingPrice = op.ApprovedPriceCap
-	} else if limits.ExecutionPolicy.StartAt == "mid" {
+	} else if quoteUsable && limits.ExecutionPolicy.StartAt == "mid" {
 		op.WorkingPrice = quote.Mid()
+	}
+	if !quoteUsable {
+		// No live quote (resting limit): start working at the authorized cap.
+		op.WorkingPrice = op.ApprovedPriceCap
 	}
 	if op.WorkingPrice > op.ApprovedPriceCap {
 		op.WorkingPrice = op.ApprovedPriceCap
