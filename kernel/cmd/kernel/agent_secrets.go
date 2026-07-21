@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 )
 
 const agentSecretEnvelopeVersion byte = 1
@@ -17,6 +18,7 @@ const agentSecretEnvelopeVersion byte = 1
 var agentSecretNames = map[string]bool{
 	"openai":             true,
 	"brave":              true,
+	"gexbot":             true,
 	"robinhood_research": true,
 }
 
@@ -26,7 +28,7 @@ func (s *server) getAgentSecrets(w http.ResponseWriter, _ *http.Request) {
 		writeStoreError(w, "list agent secrets", err)
 		return
 	}
-	configured := map[string]bool{"openai": false, "brave": false, "robinhood_research": false}
+	configured := map[string]bool{"openai": false, "brave": false, "gexbot": false, "robinhood_research": false}
 	for _, name := range names {
 		if agentSecretNames[name] {
 			configured[name] = true
@@ -76,10 +78,20 @@ func canonicalAgentSecretValue(name, value string) (string, bool) {
 		return "", false
 	}
 	if name != "robinhood_research" {
+		if name == "gexbot" {
+			return value, validGEXBotAPIKey(value)
+		}
 		return value, validAgentAPIKey(value)
 	}
 	compact, err := compactRobinhoodResearchCredential(json.RawMessage(value))
 	return compact, err == nil && len(compact) <= 4000
+}
+
+func validGEXBotAPIKey(value string) bool {
+	if len(value) < 20 || len(value) > 512 || !strings.HasPrefix(value, "gexbot_") {
+		return false
+	}
+	return !strings.ContainsFunc(value, unicode.IsSpace)
 }
 
 func (s *server) deleteAgentSecret(w http.ResponseWriter, r *http.Request) {

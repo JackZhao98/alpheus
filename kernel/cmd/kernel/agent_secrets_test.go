@@ -36,6 +36,17 @@ func TestAgentSecretEnvelopeIsAuthenticatedAndProviderBound(t *testing.T) {
 	}
 }
 
+func TestGEXBotAPIKeyValidation(t *testing.T) {
+	if !validAgentSecretValue("gexbot", "gexbot_custom_0123456789abcdef") {
+		t.Fatal("valid GEXBot key rejected")
+	}
+	for _, value := range []string{"", "gexbot_short", "gexbot_custom_has space", "sk-not-gexbot"} {
+		if validAgentSecretValue("gexbot", value) {
+			t.Fatalf("invalid GEXBot key accepted: %q", value)
+		}
+	}
+}
+
 func TestAgentSecretWebLifecycleNeverReturnsPlaintext(t *testing.T) {
 	st := newMemoryStore()
 	s := &server{mode: config.ModeConfig{

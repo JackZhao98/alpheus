@@ -46,6 +46,12 @@
         <input id="brave-token" type="password" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore>
         <p class="field-note">用于受控 Web Search；密钥只在 Kernel → Research Gateway 的单次内部调用中解密。</p>
         <div class="credential-row">
+          <div><label for="gexbot-token">GEXBot Classic API Key</label><p id="gexbot-status" class="field-note">检查配置中…</p></div>
+          <button id="save-gexbot" class="secondary" type="button">加密保存</button>
+        </div>
+        <input id="gexbot-token" type="password" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore>
+        <p class="field-note">SPX Classic 每分钟采集将使用此 key。仅保存 AES-256-GCM 密文；不会写入日志、任务或浏览器存储。</p>
+        <div class="credential-row">
           <div><label for="robinhood-research-token">Robinhood Research Credential</label><p id="robinhood-research-status" class="field-note">检查配置中…</p></div>
           <button id="save-robinhood-research" class="secondary" type="button">加密导入</button>
         </div>

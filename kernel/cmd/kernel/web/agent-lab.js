@@ -49,6 +49,8 @@ async function refreshCredentialStatus() {
   byId("openai-status").textContent = configured ? "已加密保存在数据库中。" : "尚未配置。";
   const braveConfigured = Boolean(payload?.configured?.brave);
   byId("brave-status").textContent = braveConfigured ? "已加密保存在数据库中。" : "尚未配置。";
+  const gexbotConfigured = Boolean(payload?.configured?.gexbot);
+  byId("gexbot-status").textContent = gexbotConfigured ? "已加密保存在数据库中。SPX collector 准备就绪。" : "尚未配置。";
   const robinhoodConfigured = Boolean(payload?.configured?.robinhood_research);
   byId("robinhood-research-status").textContent = robinhoodConfigured ? "已加密保存在数据库中。" : "尚未配置。";
   return configured;
@@ -98,6 +100,28 @@ byId("save-brave").addEventListener("click", async () => {
   }
 });
 
+byId("save-gexbot").addEventListener("click", async () => {
+  const value = byId("gexbot-token").value.trim();
+  byId("query-error").textContent = "";
+  if (!value) {
+    byId("query-error").textContent = "请输入 GEXBot API Key。";
+    return;
+  }
+  byId("save-gexbot").disabled = true;
+  try {
+    await request("/agent/secrets/gexbot", {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({value})
+    });
+    byId("gexbot-token").value = "";
+    await refreshCredentialStatus();
+  } catch (error) {
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("save-gexbot").disabled = false;
+  }
+});
+
 byId("save-robinhood-research").addEventListener("click", async () => {
   const file = byId("robinhood-research-token").files?.[0];
   byId("query-error").textContent = "";
@@ -125,6 +149,7 @@ byId("logout").addEventListener("click", async () => {
   await request("/agent/auth/logout", {method:"POST"}).catch(() => null);
   byId("openai-token").value = "";
   byId("brave-token").value = "";
+  byId("gexbot-token").value = "";
   byId("robinhood-research-token").value = "";
   showAuthenticated(false);
 });
