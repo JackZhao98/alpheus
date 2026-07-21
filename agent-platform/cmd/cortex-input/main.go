@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,6 +33,10 @@ func run() error {
 		return err
 	}
 	serviceToken, err := loadSecretEnv("CORTEX_INPUT_TOKEN_FILE")
+	if err != nil {
+		return err
+	}
+	workerToken, err := loadSecretEnv("CORTEX_WORKER_CONTROL_TOKEN_FILE")
 	if err != nil {
 		return err
 	}
@@ -79,10 +84,52 @@ func run() error {
 	if actor.Validate() != nil || subject.Validate() != nil {
 		return fmt.Errorf("invalid Cortex actor configuration")
 	}
-	handler := inputgateway.NewRuntimeHandler(gateway, adapter, actor, bearerSubject(serviceToken, subject))
+	publicHandler := inputgateway.NewRuntimeHandler(gateway, adapter, actor, bearerSubject(serviceToken, subject))
+	mux := http.NewServeMux()
+	mux.Handle("/", publicHandler)
+	mux.HandleFunc("GET /v1/runs/{id}", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		result, err := adapter.GetRunResult(request.Context(), strings.TrimSpace(request.PathValue("id")))
+		if err != nil {
+			http.Error(w, "run result unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("POST /internal/v1/model-outputs", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			CallID         string          `json:"call_id"`
+			ManifestDigest string          `json:"manifest_digest"`
+			Output         json.RawMessage `json:"output"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || len(body.Output) == 0 {
+			http.Error(w, "invalid model output", http.StatusBadRequest)
+			return
+		}
+		ref, err := adapter.CommitModelOutput(request.Context(), strings.TrimSpace(body.CallID), strings.TrimSpace(body.ManifestDigest), body.Output)
+		if err != nil {
+			log.Printf("Cortex model output commit failed: %v", err)
+			http.Error(w, "model output commit failed", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(ref)
+	})
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
-		Handler:           handler,
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -91,6 +138,12 @@ func run() error {
 	}
 	log.Printf("Cortex Input Gateway listening on %s as %s", server.Addr, principal)
 	return server.ListenAndServe()
+}
+
+func validBearer(request *http.Request, token string) bool {
+	expected := []byte("Bearer " + token)
+	values := request.Header.Values("Authorization")
+	return len(values) == 1 && len(values[0]) == len(expected) && subtle.ConstantTimeCompare([]byte(values[0]), expected) == 1
 }
 
 func bearerSubject(token string, subject contracts.AuditActor) func(*http.Request) (contracts.AuditActor, error) {

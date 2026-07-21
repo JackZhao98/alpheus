@@ -101,6 +101,15 @@ func newHandler(gateway *Gateway, runtime RunAdmitter, actor contracts.AuditActo
 				writeHTTPError(w, http.StatusServiceUnavailable, "cortex_run_admission_failed", "UserRequest was recorded but its Cortex Run was not admitted; retry the same request")
 				return
 			}
+			if preparer, ok := runtime.(interface {
+				PrepareRootSession(context.Context, Admission, RunAdmission) error
+			}); ok {
+				if err = preparer.PrepareRootSession(request.Context(), result, run); err != nil {
+					log.Printf("Cortex Session preparation failed after Run admission: %v", err)
+					writeHTTPError(w, http.StatusServiceUnavailable, "cortex_session_preparation_failed", "Cortex Run was admitted but its Worker Session was not prepared; retry the same request")
+					return
+				}
+			}
 		}
 		response := map[string]any{"status": "accepted",
 			"conversation_id": result.Command.Conversation.ConversationID, "conversation_created_at": result.Command.Conversation.CreatedAt,

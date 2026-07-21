@@ -18,8 +18,8 @@
 > Blob staging, PostgreSQL adapters, and a dedicated Control API LOGIN/container
 > on localhost port 8400. Its race tests, disposable PostgreSQL migration/role
 > probe, container health check, owner-only file-mode check, and exact duplicate
-> HTTP replay smoke passed on 2026-07-21. Agent Lab has not been switched to
-> this endpoint. IntentDraft,
+> HTTP replay and canonical Worker smoke passed on 2026-07-21. Agent Lab now
+> submits to this Cortex endpoint and polls canonical Run results. IntentDraft,
 > PolicyResolution, interruption, and confirmation state machines remain
 > unspecified and unimplemented.
 

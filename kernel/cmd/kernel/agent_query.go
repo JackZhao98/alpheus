@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -30,6 +32,118 @@ type agentQueryRequest struct {
 	Query    string `json:"query"`
 }
 
+func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
+	var input agentQueryRequest
+	if !decodeJSONBody(w, r, &input) {
+		return
+	}
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Workflow = strings.TrimSpace(input.Workflow)
+	input.Query = strings.TrimSpace(input.Query)
+	if input.Workflow == "" {
+		input.Workflow = "scout"
+	}
+	if (input.Workflow != "auto" && input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
+		writeAgentQueryError(w, http.StatusBadRequest, "cortex_input_invalid", "symbol and query are required")
+		return
+	}
+	runID, code := s.submitCortexRequest(r.Context(), input)
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable, code, "Cortex request was not accepted")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": runID, "status": "running", "workflow": input.Workflow, "symbol": input.Symbol, "trace": []any{}})
+}
+
+func (s *server) getCortexRun(w http.ResponseWriter, r *http.Request) {
+	state, text, code := s.fetchCortexRun(r.Context(), r.PathValue("id"))
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable, code, "Cortex result is unavailable")
+		return
+	}
+	response := map[string]any{"id": r.PathValue("id"), "status": "running", "trace": []any{}}
+	if state == "succeeded" {
+		response["status"] = "succeeded"
+		response["result"] = map[string]any{"workflow": "answer", "cognition": "llm", "model": "gpt-5.6-sol", "answer": text, "run_id": r.PathValue("id")}
+	}
+	if state == "failed" || state == "canceled" || state == "dead_lettered" {
+		response["status"] = "failed"
+		response["error_code"] = "cortex_run_failed"
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) cortexToken() (string, error) {
+	raw, err := os.ReadFile(s.cortexTokenFile)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", fmt.Errorf("empty Cortex token")
+	}
+	return token, nil
+}
+func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (string, string) {
+	token, err := s.cortexToken()
+	if err != nil {
+		return "", "cortex_credential_unavailable"
+	}
+	id := store.NewID()
+	now := time.Now().UTC()
+	body := map[string]any{"conversation_id": "agent-lab-" + id, "conversation_created_at": now, "request_id": id, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\nWorkflow: %s\n\n%s", input.Symbol, input.Workflow, input.Query), "idempotency_key": "agent-lab-" + id, "causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
+	raw, _ := json.Marshal(body)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cortexURL, "/")+"/v1/user-requests", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "cortex_unavailable"
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
+	if resp.StatusCode != http.StatusAccepted {
+		return "", "cortex_rejected"
+	}
+	var accepted struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(data, &accepted) != nil || accepted.RunID == "" {
+		return "", "cortex_response_invalid"
+	}
+	return accepted.RunID, ""
+}
+func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, string, string) {
+	token, err := s.cortexToken()
+	if err != nil {
+		return "", "", "cortex_credential_unavailable"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.cortexURL, "/")+"/v1/runs/"+runID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", "cortex_unavailable"
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "cortex_result_unavailable"
+	}
+	var result struct{ State, Text string }
+	if json.Unmarshal(data, &result) != nil || result.State == "" {
+		return "", "", "cortex_response_invalid"
+	}
+	return result.State, result.Text, ""
+}
+
 // postAgentQuery creates a durable, non-trading MVP job. The encrypted model
 // credential is loaded only after authentication and exists as plaintext only
 // for the lifetime of the dispatcher call; it is never part of the job.
@@ -49,12 +163,14 @@ func (s *server) postAgentQuery(w http.ResponseWriter, r *http.Request) {
 		writeAgentQueryError(w, http.StatusBadRequest, "agent_query_input_invalid", "symbol and query are required")
 		return
 	}
-	openAIAPIKey, err := s.loadAgentSecret("openai")
-	if err != nil || !validAgentAPIKey(openAIAPIKey) {
-		writeAgentQueryError(w, http.StatusBadRequest, "agent_query_openai_credential_unavailable", "OpenAI API token is not configured")
-		return
+	if strings.TrimSpace(s.cortexURL) == "" {
+		openAIAPIKey, err := s.loadAgentSecret("openai")
+		if err != nil || !validAgentAPIKey(openAIAPIKey) {
+			writeAgentQueryError(w, http.StatusBadRequest, "agent_query_openai_credential_unavailable", "OpenAI API token is not configured")
+			return
+		}
+		input.OpenAIAPIKey = openAIAPIKey
 	}
-	input.OpenAIAPIKey = openAIAPIKey
 
 	if s.store == nil {
 		writeAgentQueryError(w, http.StatusServiceUnavailable, "agent_query_store_unavailable", "agent query store unavailable")
@@ -92,6 +208,26 @@ func (s *server) executeAgentQuery(jobID string) {
 		return
 	}
 	input := agentQueryInput{Workflow: job.Workflow, Symbol: job.Symbol, Query: job.Query}
+	if strings.TrimSpace(s.cortexURL) != "" {
+		if !s.traceAgentQuery(job, "runtime_request_started", "") {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 390*time.Second)
+		defer cancel()
+		result, errorCode := s.callCortex(ctx, job, input)
+		if errorCode != "" {
+			_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, errorCode)
+			return
+		}
+		if !s.traceAgentQuery(job, "runtime_response_received", "") {
+			return
+		}
+		completed, err := s.store.CompleteClaimedAgentQueryJob(job.ID, job.ClaimToken, result)
+		if err == nil && completed {
+			s.store.Event("cortex_agent_query", map[string]any{"workflow": input.Workflow, "symbol": input.Symbol})
+		}
+		return
+	}
 	openAIAPIKey, err := s.loadAgentSecret("openai")
 	if err != nil || !validAgentAPIKey(openAIAPIKey) {
 		_, _ = s.store.FailClaimedAgentQueryJob(job.ID, job.ClaimToken, "credential_unavailable")
@@ -122,6 +258,78 @@ func (s *server) executeAgentQuery(jobID string) {
 		return
 	}
 	s.store.Event("agent_query", map[string]any{"workflow": input.Workflow, "symbol": input.Symbol, "attempt": job.Attempt})
+}
+
+func (s *server) callCortex(ctx context.Context, job *store.AgentQueryJob, input agentQueryInput) (json.RawMessage, string) {
+	tokenRaw, err := os.ReadFile(s.cortexTokenFile)
+	if err != nil {
+		return nil, "cortex_credential_unavailable"
+	}
+	token := strings.TrimSpace(string(tokenRaw))
+	if token == "" {
+		return nil, "cortex_credential_unavailable"
+	}
+	now := time.Now().UTC()
+	requestID := job.ID
+	body := map[string]any{"conversation_id": "agent-lab-" + job.ID, "conversation_created_at": now, "request_id": requestID, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\nWorkflow: %s\n\n%s", input.Symbol, input.Workflow, input.Query), "idempotency_key": "agent-lab-" + job.ID, "causation_id": job.ID, "correlation_id": job.ID, "deadline": now.Add(5 * time.Minute)}
+	raw, _ := json.Marshal(body)
+	base := strings.TrimRight(s.cortexURL, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/user-requests", bytes.NewReader(raw))
+	if err != nil {
+		return nil, "cortex_request_invalid"
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "cortex_unavailable"
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return nil, "cortex_rejected"
+	}
+	var accepted struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(data, &accepted) != nil || accepted.RunID == "" {
+		return nil, "cortex_response_invalid"
+	}
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, "cortex_timeout"
+		case <-ticker.C:
+			statusReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/runs/"+accepted.RunID, nil)
+			statusReq.Header.Set("Authorization", "Bearer "+token)
+			statusResp, err := client.Do(statusReq)
+			if err != nil {
+				continue
+			}
+			statusRaw, _ := io.ReadAll(io.LimitReader(statusResp.Body, maxAgentQueryResponseBytes))
+			statusResp.Body.Close()
+			if statusResp.StatusCode != http.StatusOK {
+				continue
+			}
+			var status struct{ State, Text string }
+			if json.Unmarshal(statusRaw, &status) != nil {
+				continue
+			}
+			if status.State == "succeeded" {
+				result, _ := json.Marshal(map[string]any{"workflow": "answer", "cognition": "llm", "model": "gpt-5.6-sol", "answer": status.Text, "run_id": accepted.RunID})
+				return result, ""
+			}
+			if status.State == "failed" || status.State == "canceled" || status.State == "dead_lettered" {
+				return nil, "cortex_run_failed"
+			}
+		}
+	}
 }
 
 func (s *server) traceAgentQuery(job *store.AgentQueryJob, stage, errorCode string) bool {

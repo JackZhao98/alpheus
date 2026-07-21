@@ -95,5 +95,9 @@ run_sql agent-platform/migrations/0012_ap2_submit_user_request.sql 0012_ap2_subm
 run_sql agent-platform/migrations/0013_ap2_blob_adapter.sql 0013_ap2_blob_adapter
 run_sql agent-platform/migrations/0014_cortex_run_admission.sql 0014_cortex_run_admission
 run_sql agent-platform/migrations/0015_runtime_deferred_guard_identity.sql 0015_runtime_deferred_guard_identity
+run_sql agent-platform/migrations/0016_cortex_worker_bridge.sql 0016_cortex_worker_bridge
+run_sql agent-platform/migrations/0017_cortex_worker_blob_acl.sql 0017_cortex_worker_blob_acl
+run_sql agent-platform/migrations/0018_cortex_run_result.sql 0018_cortex_run_result
+run_sql agent-platform/migrations/0019_cortex_run_result_fix.sql 0019_cortex_run_result_fix
 
 echo "agent-platform migration bootstrap complete"

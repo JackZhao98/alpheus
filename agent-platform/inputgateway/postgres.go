@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -77,7 +78,8 @@ func (adapter *PostgresAdapter) CommitRawInput(ctx context.Context, request RawB
 // origin record whose identity the BlobRef carries.
 func (adapter *PostgresAdapter) CommitControlJSON(ctx context.Context, recordType, recordID, originDomain string, value any) (blob.BlobRef, error) {
 	if adapter == nil || adapter.db == nil || adapter.local == nil || recordID == "" ||
-		(recordType != "task_objective" && recordType != "output_contract_schema") || originDomain == "" {
+		(recordType != "task_objective" && recordType != "output_contract_schema" &&
+			recordType != "execution_binding" && recordType != "context_manifest") || originDomain == "" {
 		return blob.BlobRef{}, fmt.Errorf("invalid control JSON blob")
 	}
 	raw, err := json.Marshal(value)
@@ -92,6 +94,70 @@ func (adapter *PostgresAdapter) CommitControlJSON(ctx context.Context, recordTyp
 	}
 	stageID := deterministicControlStageID(adapter.principal, recordType, recordID)
 	return adapter.commitControlBlob(ctx, stageID, recordID, recordType, controlJSONMediaType, raw, contentDigest, originDigest)
+}
+
+// PrepareRootSession installs immutable execution/context inputs and grants the
+// configured Worker read access before the Task becomes discoverable.
+func (adapter *PostgresAdapter) PrepareRootSession(ctx context.Context, admission Admission, run RunAdmission) error {
+	worker := "cortex-worker-1"
+	executionValue := map[string]any{"schema_revision": 1, "task_id": run.RootTaskID,
+		"worker_principal_id": worker, "provider": "openai", "model": "gpt-5.6-sol"}
+	execution, err := adapter.CommitControlJSON(ctx, "execution_binding", run.RootTaskID,
+		"agent-platform.contract.execution_binding.v1", executionValue)
+	if err != nil {
+		return fmt.Errorf("commit execution binding: %w", err)
+	}
+	contextValue := map[string]any{"schema_revision": 1, "request_id": admission.Command.Request.RequestID,
+		"raw_input": admission.Blob}
+	contextRef, err := adapter.CommitControlJSON(ctx, "context_manifest", admission.Command.Request.RequestID,
+		"agent-platform.contract.context_manifest.v1", contextValue)
+	if err != nil {
+		return fmt.Errorf("commit context manifest: %w", err)
+	}
+	executionRaw, _ := json.Marshal(execution)
+	contextRaw, _ := json.Marshal(contextRef)
+	inputRaw, _ := json.Marshal(admission.Blob)
+	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var raw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.prepare_cortex_root_session_v2($1,$2::JSONB,$3::JSONB,$4::JSONB,$5)::TEXT`,
+			run.RootTaskID, string(executionRaw), string(contextRaw), string(inputRaw), worker).Scan(&raw); err != nil {
+			return err
+		}
+		var response struct {
+			Status    string `json:"status"`
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal(raw, &response) != nil || response.Status != "ready" || response.SessionID == "" {
+			return fmt.Errorf("Cortex root Session was not prepared")
+		}
+		return nil
+	})
+}
+
+// CommitModelOutput is the Control-owned bridge used after a durable model
+// dispatch. The manifest digest is supplied by Control's dispatch response.
+func (adapter *PostgresAdapter) CommitModelOutput(ctx context.Context, callID, manifestDigest string, raw []byte) (blob.BlobRef, error) {
+	if callID == "" || len(manifestDigest) != 64 || len(raw) < 1 || len(raw) > maxRawInputBytes {
+		return blob.BlobRef{}, fmt.Errorf("invalid model output")
+	}
+	hash := sha256.Sum256(raw)
+	contentDigest := hex.EncodeToString(hash[:])
+	stageID := deterministicControlStageID(adapter.principal, "model_call_manifest", callID)
+	result, err := adapter.commitControlBlob(ctx, stageID, callID, "model_call_manifest", controlJSONMediaType,
+		raw, contentDigest, manifestDigest)
+	if err != nil {
+		return blob.BlobRef{}, err
+	}
+	encoded, _ := json.Marshal(result)
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var responseRaw []byte
+		return tx.QueryRowContext(ctx, `SELECT agent_control.publish_cortex_model_output_v2($1,$2,$3::JSONB,$4)::TEXT`,
+			callID, manifestDigest, string(encoded), "cortex-worker-1").Scan(&responseRaw)
+	})
+	if err != nil {
+		return blob.BlobRef{}, fmt.Errorf("publish model output: %w", err)
+	}
+	return result, nil
 }
 
 func (adapter *PostgresAdapter) commitControlBlob(ctx context.Context, stageID, recordID, recordType, mediaType string, raw []byte, contentDigest, originDigest string) (blob.BlobRef, error) {
@@ -181,6 +247,68 @@ type RunAdmission struct {
 	RootTaskID string `json:"root_task_id"`
 	RunState   string `json:"run_state"`
 	TaskState  string `json:"task_state"`
+}
+
+type CortexRunResult struct {
+	RunID string `json:"run_id"`
+	State string `json:"state"`
+	Text  string `json:"text,omitempty"`
+}
+
+func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.get_cortex_run_result($1)::TEXT`, runID).Scan(&raw)
+	}); err != nil {
+		return CortexRunResult{}, err
+	}
+	var result struct {
+		RunID           string              `json:"run_id"`
+		State           string              `json:"state"`
+		Output          *blob.BlobRef       `json:"output"`
+		BindingID       string              `json:"binding_id"`
+		OwningReference contracts.RecordRef `json:"owning_reference"`
+	}
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &result) != nil {
+		return CortexRunResult{}, sql.ErrNoRows
+	}
+	answer := CortexRunResult{RunID: result.RunID, State: result.State}
+	if result.State != "succeeded" {
+		return answer, nil
+	}
+	if result.Output == nil {
+		return CortexRunResult{}, fmt.Errorf("Cortex result output missing")
+	}
+	read, err := adapter.local.OpenVerified(ctx, blob.ReadRequest{PrincipalID: adapter.principal, BindingID: result.BindingID, BlobID: result.Output.BlobID, OwningReference: result.OwningReference}, adapter)
+	if err != nil {
+		return CortexRunResult{}, err
+	}
+	defer read.Close()
+	data, err := io.ReadAll(io.LimitReader(read, result.Output.SizeBytes+1))
+	if err != nil {
+		return CortexRunResult{}, err
+	}
+	var value struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(data, &value) != nil || strings.TrimSpace(value.Text) == "" {
+		return CortexRunResult{}, fmt.Errorf("invalid Cortex result output")
+	}
+	answer.Text = value.Text
+	return answer, nil
+}
+
+func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request blob.ReadRequest) (blob.ReadAuthorization, error) {
+	result := blob.ReadAuthorization{PrincipalID: adapter.principal, BindingID: request.BindingID, OwningReference: request.OwningReference}
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT schema_revision,blob_id::TEXT,content_digest,media_type,size_bytes,origin_owner,origin_record_type,origin_record_id,origin_record_digest,committed_at,authorized_at,valid_until FROM blob.authorize_read($1,$2,$3,$4,$5,$6,$7)`, adapter.principal, request.BindingID, request.BlobID, request.OwningReference.Owner, request.OwningReference.RecordType, request.OwningReference.RecordID, request.OwningReference.RecordDigest).Scan(&result.Blob.SchemaRevision, &result.Blob.BlobID, &result.Blob.ContentDigest, &result.Blob.MediaType, &result.Blob.SizeBytes, &result.Blob.Origin.Owner, &result.Blob.Origin.RecordType, &result.Blob.Origin.RecordID, &result.Blob.Origin.RecordDigest, &result.Blob.CommittedAt, &result.AuthorizedAt, &result.ValidUntil)
+	})
+	result.Blob.Origin.SchemaRevision = 1
+	result.Blob.CommittedAt = result.Blob.CommittedAt.UTC()
+	result.AuthorizedAt = result.AuthorizedAt.UTC()
+	result.ValidUntil = result.ValidUntil.UTC()
+	return result, err
 }
 
 func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, schema blob.BlobRef) error {

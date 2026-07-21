@@ -50,6 +50,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))
 	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(s.postAgentQuery))
 	mux.HandleFunc("GET /agent/query-jobs/{id}", s.authorizeAgentWeb(s.getAgentQueryJob))
+	mux.HandleFunc("POST /agent/cortex-requests", s.authorizeAgentWeb(s.postCortexRequest))
+	mux.HandleFunc("GET /agent/cortex-runs/{id}", s.authorizeAgentWeb(s.getCortexRun))
 
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)

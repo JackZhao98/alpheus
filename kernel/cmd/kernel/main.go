@@ -51,6 +51,8 @@ type server struct {
 	providerReplayWindowBoundVerified bool
 	runtimeURL                        string
 	runtimeHTTP                       *http.Client
+	cortexURL                         string
+	cortexTokenFile                   string
 	researchURL                       string
 	researchHTTP                      *http.Client
 	gexHTTP                           *http.Client
@@ -335,10 +337,12 @@ func main() {
 		providerReplayWindowBoundVerified: brokerName == "fake" ||
 			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive &&
 				config.Env("ROBINHOOD_EQUITY_AUTO_REPLAY", "false") == "true"),
-		runtimeURL:    config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
-		researchURL:   config.Env("RESEARCH_URL", "http://research-gateway:8300"),
-		consoleOrigin: consoleOrigin,
-		marketTZ:      marketTZ,
+		runtimeURL:      config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
+		cortexURL:       config.Env("CORTEX_URL", ""),
+		cortexTokenFile: config.Env("CORTEX_INPUT_TOKEN_FILE", ""),
+		researchURL:     config.Env("RESEARCH_URL", "http://research-gateway:8300"),
+		consoleOrigin:   consoleOrigin,
+		marketTZ:        marketTZ,
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)

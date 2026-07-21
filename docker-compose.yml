@@ -32,6 +32,8 @@ services:
       # Local-only Agent Lab: no browser password, but only private/local clients.
       AGENT_WEB_AUTH_MODE: ${AGENT_WEB_AUTH_MODE:-local}
       RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
+      CORTEX_URL: http://cortex-input:8400
+      CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
       RESEARCH_URL: ${RESEARCH_URL:-http://research-gateway:8300}
       CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
@@ -43,6 +45,7 @@ services:
     volumes:
       - ./docs:/docs:ro
       - ./db/migrations:/migrations:ro
+      - ./.secrets/cortex:/run/secrets/cortex:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --header=\"Authorization: Bearer $${RUNTIME_TOKEN}\" http://127.0.0.1:8100/limits >/dev/null"]
       interval: 3s
@@ -107,6 +110,21 @@ services:
       agent-platform-migrate: { condition: service_completed_successfully }
     restart: "no"
 
+  cortex-worker-login:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      CORTEX_WORKER_DATABASE_PASSWORD_FILE: /run/secrets/cortex/worker-database-password
+      CORTEX_WORKER_DATABASE_URL_FILE: /run/secrets/cortex/worker-database-url
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-worker-login.sh"]
+    depends_on:
+      agent-platform-migrate: { condition: service_completed_successfully }
+    restart: "no"
+
   cortex-owner-policy-activate:
     image: postgres:16-alpine
     environment:
@@ -128,6 +146,7 @@ services:
       CORTEX_SUBJECT_PRINCIPAL_ID: ${CORTEX_SUBJECT_PRINCIPAL_ID:-owner-1}
       CORTEX_DATABASE_URL_FILE: /run/secrets/cortex/database-url
       CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
+      CORTEX_WORKER_CONTROL_TOKEN_FILE: /run/secrets/cortex/worker-control-token
       CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
       CORTEX_INPUT_ADDR: :8400
     ports: ["127.0.0.1:8400:8400"]
@@ -142,6 +161,40 @@ services:
     depends_on:
       cortex-control-login: { condition: service_completed_successfully }
       cortex-owner-policy-activate: { condition: service_completed_successfully }
+
+  cortex-openai-secret-export:
+    build: ./kernel
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      AGENT_WEB_SESSION_KEY: ${AGENT_WEB_SESSION_KEY:-}
+      CORTEX_OPENAI_API_KEY_FILE: /run/secrets/cortex/openai-api-key
+    volumes:
+      - ./.secrets/cortex:/run/secrets/cortex
+    entrypoint: ["/export-agent-secret"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  cortex-worker:
+    build:
+      context: .
+      dockerfile: agent-platform/Dockerfile.cortex-worker
+    environment:
+      CORTEX_WORKER_PRINCIPAL_ID: cortex-worker-1
+      CORTEX_WORKER_DATABASE_URL_FILE: /run/secrets/cortex/worker-database-url
+      CORTEX_WORKER_CONTROL_TOKEN_FILE: /run/secrets/cortex/worker-control-token
+      OPENAI_API_KEY_FILE: /run/secrets/cortex/openai-api-key
+      CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
+      CORTEX_CONTROL_URL: http://cortex-input:8400
+      CORTEX_MODEL: gpt-5.6-sol
+    volumes:
+      - cortex_blobdata:/var/lib/alpheus/cortex-blobs:ro
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    depends_on:
+      cortex-worker-login: { condition: service_completed_successfully }
+      cortex-openai-secret-export: { condition: service_completed_successfully }
+      cortex-input: { condition: service_healthy }
+    restart: unless-stopped
 
   agent-runtime:
     build: ./agent-runtime

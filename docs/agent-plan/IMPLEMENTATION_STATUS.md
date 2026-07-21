@@ -124,17 +124,15 @@ This ledger counts only accepted completion, not code written or unit-tested.
 | 6 | Real local Blob persistence and PostgreSQL adapters | Complete at `126057f`; database and owner-only file probes passed |
 | 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete at `126057f`; healthy on `127.0.0.1:8400` |
 | 8 | Canonical Run / root Task admission; Attempt on Worker claim | Complete locally; deployed, exact-replay smoke passed, Run `queued` / Task `ready` persisted |
-| 9 | Verified OpenAI Worker with durable Turn / Artifact | Not started |
-| 10 | Agent Lab cutover and Kernel queue retirement | Not started |
+| 9 | Verified OpenAI Worker with durable Turn / Artifact | Complete; deployed smoke persisted succeeded Run/Task, result-committed Attempt/Turn, and `assistant_response` Artifact |
+| 10 | Agent Lab cutover and Kernel queue retirement | Complete; page uses direct Cortex request/Run polling; legacy Kernel queue endpoints are deprecated and unused by the UI |
 
-Accepted cutover completion is now **8 / 10**. Cortex persists authenticated
-input and atomically admits one canonical effect-none Run, root Task, exact
-policy/output-contract bindings, two-level budget ledgers, input reference, and
-initial events. Exact HTTP replay returns the same Run/Task and creates no
-duplicate state. Attempt remains intentionally absent until a Worker claims the
-ready Task; creating one in Control would violate the frozen lease chronology.
-Cortex still calls no model, and the old Kernel-owned Agent Lab query path
-remains the only deployed model path.
+Accepted cutover completion is now **10 / 10**. The deployed path is Agent Lab
+→ Cortex UserRequest → canonical Run/Task → Worker claim/Attempt → durable
+model dispatch → OpenAI `gpt-5.6-sol` → Control-owned output Blob → resolved
+Turn → effect-none Artifact. A real Agent Lab smoke returned “Direct Cortex UI
+path succeeded.” from the canonical Run. The old Kernel queue remains only as
+a deprecated compatibility API and is not called by the page.
 
 ## Current read-only Research Gateway slice
 

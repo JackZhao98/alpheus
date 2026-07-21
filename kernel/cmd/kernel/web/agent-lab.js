@@ -158,7 +158,7 @@ async function waitForAgentQuery(job) {
     byId("status").textContent = job.status === "queued" ? "QUERY QUEUED" : "AGENTS WORKING";
     renderTrace(job);
     await wait(750);
-    job = await request(`/agent/query-jobs/${encodeURIComponent(job.id)}`);
+    job = await request(`/agent/cortex-runs/${encodeURIComponent(job.id)}`);
   }
   renderTrace(job);
   return job;
@@ -179,7 +179,7 @@ byId("query-form").addEventListener("submit", async (event) => {
   byId("result").textContent = "Awaiting dispatcher…";
   renderTrace(null);
   try {
-    let job = await request("/agent/query", {
+    let job = await request("/agent/cortex-requests", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({workflow, symbol, query})
     });
