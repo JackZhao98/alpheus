@@ -125,14 +125,19 @@ optional Tool discovery remains possible inside the approved Task scope.
 ## Dynamic child work
 
 An Agent cannot create a permanent Agent or directly spawn an unrestricted
-conversation. It may submit a typed child-Task request describing the required
-capability, input references, output Contract, and reason. The Control Plane
-validates it and the Scheduler selects an eligible AgentRevision.
+conversation. It may submit a typed, immutable child-Task **request**
+describing the required capability, input references, output Contract, and
+stable reason code. This request never creates a runnable Task or Session. The
+Control Plane separately validates the request, remaining budget and policy;
+only then may the Scheduler select an eligible AgentRevision and create the
+admitted child Task/Session.
 
 Every child inherits the parent's remaining depth, fan-out, token, tool, cost,
 time, and permission bounds. It cannot widen them through a Skill, message, or
 new role name. Stable semantic dedupe and causal ancestry prevent repeated and
-circular delegation.
+circular delegation. Every rejection exposes one stable `reason_code` in its
+durable command response; service logs may add diagnostic context but must not
+replace that machine-readable cause.
 
 ## Disagreement and challenge
 

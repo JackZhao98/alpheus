@@ -694,7 +694,8 @@ func validFixture() fixture {
 		child: RequestChildTaskCommand{
 			SchemaRevision: 1, Envelope: envelope("request_child_task", '4'), ParentTaskID: "task-1",
 			AttemptID: "attempt-1", ExpectedAttemptStateGeneration: 2, LeaseGeneration: 1,
-			LeaseToken: "lease-1", Objective: objective, InputRefs: []contracts.RecordRef{artifactRef},
+			LeaseToken: "lease-1", RequiredCapability: "market_research", ReasonCode: "delegate_research",
+			Objective: objective, InputRefs: []contracts.RecordRef{artifactRef},
 			OutputContract: outputContract, RequestedLimit: limit,
 		},
 	}

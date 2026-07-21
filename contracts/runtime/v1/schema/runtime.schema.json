@@ -790,7 +790,7 @@
     },
     "RequestChildTaskCommand": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_revision", "envelope", "parent_task_id", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "objective", "input_refs", "output_contract", "requested_limit"],
+      "required": ["schema_revision", "envelope", "parent_task_id", "attempt_id", "expected_attempt_state_generation", "lease_generation", "lease_token", "required_capability", "reason_code", "objective", "input_refs", "output_contract", "requested_limit"],
       "properties": {
         "schema_revision": {"const": 1},
         "envelope": {"$ref": "#/$defs/CommandEnvelope"},
@@ -799,6 +799,8 @@
         "expected_attempt_state_generation": {"type": "integer", "minimum": 1},
         "lease_generation": {"type": "integer", "minimum": 1},
         "lease_token": {"$ref": "#/$defs/Identifier"},
+        "required_capability": {"$ref": "#/$defs/Name"},
+        "reason_code": {"$ref": "#/$defs/Name"},
         "objective": {"$ref": "#/$defs/BlobRef"},
         "input_refs": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/RecordRef"}},
         "output_contract": {"$ref": "#/$defs/OutputContractRevisionRef"},

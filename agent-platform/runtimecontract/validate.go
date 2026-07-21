@@ -702,7 +702,8 @@ func (value RequestChildTaskCommand) Validate() error {
 	if !validWorkerEnvelope(value.SchemaRevision, value.Envelope, "request_child_task") ||
 		!validID(value.ParentTaskID) || !validID(value.AttemptID) ||
 		value.ExpectedAttemptStateGeneration <= 0 || value.LeaseGeneration <= 0 ||
-		!validID(value.LeaseToken) || !validRuntimeBlob(value.Objective, "task_objective") ||
+		!validID(value.LeaseToken) || !namePattern.MatchString(value.RequiredCapability) ||
+		!namePattern.MatchString(value.ReasonCode) || !validRuntimeBlob(value.Objective, "task_objective") ||
 		len(value.InputRefs) > AbsoluteMaxReferencesV1 || !validRecordRefs(value.InputRefs) ||
 		!validRevision(value.OutputContract, contracts.OwnerAgentControl, "output_contract_revision") ||
 		!validRunnableLimit(value.RequestedLimit) {

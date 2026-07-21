@@ -747,8 +747,13 @@ type RequestChildTaskCommand struct {
 	ExpectedAttemptStateGeneration int64                     `json:"expected_attempt_state_generation"`
 	LeaseGeneration                int64                     `json:"lease_generation"`
 	LeaseToken                     string                    `json:"lease_token"`
-	Objective                      blob.BlobRef              `json:"objective"`
-	InputRefs                      []contracts.RecordRef     `json:"input_refs"`
-	OutputContract                 contracts.RevisionRef     `json:"output_contract"`
-	RequestedLimit                 BudgetLimit               `json:"requested_limit"`
+	// RequiredCapability is a symbolic, non-authorizing capability name. AP1
+	// records it for the later Control/Scheduler admission path; it is not a
+	// Worker-selected Agent, Tool grant, or permission.
+	RequiredCapability string                `json:"required_capability"`
+	ReasonCode         string                `json:"reason_code"`
+	Objective          blob.BlobRef          `json:"objective"`
+	InputRefs          []contracts.RecordRef `json:"input_refs"`
+	OutputContract     contracts.RevisionRef `json:"output_contract"`
+	RequestedLimit     BudgetLimit           `json:"requested_limit"`
 }
