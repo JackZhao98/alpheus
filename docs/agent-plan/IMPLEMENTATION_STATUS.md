@@ -52,6 +52,12 @@
   remains compatibility-only and must be retired rather than extended into a
   Cortex workflow owner. See
   [`CORTEX_RESEARCH_BOUNDARY.md`](CORTEX_RESEARCH_BOUNDARY.md).
+- AP2-1 has begun with strict in-memory contracts for immutable Cortex
+  `Conversation` and raw `UserRequest` facts.  They bind user/control-api
+  identity, exact BlobRef-backed input/attachments, referenced-record
+  deduplication and creation time before any model interpretation.  No
+  `agent_input` persistence, IntentDraft, PolicyResolution, Run admission,
+  question, confirmation, or UI command is enabled by this contract slice.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money

@@ -4,6 +4,13 @@
 > confirmation boundaries are authoritative. Exact schemas, UI transport, and
 > implementation acceptance are not yet specified or authorized.**
 
+> Implementation note: the AP2-1 minimum immutable intake facts
+> `Conversation` and `UserRequest` are now contract-frozen in
+> `agent-platform/inputcontract`. They preserve raw input and attachment
+> `BlobRef` identity before any interpretation. IntentDraft, PolicyResolution,
+> persistence commands, UI transport, interruption and confirmation state
+> machines remain unspecified and unimplemented.
+
 ## Purpose
 
 Users communicate naturally, while the Agent Platform operates on durable,
