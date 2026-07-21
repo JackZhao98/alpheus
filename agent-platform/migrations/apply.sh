@@ -17,6 +17,11 @@ psql_run() {
     psql --no-psqlrc --set ON_ERROR_STOP=1 --dbname="$DATABASE_URL" "$@"
 }
 
+scalar() {
+    value=$(psql_run --tuples-only --no-align --command "$1")
+    printf '%s' "$value" | tr -d '[:space:]'
+}
+
 run_sql() {
     path=$1
     key=$2
@@ -26,7 +31,7 @@ run_sql() {
         exit 1
     fi
     digest=$(sha256sum "$file" | awk '{print $1}')
-    existing=$(psql_run --tuples-only --no-align --command "SELECT digest FROM agent_control.schema_migration WHERE migration_key = '$key'" | tr -d '[:space:]')
+    existing=$(scalar "SELECT digest FROM agent_control.schema_migration WHERE migration_key = '$key'")
     if [ -n "$existing" ]; then
         if [ "$existing" != "$digest" ]; then
             echo "agent-platform migration digest mismatch: $key" >&2
@@ -45,8 +50,8 @@ run_sql() {
 # intentionally rejected rather than guessed at or repaired in place.
 security_path=contracts/security/v1/permissions/roles.sql
 security_digest=$(sha256sum "$root/$security_path" | awk '{print $1}')
-schema_exists=$(psql_run --tuples-only --no-align --command "SELECT to_regnamespace('agent_control') IS NOT NULL" | tr -d '[:space:]')
-ledger_exists=$(psql_run --tuples-only --no-align --command "SELECT to_regclass('agent_control.schema_migration') IS NOT NULL" | tr -d '[:space:]')
+schema_exists=$(scalar "SELECT to_regnamespace('agent_control') IS NOT NULL")
+ledger_exists=$(scalar "SELECT to_regclass('agent_control.schema_migration') IS NOT NULL")
 if [ "$schema_exists" = "f" ] && [ "$ledger_exists" = "f" ]; then
     psql_run --single-transaction --file "$root/$security_path"
     psql_run --single-transaction --command "
@@ -62,7 +67,7 @@ if [ "$schema_exists" = "f" ] && [ "$ledger_exists" = "f" ]; then
         VALUES ('0000_security_roles', '$security_digest');
     "
 elif [ "$schema_exists" = "t" ] && [ "$ledger_exists" = "t" ]; then
-    existing_security=$(psql_run --tuples-only --no-align --command "SELECT digest FROM agent_control.schema_migration WHERE migration_key = '0000_security_roles'" | tr -d '[:space:]')
+    existing_security=$(scalar "SELECT digest FROM agent_control.schema_migration WHERE migration_key = '0000_security_roles'")
     if [ "$existing_security" != "$security_digest" ]; then
         echo "agent-platform migration digest mismatch: 0000_security_roles" >&2
         exit 1
@@ -85,5 +90,6 @@ run_sql agent-platform/migrations/0007_ap1_model_calls.sql 0007_ap1_model_calls
 run_sql agent-platform/migrations/0008_ap1_attempt_terminalization.sql 0008_ap1_attempt_terminalization
 run_sql agent-platform/migrations/0009_ap1_child_task_requests.sql 0009_ap1_child_task_requests
 run_sql agent-platform/migrations/0010_ap1_cancellation_submission.sql 0010_ap1_cancellation_submission
+run_sql agent-platform/migrations/0011_ap2_input_facts.sql 0011_ap2_input_facts
 
 echo "agent-platform migration bootstrap complete"

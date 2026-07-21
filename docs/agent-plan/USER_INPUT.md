@@ -7,9 +7,11 @@
 > Implementation note: the AP2-1 minimum immutable intake facts
 > `Conversation` and `UserRequest` are now contract-frozen in
 > `agent-platform/inputcontract`. They preserve raw input and attachment
-> `BlobRef` identity before any interpretation. IntentDraft, PolicyResolution,
-> persistence commands, UI transport, interruption and confirmation state
-> machines remain unspecified and unimplemented.
+> `BlobRef` identity before any interpretation. The corresponding immutable,
+> default-deny `agent_input` storage is deployed by the AP schema bootstrapper;
+> no application profile has direct table writes. IntentDraft, PolicyResolution,
+> the sole Input Gateway submission command, UI transport, interruption and
+> confirmation state machines remain unspecified and unimplemented.
 
 ## Purpose
 

@@ -20,10 +20,16 @@ docker run --detach --rm --name "$CONTAINER" \
 	>"$ARTIFACT_DIR/container-id.txt"
 
 ready=false
+ready_count=0
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 	if docker exec "$CONTAINER" pg_isready --username postgres --dbname probe >/dev/null 2>&1; then
-		ready=true
-		break
+		ready_count=$((ready_count + 1))
+		if [ "$ready_count" -ge 3 ]; then
+			ready=true
+			break
+		fi
+	else
+		ready_count=0
 	fi
 	sleep 0.25
 done
@@ -43,6 +49,13 @@ run_bootstrap() {
 run_bootstrap >"$ARTIFACT_DIR/first.txt"
 run_bootstrap >"$ARTIFACT_DIR/second.txt"
 
+docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
+	--username postgres --dbname probe <"$ROOT/audit/repro/ap0_login_roles.sql" \
+	>"$ARTIFACT_DIR/login-fixtures.txt"
+docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
+	--username postgres --dbname probe <"$ROOT/audit/repro/ap2_input_facts.sql" \
+	>"$ARTIFACT_DIR/input-facts.txt"
+
 if ! grep -q 'agent-platform migration already applied: 0010_ap1_cancellation_submission' \
 	"$ARTIFACT_DIR/second.txt"; then
 	echo "FAIL reason=second_execution_replayed_or_incomplete artifacts=$ARTIFACT_DIR" >&2
@@ -52,11 +65,11 @@ fi
 count=$(docker exec "$CONTAINER" psql --no-psqlrc --username postgres --dbname probe \
 	--tuples-only --no-align --command 'SELECT count(*) FROM agent_control.schema_migration' \
 	| tr -d '[:space:]')
-if [ "$count" != 14 ]; then
+if [ "$count" != 15 ]; then
 	echo "FAIL reason=migration_ledger_count count=$count artifacts=$ARTIFACT_DIR" >&2
 	exit 1
 fi
 
-printf '{"status":"PASS","probe":"agent-platform-bootstrap","migrations":14,"second_execution":"digest-verified-no-ddl-replay"}\n' \
+printf '{"status":"PASS","probe":"agent-platform-bootstrap","migrations":15,"second_execution":"digest-verified-no-ddl-replay"}\n' \
 	>"$ARTIFACT_DIR/summary.json"
 cat "$ARTIFACT_DIR/summary.json"
