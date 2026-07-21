@@ -40,10 +40,10 @@ func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
 	input.Workflow = strings.TrimSpace(input.Workflow)
 	input.Query = strings.TrimSpace(input.Query)
-	if input.Workflow == "" {
-		input.Workflow = "scout"
-	}
-	if (input.Workflow != "auto" && input.Workflow != "scout" && input.Workflow != "team") || !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
+	// Workflow is retained only for compatibility with existing callers. Cortex
+	// owns routing; no client-selected route enters the immutable UserRequest.
+	input.Workflow = "auto"
+	if !validAgentQuerySymbol(input.Symbol) || input.Query == "" || len(input.Query) > 4000 {
 		writeAgentQueryError(w, http.StatusBadRequest, "cortex_input_invalid", "symbol and query are required")
 		return
 	}
@@ -56,12 +56,12 @@ func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getCortexRun(w http.ResponseWriter, r *http.Request) {
-	state, text, code := s.fetchCortexRun(r.Context(), r.PathValue("id"))
+	state, text, trace, code := s.fetchCortexRun(r.Context(), r.PathValue("id"))
 	if code != "" {
 		writeAgentQueryError(w, http.StatusServiceUnavailable, code, "Cortex result is unavailable")
 		return
 	}
-	response := map[string]any{"id": r.PathValue("id"), "status": "running", "trace": []any{}}
+	response := map[string]any{"id": r.PathValue("id"), "status": "running", "trace": trace}
 	if state == "succeeded" {
 		response["status"] = "succeeded"
 		response["result"] = map[string]any{"workflow": "answer", "cognition": "llm", "model": "gpt-5.6-sol", "answer": text, "run_id": r.PathValue("id")}
@@ -91,7 +91,7 @@ func (s *server) submitCortexRequest(ctx context.Context, input agentQueryReques
 	}
 	id := store.NewID()
 	now := time.Now().UTC()
-	body := map[string]any{"conversation_id": "agent-lab-" + id, "conversation_created_at": now, "request_id": id, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\nWorkflow: %s\n\n%s", input.Symbol, input.Workflow, input.Query), "idempotency_key": "agent-lab-" + id, "causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
+	body := map[string]any{"conversation_id": "agent-lab-" + id, "conversation_created_at": now, "request_id": id, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query), "idempotency_key": "agent-lab-" + id, "causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cortexURL, "/")+"/v1/user-requests", bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -117,10 +117,10 @@ func (s *server) submitCortexRequest(ctx context.Context, input agentQueryReques
 	}
 	return accepted.RunID, ""
 }
-func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, string, string) {
+func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, string, []any, string) {
 	token, err := s.cortexToken()
 	if err != nil {
-		return "", "", "cortex_credential_unavailable"
+		return "", "", nil, "cortex_credential_unavailable"
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.cortexURL, "/")+"/v1/runs/"+runID, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -130,18 +130,22 @@ func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", "cortex_unavailable"
+		return "", "", nil, "cortex_unavailable"
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "cortex_result_unavailable"
+		return "", "", nil, "cortex_result_unavailable"
 	}
-	var result struct{ State, Text string }
+	var result struct {
+		State string `json:"state"`
+		Text  string `json:"text"`
+		Trace []any  `json:"trace"`
+	}
 	if json.Unmarshal(data, &result) != nil || result.State == "" {
-		return "", "", "cortex_response_invalid"
+		return "", "", nil, "cortex_response_invalid"
 	}
-	return result.State, result.Text, ""
+	return result.State, result.Text, result.Trace, ""
 }
 
 // postAgentQuery creates a durable, non-trading MVP job. The encrypted model

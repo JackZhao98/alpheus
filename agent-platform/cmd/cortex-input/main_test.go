@@ -29,17 +29,22 @@ func TestBearerSubjectRequiresOneExactCredential(t *testing.T) {
 func TestValidateModelOutputBindsExactSchemaAndInstance(t *testing.T) {
 	schema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["text"],"properties":{"text":{"type":"string"}}}`)
 	hash := sha256.Sum256(schema)
-	evidence, err := validateModelOutput(schema, hex.EncodeToString(hash[:]), []byte(`{"text":"ok"}`))
+	contractDigest := strings.Repeat("a", 64)
+	schemas := map[string][]byte{contractDigest: schema}
+	evidence, err := validateModelOutput(schemas, contractDigest, []byte(`{"text":"ok"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if evidence.InstanceSHA256 == "" || evidence.SchemaSHA256 == "" {
 		t.Fatalf("incomplete evidence: %+v", evidence)
 	}
-	if _, err := validateModelOutput(schema, strings.Repeat("0", 64), []byte(`{"text":"ok"}`)); err == nil {
+	if evidence.SchemaSHA256 != hex.EncodeToString(hash[:]) {
+		t.Fatalf("schema evidence=%s", evidence.SchemaSHA256)
+	}
+	if _, err := validateModelOutput(schemas, strings.Repeat("0", 64), []byte(`{"text":"ok"}`)); err == nil {
 		t.Fatal("schema digest mismatch was accepted")
 	}
-	if _, err := validateModelOutput(schema, hex.EncodeToString(hash[:]), []byte(`{"other":"no"}`)); err == nil {
+	if _, err := validateModelOutput(schemas, contractDigest, []byte(`{"other":"no"}`)); err == nil {
 		t.Fatal("contract-invalid output was accepted")
 	}
 }

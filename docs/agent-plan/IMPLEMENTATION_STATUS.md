@@ -14,7 +14,7 @@
   OwnerPolicy/OutputContract canonical sources at `fef99de`, and reclaimed
   Attempt lease chronology correction at `d23215c`; failed-Attempt retry budget
   classification was made explicit at `ce0da6e`. AP1 is not accepted and no
-  Runtime behavior or effect is enabled.
+  effect is enabled.
 - AP1-2's immutable definitions landed at `bce88cc`, its default-deny durable
   Runtime state landed at `7671762`, and its first transactional lease slice
   landed at `95a1af2`. Durable model-call dispatch, unknown containment,
@@ -24,16 +24,17 @@
   settlement, and final-fence race containment landed at `9ea1c04`. Its
   database surface now lets a correctly provisioned
   Worker claim, start, and heartbeat durable non-money Tasks and transact exact
-  model-call and terminalization facts. No deployed Worker uses this canonical
-  AP1 path yet; child-task requests and cancellation submission are durable,
+  model-call and terminalization facts. The deployed bounded Cortex Worker now
+  uses this canonical AP1 path for effect-none Agent Lab requests; child-task
+  requests and cancellation submission are durable,
   while cancellation reconciliation and recovery commands remain absent. An
   idempotent, digest-pinned bootstrapper now deploys the already-frozen
-  AP0/AP1 schema and grants in their tested order; it is a database substrate
-  only, not a deployed Cortex Control or Worker.
+  AP0/AP1 schema and grants in their tested order; it is the database substrate
+  used by the separately deployed Cortex Control and Worker.
   A bounded, local-only OutputContract
   validator and its future receipt command contracts landed at `f70388d`.
-  They are not yet wired into a deployed Control/Worker loop; database receipt
-  persistence is intentionally deferred until after the MVP loop. A fenced,
+  They are now wired into the deployed Control/Worker loop and immutable
+  schema/output evidence is persisted before Worker read access. A fenced,
   immutable Worker child-task-request slice now records the requested symbolic
   capability, reason code, objective, inputs, output Contract and subordinate
   limit without creating a runnable Task or Session. Control/Scheduler
@@ -103,7 +104,7 @@ milestones and not independent authorization gates.
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
 | AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission and immutable Cortex output-validation evidence deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits an exact-current-policy Run/root Task, and validates each model output against the exact committed schema before binding its Blob to Worker. The fixed validator identity plus exact schema/output digests are immutable database evidence. Formal Result-linked validation receipts, cancellation reconciliation, child admission, and complete unknown-outcome recovery remain deferred. |
-| AP1-3 Control Plane and bounded Worker execution | Canonical MVP deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches a Responses API call to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual input/output token usage, validates and publishes the structured output through Control, then resolves and commits the Attempt and Artifact. Invalid provider output and exhausted Control publication retries now close the Turn/Attempt through explicit failure commands instead of leaving dispatched work behind. The legacy Kernel query queue remains compatibility-only and is not used by Agent Lab. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
+| AP1-3 Control Plane and bounded Worker execution | Canonical MVP deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches a Responses API call to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual input/output token usage, validates and publishes the structured output through Control, then resolves and commits the Attempt and Artifact. The first bounded AI-selected route is also deployed: Intent Interpreter may answer directly or record an immutable `handoff_to_desk`, then a separate persisted Desk Turn returns the answer. This is an in-Attempt handoff, not child-Task admission. Invalid provider output and exhausted Control publication retries now close the Turn/Attempt through explicit failure commands instead of leaving dispatched work behind. The legacy Kernel query queue remains compatibility-only and is not used by Agent Lab. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
 | AP1-4 crash/concurrency acceptance and stage seal | Started; deployed success-path budget/output-evidence probe passed | Race, crash-window, duplicate-delivery, stale-lease, cancellation, unknown-outcome recovery, and non-money acceptance evidence still need the complete seal. The deployed success path proves bounded reservation (2,918 reserved versus 52 actual input tokens in the recorded probe), actual output-token settlement, canonical terminal states, and immutable local-validator evidence. |
 
 AP1-1 freezes data shape and fail-closed validation only. It does not create
@@ -124,8 +125,8 @@ This ledger counts only accepted completion, not code written or unit-tested.
 | 6 | Real local Blob persistence and PostgreSQL adapters | Complete at `126057f`; database and owner-only file probes passed |
 | 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete at `126057f`; healthy on `127.0.0.1:8400` |
 | 8 | Canonical Run / root Task admission; Attempt on Worker claim | Complete locally; deployed, exact-replay smoke passed, Run `queued` / Task `ready` persisted |
-| 9 | Verified OpenAI Worker with durable Turn / Artifact | Complete; deployed smoke persisted succeeded Run/Task, result-committed Attempt/Turn, and `assistant_response` Artifact |
-| 10 | Agent Lab cutover and Kernel queue retirement | Complete; page uses direct Cortex request/Run polling; legacy Kernel queue endpoints are deprecated and unused by the UI |
+| 9 | Verified OpenAI Worker with durable Turn / Artifact | Complete; deployed smoke persisted succeeded Run/Task, result-committed Attempt/Turn, `assistant_response` Artifact, and exact output-validation evidence |
+| 10 | Agent Lab cutover and Kernel queue retirement | Complete; page uses direct Cortex request/Run polling; manual workflow selection is removed and the legacy Kernel queue endpoints are deprecated and unused by the UI |
 
 Accepted cutover completion is now **10 / 10**. The deployed path is Agent Lab
 → Cortex UserRequest → canonical Run/Task → Worker claim/Attempt → durable
@@ -145,6 +146,26 @@ persists immutable validator/schema/instance evidence before Worker read access
 is granted. Run `265b8742-d11e-4cef-94d5-57de94ecdcf3` completed with all
 canonical states terminal, 2,918 reserved input tokens, 52 actual input tokens,
 68 actual output tokens, and validator `v6.0.2` evidence.
+
+The next post-cutover slice adds a bounded real collaboration edge without
+pretending that every role or Tool is installed. The Intent Interpreter's
+typed model output chooses either a direct answer or the only currently
+installed specialist, Decision Desk. A handoff writes immutable
+`agent_control.cortex_handoff` evidence tied to the source ModelCall result,
+then the Desk executes as its own canonical Turn before the root Attempt can
+commit. `get_cortex_run_trace` derives the UI trace from these records rather
+than returning a fabricated array. On 2026-07-21, Run
+`4f478f50-e97d-4371-8766-bdb1fd38fea8` completed
+`intent_interpreter_completed → handoff_to_desk → decision_desk_completed`,
+with both Turns `result_committed` and the Run `succeeded`.
+
+This is deliberately narrower than the frozen target architecture: it is an
+in-Attempt Desk handoff, not a child Task/Session; Scout is not installed;
+there is no Cortex Tool capability, Research-Gateway invocation, browser use,
+or fabricated Tool receipt. The next module is the typed cross-plane Tool
+authorization/evidence/receipt path, followed by Scout/Research child-work
+admission. The UI no longer asks the user to choose a route; its compatibility
+field is forced to `auto` and never enters the immutable UserRequest.
 
 ## Current read-only Research Gateway slice
 

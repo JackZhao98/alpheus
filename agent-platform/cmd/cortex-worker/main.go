@@ -128,30 +128,65 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	if started.Status != "committed" {
 		return fmt.Errorf("start denied")
 	}
-	callID := uuid()
-	turnID := uuid()
-	idem := uuid()
-	requestBody := openAIRequest(w.model, string(prompt))
+	intent, err := w.executeModelTurn(ctx, item, claim, started.AttemptGeneration, intentRequest(w.model, string(prompt)))
+	if err != nil {
+		return err
+	}
+	if intent.Workflow.Kind == "handoff" {
+		if err := w.recordHandoff(ctx, intent.CallID, intent.Workflow); err != nil {
+			failure := contracts.Failure{Code: "handoff_record_failed", Message: bounded(err.Error()), Retryable: true}
+			_ = w.failAfterResolved(ctx, item, claim, started.AttemptGeneration, runtimecontract.RetryInfrastructure, failure)
+			return err
+		}
+		desk, err := w.executeModelTurn(ctx, item, claim, started.AttemptGeneration,
+			deskRequest(w.model, string(prompt), intent.Workflow.Objective, intent.Workflow.Rationale))
+		if err != nil {
+			return err
+		}
+		if desk.Workflow.Kind != "answer" {
+			failure := contracts.Failure{Code: "desk_output_invalid", Message: "Decision Desk did not return an answer", Retryable: true}
+			_ = w.failAfterResolved(ctx, item, claim, started.AttemptGeneration, runtimecontract.RetryInvalidOutput, failure)
+			return fmt.Errorf("Decision Desk did not return an answer")
+		}
+		return w.commitAttempt(ctx, item, claim, started.AttemptGeneration, desk)
+	}
+	return w.commitAttempt(ctx, item, claim, started.AttemptGeneration, intent)
+}
+
+type workflowOutput struct {
+	Kind      string `json:"kind"`
+	Target    string `json:"target,omitempty"`
+	Objective string `json:"objective,omitempty"`
+	Rationale string `json:"rationale,omitempty"`
+	Text      string `json:"text,omitempty"`
+}
+
+type modelTurn struct {
+	CallID    string
+	ResultRef contracts.RecordRef
+	OutputRef blob.BlobRef
+	Workflow  workflowOutput
+}
+
+func (w *worker) executeModelTurn(ctx context.Context, item workItem, claim claimResult, attemptGeneration int64, requestBody map[string]any) (modelTurn, error) {
+	callID, turnID, idem := uuid(), uuid(), uuid()
 	requestRaw, _ := json.Marshal(requestBody)
-	requestDigest := digest(requestRaw)
-	promptDigest := digest(prompt)
-	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: started.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: 2000, ReservedInputTokens: reservedInputTokens(requestRaw), ReservedExternalCostMicroUSD: 0, TimeoutMS: 75000, TemperatureMicros: 0}}
+	requestDigest, promptDigest := digest(requestRaw), digest([]byte(fmt.Sprint(requestBody["input"])))
+	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: 2000, ReservedInputTokens: reservedInputTokens(requestRaw), ReservedExternalCostMicroUSD: 0, TimeoutMS: 75000, TemperatureMicros: 0}}
 	var dispatched struct {
 		Status         string `json:"status"`
 		ManifestDigest string `json:"manifest_digest"`
 		TurnGeneration int64  `json:"turn_state_generation"`
 	}
-	if err := w.command(ctx, "dispatch_model_call", dispatch, &dispatched); err != nil {
-		return err
-	}
-	if dispatched.Status != "committed" {
-		return fmt.Errorf("dispatch denied")
+	if err := w.command(ctx, "dispatch_model_call", dispatch, &dispatched); err != nil || dispatched.Status != "committed" {
+		if err != nil {
+			return modelTurn{}, err
+		}
+		return modelTurn{}, fmt.Errorf("dispatch denied")
 	}
 	providerCtx, cancelProvider := context.WithTimeout(ctx, 75*time.Second)
 	heartbeatDone := make(chan error, 1)
-	go func() {
-		heartbeatDone <- w.heartbeatLoop(providerCtx, item, claim, started.AttemptGeneration, 20*time.Second)
-	}()
+	go func() { heartbeatDone <- w.heartbeatLoop(providerCtx, item, claim, attemptGeneration, 20*time.Second) }()
 	startedAt := time.Now()
 	response, uncertain, err := w.callOpenAI(providerCtx, requestBody, idem)
 	cancelProvider()
@@ -162,39 +197,48 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	if err != nil {
 		failure := contracts.Failure{Code: "openai_request_failed", Message: bounded(err.Error()), Retryable: true}
 		if uncertain {
-			_ = w.markUnknown(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, failure)
+			_ = w.markUnknown(ctx, item, claim, attemptGeneration, turnID, dispatched.TurnGeneration, failure)
 		} else {
-			_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
+			_ = w.resolveFailure(ctx, item, claim, attemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
 		}
-		return err
+		return modelTurn{}, err
 	}
 	outputRaw, err := extractOutput(response)
 	if err != nil {
 		failure := contracts.Failure{Code: "openai_output_invalid", Message: bounded(err.Error()), Retryable: true}
-		_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInvalidOutput, failure)
-		return err
+		_ = w.resolveFailure(ctx, item, claim, attemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInvalidOutput, failure)
+		return modelTurn{}, err
 	}
-	outputRef, err := w.publishWithRetry(ctx, callID, dispatched.ManifestDigest, outputRaw)
+	workflow, err := parseWorkflowOutput(outputRaw)
+	if err != nil {
+		failure := contracts.Failure{Code: "openai_output_invalid", Message: bounded(err.Error()), Retryable: true}
+		_ = w.resolveFailure(ctx, item, claim, attemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInvalidOutput, failure)
+		return modelTurn{}, err
+	}
+	outputRef, err := w.publishWithRetry(ctx, callID, dispatched.ManifestDigest, item.OutputDigest, outputRaw)
 	if err != nil {
 		failure := contracts.Failure{Code: "model_output_commit_failed", Message: bounded(err.Error()), Retryable: true}
-		_ = w.resolveFailure(ctx, item, claim, started.AttemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
-		return err
+		_ = w.resolveFailure(ctx, item, claim, attemptGeneration, turnID, dispatched.TurnGeneration, runtimecontract.RetryInfrastructure, failure)
+		return modelTurn{}, err
 	}
 	resultCandidate := runtimecontract.ModelCallResultCandidate{CallID: callID, RequestDigest: requestDigest, ProviderRequestID: response.ID, Output: outputRef, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ExternalCostMicroUSD: 0, WallTimeMS: wall, FinishReason: runtimecontract.FinishStop}
-	resolve := runtimecontract.ResolveModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("resolve_model_call", callID+"-resolve", item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: started.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, ExpectedTurnStateGeneration: dispatched.TurnGeneration, Outcome: runtimecontract.TurnResultCommitted, Result: &resultCandidate}
+	resolve := runtimecontract.ResolveModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("resolve_model_call", callID+"-resolve", item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, ExpectedTurnStateGeneration: dispatched.TurnGeneration, Outcome: runtimecontract.TurnResultCommitted, Result: &resultCandidate}
 	var resolved struct {
 		Status       string `json:"status"`
 		ResultID     string `json:"result_id"`
 		ResultDigest string `json:"result_digest"`
 	}
-	if err := w.command(ctx, "resolve_model_call", resolve, &resolved); err != nil {
-		return err
+	if err := w.command(ctx, "resolve_model_call", resolve, &resolved); err != nil || resolved.Status != "committed" {
+		if err != nil {
+			return modelTurn{}, err
+		}
+		return modelTurn{}, fmt.Errorf("resolve denied")
 	}
-	if resolved.Status != "committed" {
-		return fmt.Errorf("resolve denied")
-	}
-	resultRef := contracts.RecordRef{Owner: contracts.OwnerAgentControl, RecordType: "model_call_result", RecordID: resolved.ResultID, SchemaRevision: 1, RecordDigest: resolved.ResultDigest}
-	commit := runtimecontract.CommitAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("commit_attempt", callID+"-commit", item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: started.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, Result: resultRef, Artifact: runtimecontract.ArtifactCandidate{ArtifactType: "assistant_response", OutputContractDigest: item.OutputDigest, EffectClass: contracts.EffectNone, Sections: []runtimecontract.ArtifactSection{{Name: "response", Required: true, Content: outputRef}}}}
+	return modelTurn{CallID: callID, ResultRef: contracts.RecordRef{Owner: contracts.OwnerAgentControl, RecordType: "model_call_result", RecordID: resolved.ResultID, SchemaRevision: 1, RecordDigest: resolved.ResultDigest}, OutputRef: outputRef, Workflow: workflow}, nil
+}
+
+func (w *worker) commitAttempt(ctx context.Context, item workItem, claim claimResult, attemptGeneration int64, turn modelTurn) error {
+	commit := runtimecontract.CommitAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("commit_attempt", turn.CallID+"-commit", item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, Result: turn.ResultRef, Artifact: runtimecontract.ArtifactCandidate{ArtifactType: "assistant_response", OutputContractDigest: item.OutputDigest, EffectClass: contracts.EffectNone, Sections: []runtimecontract.ArtifactSection{{Name: "response", Required: true, Content: turn.OutputRef}}}}
 	var committed struct {
 		Status     string `json:"status"`
 		ArtifactID string `json:"artifact_id"`
@@ -222,8 +266,32 @@ type openAIResponse struct {
 	}
 }
 
-func openAIRequest(model, prompt string) map[string]any {
-	return map[string]any{"model": model, "instructions": "Answer the user's request directly and accurately. Return only the required JSON object.", "input": prompt, "store": false, "max_output_tokens": 2000, "reasoning": map[string]any{"effort": "low"}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "assistant_response", "strict": true, "schema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"text"}, "properties": map[string]any{"text": map[string]any{"type": "string"}}}}}}
+func workflowSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"kind", "target", "objective", "rationale", "text"},
+		"properties": map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":    map[string]any{"type": "string", "enum": []string{"desk", "user"}},
+			"objective": map[string]any{"type": "string", "maxLength": 4000},
+			"rationale": map[string]any{"type": "string", "maxLength": 4000},
+			"text":      map[string]any{"type": "string", "maxLength": 16000},
+		},
+	}
+}
+
+func intentRequest(model, prompt string) map[string]any {
+	instructions := "You are Cortex Intent Interpreter. Read the user request and decide the next owner. The only installed specialist is Decision Desk. For a substantive investing, market, or research question, hand off to desk with a concise objective and rationale. For a simple clarification or greeting, answer the user directly. The Desk provides non-personalized, educational analysis only; it does not execute trades. Do not claim to have used tools, browse, or research. Return only JSON matching the schema. For a handoff, set kind=handoff, target=desk, a non-empty objective and rationale, and text=\"\". For a direct answer, set kind=answer, target=user, a non-empty objective and rationale, and the answer text."
+	return workflowRequest(model, instructions, prompt)
+}
+
+func deskRequest(model, prompt, objective, rationale string) map[string]any {
+	instructions := "You are Cortex Decision Desk in a non-executing research workflow. Give a concise, non-personalized educational analysis; do not issue trade instructions or claim live data, tools, browsing, or research that were not actually supplied. Explain uncertainty and, when relevant, distinguish durable thesis from time-sensitive facts. The Intent Interpreter handed you this objective: " + objective + ". Rationale: " + rationale + ". Return only JSON matching the schema: set kind=answer, target=user, non-empty objective and rationale, and the answer text. Do not hand off again."
+	return workflowRequest(model, instructions, prompt)
+}
+
+func workflowRequest(model, instructions, prompt string) map[string]any {
+	return map[string]any{"model": model, "instructions": instructions, "input": prompt, "store": false, "max_output_tokens": 2000, "reasoning": map[string]any{"effort": "low"}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "cortex_workflow_step", "strict": true, "schema": workflowSchema()}}}
 }
 func (w *worker) callOpenAI(ctx context.Context, body any, idem string) (openAIResponse, bool, error) {
 	raw, _ := json.Marshal(body)
@@ -253,21 +321,43 @@ func (w *worker) callOpenAI(ctx context.Context, body any, idem string) (openAIR
 	return out, false, nil
 }
 func extractOutput(r openAIResponse) ([]byte, error) {
+	var observed []string
 	for _, o := range r.Output {
+		observed = append(observed, o.Type+":"+o.Role)
 		if o.Type == "message" {
 			for _, c := range o.Content {
+				observed = append(observed, c.Type)
 				if c.Type == "output_text" && c.Text != "" {
-					var v struct {
-						Text string `json:"text"`
-					}
-					if json.Unmarshal([]byte(c.Text), &v) == nil && strings.TrimSpace(v.Text) != "" {
+					var value map[string]any
+					if json.Unmarshal([]byte(c.Text), &value) == nil && len(value) > 0 {
 						return []byte(c.Text), nil
 					}
 				}
 			}
 		}
 	}
-	return nil, fmt.Errorf("OpenAI response contained no valid assistant output")
+	return nil, fmt.Errorf("OpenAI response contained no valid structured output (%s)", strings.Join(observed, ","))
+}
+
+func parseWorkflowOutput(raw []byte) (workflowOutput, error) {
+	var output workflowOutput
+	if json.Unmarshal(raw, &output) != nil {
+		return workflowOutput{}, fmt.Errorf("workflow output was not JSON")
+	}
+	switch output.Kind {
+	case "answer":
+		if output.Target != "user" || strings.TrimSpace(output.Objective) == "" || strings.TrimSpace(output.Rationale) == "" || strings.TrimSpace(output.Text) == "" {
+			return workflowOutput{}, fmt.Errorf("workflow answer is empty")
+		}
+		return output, nil
+	case "handoff":
+		if output.Target != "desk" || strings.TrimSpace(output.Objective) == "" || strings.TrimSpace(output.Rationale) == "" || output.Text != "" {
+			return workflowOutput{}, fmt.Errorf("workflow handoff is invalid")
+		}
+		return output, nil
+	default:
+		return workflowOutput{}, fmt.Errorf("workflow kind is invalid")
+	}
 }
 
 func (w *worker) next(ctx context.Context) (*workItem, error) {
@@ -344,8 +434,8 @@ func (w *worker) readBlob(ctx context.Context, ref blob.BlobRef, binding string)
 	defer read.Close()
 	return io.ReadAll(io.LimitReader(read, ref.SizeBytes+1))
 }
-func (w *worker) publish(ctx context.Context, call, digestValue string, output []byte) (blob.BlobRef, error) {
-	body, _ := json.Marshal(map[string]any{"call_id": call, "manifest_digest": digestValue, "output": json.RawMessage(output)})
+func (w *worker) publish(ctx context.Context, call, digestValue, outputContractDigest string, output []byte) (blob.BlobRef, error) {
+	body, _ := json.Marshal(map[string]any{"call_id": call, "manifest_digest": digestValue, "output_contract_digest": outputContractDigest, "output": json.RawMessage(output)})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, w.controlURL+"/internal/v1/model-outputs", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+w.controlToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -362,7 +452,7 @@ func (w *worker) publish(ctx context.Context, call, digestValue string, output [
 	return ref, err
 }
 
-func (w *worker) publishWithRetry(ctx context.Context, call, digestValue string, output []byte) (blob.BlobRef, error) {
+func (w *worker) publishWithRetry(ctx context.Context, call, digestValue, outputContractDigest string, output []byte) (blob.BlobRef, error) {
 	delays := []time.Duration{0, 150 * time.Millisecond, 500 * time.Millisecond}
 	var last error
 	for _, delay := range delays {
@@ -373,13 +463,32 @@ func (w *worker) publishWithRetry(ctx context.Context, call, digestValue string,
 			case <-time.After(delay):
 			}
 		}
-		ref, err := w.publish(ctx, call, digestValue, output)
+		ref, err := w.publish(ctx, call, digestValue, outputContractDigest, output)
 		if err == nil {
 			return ref, nil
 		}
 		last = err
 	}
 	return blob.BlobRef{}, last
+}
+
+func (w *worker) recordHandoff(ctx context.Context, callID string, handoff workflowOutput) error {
+	body, _ := json.Marshal(map[string]string{"call_id": callID, "target": handoff.Target, "objective": handoff.Objective, "rationale": handoff.Rationale})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.controlURL+"/internal/v1/handoffs", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+w.controlToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("Control handoff status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (w *worker) heartbeatLoop(ctx context.Context, item workItem, c claimResult, attemptGeneration int64, interval time.Duration) error {
@@ -429,6 +538,20 @@ func (w *worker) resolveFailure(ctx context.Context, item workItem, c claimResul
 		return err
 	}
 	if failed.Status != "committed" {
+		return fmt.Errorf("attempt failure denied")
+	}
+	return nil
+}
+
+func (w *worker) failAfterResolved(ctx context.Context, item workItem, c claimResult, gen int64, retryClass runtimecontract.RetryClass, f contracts.Failure) error {
+	fail := runtimecontract.FailAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("fail_attempt", c.AttemptID+"-after-resolved", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, RetryClass: retryClass, Failure: f}
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := w.command(ctx, "fail_attempt", fail, &result); err != nil {
+		return err
+	}
+	if result.Status != "committed" {
 		return fmt.Errorf("attempt failure denied")
 	}
 	return nil

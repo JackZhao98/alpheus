@@ -18,7 +18,7 @@ function formatError(error) {
 function renderTrace(job) {
   const trace = Array.isArray(job?.trace) ? job.trace : [];
   byId("trace-status").textContent = job?.id
-    ? `${String(job.status || "unknown").toUpperCase()} · ATTEMPT ${job.attempt || 0}`
+    ? String(job.status || "unknown").toUpperCase()
     : "NO JOB";
   const summary = {
     job_id: job?.id,
@@ -32,6 +32,8 @@ function renderTrace(job) {
       at: event.created_at,
       attempt: event.attempt,
       stage: event.stage,
+      state: event.state,
+      target_role: event.target_role,
       error_code: event.error_code || undefined,
     })),
   };
@@ -167,21 +169,20 @@ async function waitForAgentQuery(job) {
 byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const symbol = byId("symbol").value.trim().toUpperCase();
-  const workflow = byId("workflow").value;
   const query = byId("question").value.trim();
   if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !query) {
     byId("query-error").textContent = "请输入有效股票代码和问题。";
     return;
   }
   byId("run").disabled = true;
-  byId("status").textContent = "SCOUT WORKING";
+  byId("status").textContent = "CORTEX WORKING";
   byId("query-error").textContent = "";
   byId("result").textContent = "Awaiting dispatcher…";
   renderTrace(null);
   try {
     let job = await request("/agent/cortex-requests", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({workflow, symbol, query})
+      body:JSON.stringify({workflow:"auto", symbol, query})
     });
     job = await waitForAgentQuery(job);
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");

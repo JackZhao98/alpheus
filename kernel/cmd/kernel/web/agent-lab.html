@@ -45,8 +45,7 @@
         </div>
         <input id="robinhood-research-token" type="file" accept="application/json,.json">
         <p class="field-note">选择 robinhood-cli 的 credentials.json。浏览器读取后直接加密写入数据库；文件内容不进入 job、日志或浏览器存储。</p>
-        <label for="workflow">工作流</label>
-        <select id="workflow"><option value="auto" selected>Auto route</option><option value="team">Scout → Decision Desk</option><option value="scout">Scout only</option></select>
+        <p class="field-note">由 Cortex 根据请求自行决定是否交接给已安装的专业角色。</p>
         <label for="symbol">股票代码</label>
         <input id="symbol" value="SOFI" maxlength="16" autocomplete="off" spellcheck="false" required>
         <label for="question">问题</label>

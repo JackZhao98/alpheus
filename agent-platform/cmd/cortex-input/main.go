@@ -63,23 +63,51 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	outputSchema := map[string]any{
+	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,
 		"required":   []string{"text"},
 		"properties": map[string]any{"text": map[string]any{"type": "string"}},
 	}
-	outputSchemaRaw, err := json.Marshal(outputSchema)
-	if err != nil {
-		return fmt.Errorf("encode Cortex output schema: %w", err)
+	workflowSchema := map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type":    "object", "additionalProperties": false,
+		// OpenAI strict schemas require one closed shape at the root.  The
+		// Worker applies the kind/target semantic rules after validation.
+		"required": []string{"kind", "target", "objective", "rationale", "text"},
+		"properties": map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":    map[string]any{"type": "string", "enum": []string{"desk", "user"}},
+			"objective": map[string]any{"type": "string", "maxLength": 4000},
+			"rationale": map[string]any{"type": "string", "maxLength": 4000},
+			"text":      map[string]any{"type": "string", "maxLength": 16000},
+		},
 	}
-	schemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
-		"agent-platform.contract.output_contract_schema.v1", outputSchema)
+	answerSchemaRaw, err := json.Marshal(answerSchema)
 	if err != nil {
-		return fmt.Errorf("commit Cortex output schema: %w", err)
+		return fmt.Errorf("encode Cortex answer schema: %w", err)
 	}
-	if err := adapter.EnsureRuntimeDefinitions(ctx, schemaRef); err != nil {
+	workflowSchemaRaw, err := json.Marshal(workflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex workflow schema: %w", err)
+	}
+	answerSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
+		"agent-platform.contract.output_contract_schema.v1", answerSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex answer schema: %w", err)
+	}
+	workflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v2",
+		"agent-platform.contract.output_contract_schema.v1", workflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex workflow schema: %w", err)
+	}
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef)
+	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
+	}
+	outputSchemas := map[string][]byte{
+		runtimeDefinitions.AnswerOutputContractDigest:   answerSchemaRaw,
+		runtimeDefinitions.WorkflowOutputContractDigest: workflowSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
@@ -113,9 +141,10 @@ func run() error {
 			return
 		}
 		var body struct {
-			CallID         string          `json:"call_id"`
-			ManifestDigest string          `json:"manifest_digest"`
-			Output         json.RawMessage `json:"output"`
+			CallID               string          `json:"call_id"`
+			ManifestDigest       string          `json:"manifest_digest"`
+			OutputContractDigest string          `json:"output_contract_digest"`
+			Output               json.RawMessage `json:"output"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 1<<20))
 		decoder.DisallowUnknownFields()
@@ -123,7 +152,7 @@ func run() error {
 			http.Error(w, "invalid model output", http.StatusBadRequest)
 			return
 		}
-		validation, err := validateModelOutput(outputSchemaRaw, schemaRef.ContentDigest, body.Output)
+		validation, err := validateModelOutput(outputSchemas, strings.TrimSpace(body.OutputContractDigest), body.Output)
 		if err != nil {
 			log.Printf("Cortex model output validation failed: %v", err)
 			http.Error(w, "model output failed its contract", http.StatusUnprocessableEntity)
@@ -139,6 +168,31 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(ref)
 	})
+	mux.HandleFunc("POST /internal/v1/handoffs", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			CallID    string `json:"call_id"`
+			Target    string `json:"target"`
+			Objective string `json:"objective"`
+			Rationale string `json:"rationale"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 12<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil {
+			http.Error(w, "invalid handoff", http.StatusBadRequest)
+			return
+		}
+		if err := adapter.RecordHandoff(request.Context(), strings.TrimSpace(body.CallID), strings.TrimSpace(body.Target), strings.TrimSpace(body.Objective), strings.TrimSpace(body.Rationale)); err != nil {
+			log.Printf("Cortex handoff recording failed: %v", err)
+			http.Error(w, "handoff recording failed", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded"})
+	})
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
 		Handler:           mux,
@@ -152,13 +206,14 @@ func run() error {
 	return server.ListenAndServe()
 }
 
-func validateModelOutput(schema []byte, expectedSchemaDigest string, output []byte) (outputcontract.Evidence, error) {
+func validateModelOutput(schemas map[string][]byte, outputContractDigest string, output []byte) (outputcontract.Evidence, error) {
+	schema, found := schemas[outputContractDigest]
+	if !found {
+		return outputcontract.Evidence{}, fmt.Errorf("unknown output contract")
+	}
 	evidence, err := outputcontract.Validate(bytes.NewReader(schema), bytes.NewReader(output))
 	if err != nil {
 		return outputcontract.Evidence{}, err
-	}
-	if evidence.SchemaSHA256 != expectedSchemaDigest {
-		return outputcontract.Evidence{}, fmt.Errorf("output schema digest mismatch")
 	}
 	return evidence, nil
 }

@@ -252,9 +252,18 @@ type RunAdmission struct {
 }
 
 type CortexRunResult struct {
-	RunID string `json:"run_id"`
-	State string `json:"state"`
-	Text  string `json:"text,omitempty"`
+	RunID string             `json:"run_id"`
+	State string             `json:"state"`
+	Text  string             `json:"text,omitempty"`
+	Trace []CortexTraceEvent `json:"trace"`
+}
+
+type CortexTraceEvent struct {
+	Sequence   int64  `json:"sequence"`
+	CreatedAt  string `json:"created_at"`
+	Stage      string `json:"stage"`
+	State      string `json:"state,omitempty"`
+	TargetRole string `json:"target_role,omitempty"`
 }
 
 func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {
@@ -276,6 +285,15 @@ func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) 
 		return CortexRunResult{}, sql.ErrNoRows
 	}
 	answer := CortexRunResult{RunID: result.RunID, State: result.State}
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var traceRaw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.get_cortex_run_trace($1)::TEXT`, runID).Scan(&traceRaw); err != nil {
+			return err
+		}
+		return json.Unmarshal(traceRaw, &answer.Trace)
+	}); err != nil {
+		return CortexRunResult{}, err
+	}
 	if result.State != "succeeded" {
 		return answer, nil
 	}
@@ -301,6 +319,16 @@ func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) 
 	return answer, nil
 }
 
+func (adapter *PostgresAdapter) RecordHandoff(ctx context.Context, callID, target, objective, rationale string) error {
+	if callID == "" || target != "desk" || objective == "" || rationale == "" {
+		return fmt.Errorf("invalid Cortex handoff")
+	}
+	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var raw []byte
+		return tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_handoff($1,$2,$3,$4)::TEXT`, callID, target, objective, rationale).Scan(&raw)
+	})
+}
+
 func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request blob.ReadRequest) (blob.ReadAuthorization, error) {
 	result := blob.ReadAuthorization{PrincipalID: adapter.principal, BindingID: request.BindingID, OwningReference: request.OwningReference}
 	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
@@ -313,27 +341,50 @@ func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request b
 	return result, err
 }
 
-func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, schema blob.BlobRef) error {
-	if schema.Validate() != nil || schema.Origin.RecordType != "output_contract_schema" || schema.MediaType != controlJSONMediaType {
-		return fmt.Errorf("invalid Cortex output schema BlobRef")
+type RuntimeDefinitions struct {
+	AnswerOutputContractDigest   string
+	WorkflowOutputContractDigest string
+}
+
+func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema blob.BlobRef) (RuntimeDefinitions, error) {
+	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType {
+		return RuntimeDefinitions{}, fmt.Errorf("invalid Cortex output schema BlobRef")
 	}
-	raw, err := json.Marshal(schema)
+	answerRaw, err := json.Marshal(answerSchema)
 	if err != nil {
-		return err
+		return RuntimeDefinitions{}, err
 	}
-	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+	workflowRaw, err := json.Marshal(workflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	var definitions RuntimeDefinitions
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
 		var responseRaw []byte
-		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_mvp_runtime($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_mvp_runtime($1::JSONB)::TEXT`, string(answerRaw)).Scan(&responseRaw); err != nil {
 			return err
 		}
 		var response struct {
-			Status string `json:"status"`
+			Status               string `json:"status"`
+			OutputContractDigest string `json:"output_contract_digest"`
 		}
-		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" {
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
 			return fmt.Errorf("Cortex runtime definitions were not selected")
 		}
+		definitions.AnswerOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v2($1::JSONB)::TEXT`, string(workflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex workflow output contract was not selected")
+		}
+		definitions.WorkflowOutputContractDigest = response.OutputContractDigest
 		return nil
 	})
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	return definitions, nil
 }
 
 func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admission) (RunAdmission, error) {
@@ -366,7 +417,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v2($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)
