@@ -47,7 +47,7 @@ func (s *Store) SaveGEXBotCollectionConfig(value GEXBotCollectionConfig) (GEXBot
 	ctx, cancel := s.deadline()
 	defer cancel()
 	err = s.DB.QueryRowContext(ctx, `UPDATE gexbot_collection_config SET enabled=$1,symbols=$2,interval_minutes=$3,updated_at=clock_timestamp()
-		WHERE singleton=true RETURNING updated_at`, value.Enabled, value.Symbols, value.IntervalMinutes).Scan(&value.UpdatedAt)
+		WHERE singleton=true RETURNING updated_at`, value.Enabled, pq.Array(value.Symbols), value.IntervalMinutes).Scan(&value.UpdatedAt)
 	if err != nil {
 		return GEXBotCollectionConfig{}, normalizeDBError(err)
 	}
