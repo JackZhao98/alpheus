@@ -157,18 +157,22 @@ func exactDecimal(number json.Number, positive bool) (int64, error) {
 type Output interface{ Validate() error }
 
 type QueryIntent struct {
-	Route                string   `json:"route"` // SCOUT | TEAM | REFUSE
+	Route                string   `json:"route"` // SCOUT | TEAM | ASK_USER | REFUSE
 	Objective            string   `json:"objective"`
 	RequiredCapabilities []string `json:"required_capabilities"`
 	MissingInputs        []string `json:"missing_inputs"`
+	Assumptions          []string `json:"assumptions"`
 }
 
 func (q QueryIntent) Validate() error {
-	if q.Route != "SCOUT" && q.Route != "TEAM" && q.Route != "REFUSE" {
+	if q.Route != "SCOUT" && q.Route != "TEAM" && q.Route != "ASK_USER" && q.Route != "REFUSE" {
 		return fmt.Errorf("bad query route %q", q.Route)
 	}
 	if strings.TrimSpace(q.Objective) == "" || len(q.Objective) > 1000 {
 		return fmt.Errorf("query objective is required and bounded")
+	}
+	if q.Route == "ASK_USER" && len(q.MissingInputs) == 0 {
+		return fmt.Errorf("ask_user requires a clarifying question")
 	}
 	return nil
 }

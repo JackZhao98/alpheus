@@ -187,9 +187,13 @@ byId("query-form").addEventListener("submit", async (event) => {
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");
     const result = job.result;
     byId("result").textContent = JSON.stringify(result, null, 2);
-    byId("status").textContent = result.cognition === "stub"
-      ? "STUB PASS · MODEL NOT CONNECTED"
-      : `COMPLETE · ${String(result.model || "OPENAI").toUpperCase()} · NO OPERATION`;
+    if (result.workflow === "ask_user") {
+      byId("status").textContent = "NEEDS YOUR INPUT · NO OPERATION";
+    } else {
+      byId("status").textContent = result.cognition === "stub"
+        ? "STUB PASS · MODEL NOT CONNECTED"
+        : `COMPLETE · ${String(result.model || "OPENAI").toUpperCase()} · NO OPERATION`;
+    }
   } catch (error) {
     byId("result").textContent = "No result returned.";
     byId("status").textContent = "FAILED CLOSED";

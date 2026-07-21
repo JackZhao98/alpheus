@@ -126,7 +126,7 @@ func runManualQuery(client *assemble.Client, fallback cognition.Cognition, roleB
 		result.RequestedWorkflow = requestedWorkflow
 		result.IntentOutput = intent
 		result.Workflow = workflow
-		if workflow == "refuse" {
+		if workflow == "refuse" || workflow == "ask_user" {
 			result.Role, result.Output = intentRole.Role, intent
 			return result, nil
 		}
@@ -224,6 +224,12 @@ func resolveQueryIntent(intent contracts.QueryIntent) (string, error) {
 	}
 	if intent.Route == "REFUSE" {
 		return "refuse", nil
+	}
+	if intent.Route == "ASK_USER" {
+		if len(intent.MissingInputs) == 0 {
+			return "", fmt.Errorf("intent asked for input without a question")
+		}
+		return "ask_user", nil
 	}
 	if len(intent.MissingInputs) != 0 {
 		return "", fmt.Errorf("intent selected a route with missing inputs")

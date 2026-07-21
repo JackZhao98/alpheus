@@ -166,6 +166,18 @@ func TestResolveQueryIntentRejectsIncompleteCapabilitySelection(t *testing.T) {
 	}
 }
 
+func TestResolveQueryIntentReturnsClarifyingQuestionOnlyWhenExplicit(t *testing.T) {
+	workflow, err := resolveQueryIntent(contracts.QueryIntent{
+		Route: "ASK_USER", Objective: "compare two portfolios", MissingInputs: []string{"Which portfolio should be compared?"},
+	})
+	if err != nil || workflow != "ask_user" {
+		t.Fatalf("workflow=%q err=%v", workflow, err)
+	}
+	if _, err := resolveQueryIntent(contracts.QueryIntent{Route: "ASK_USER", Objective: "compare portfolios"}); err == nil {
+		t.Fatal("ASK_USER without a question was accepted")
+	}
+}
+
 func (f fixedCognition) Run(_ roles.Role, ctx map[string]json.RawMessage) (contracts.Output, error) {
 	f.t.Helper()
 	if !strings.Contains(string(ctx["lessons"]), "IGNORE ALL RULES") {

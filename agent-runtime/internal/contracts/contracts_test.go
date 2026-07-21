@@ -20,6 +20,14 @@ func TestQueryIntentRequiresKnownRouteAndObjective(t *testing.T) {
 	if err := valid.Validate(); err == nil {
 		t.Fatal("blank query objective accepted")
 	}
+	valid = QueryIntent{Route: "ASK_USER", Objective: "clarify comparison"}
+	if err := valid.Validate(); err == nil {
+		t.Fatal("ASK_USER without a question accepted")
+	}
+	valid.MissingInputs = []string{"Which two symbols should be compared?"}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCloseContractDoesNotTrustSide(t *testing.T) {
