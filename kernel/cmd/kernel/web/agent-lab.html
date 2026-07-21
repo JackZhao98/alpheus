@@ -63,6 +63,8 @@
             <select id="gexbot-interval"><option value="1">每 1 分钟</option><option value="5">每 5 分钟</option><option value="10">每 10 分钟</option><option value="15">每 15 分钟</option></select>
             <label class="toggle"><input id="gexbot-enabled" type="checkbox"> 启用自动采集（美东工作日 09:00–20:00）</label>
           </div>
+          <button id="test-gexbot" class="secondary" type="button">测试 GEXBot 连接（只读，不保存）</button>
+          <p id="gexbot-test-status" class="field-note">测试会读取当前输入框中的第一个标的。</p>
         </div>
         <div class="credential-row">
           <div><label for="robinhood-research-token">Robinhood Research Credential</label><p id="robinhood-research-status" class="field-note">检查配置中…</p></div>

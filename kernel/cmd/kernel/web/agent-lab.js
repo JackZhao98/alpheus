@@ -163,6 +163,31 @@ byId("save-gexbot-config").addEventListener("click", async () => {
   }
 });
 
+byId("test-gexbot").addEventListener("click", async () => {
+  const symbol = byId("gexbot-symbols").value.split(",").map((value) => value.trim()).filter(Boolean)[0]?.toUpperCase();
+  byId("query-error").textContent = "";
+  if (!symbol) {
+    byId("query-error").textContent = "请先输入一个 GEXBot 标的。";
+    return;
+  }
+  byId("test-gexbot").disabled = true;
+  byId("gexbot-test-status").textContent = `正在读取 ${symbol}…`;
+  try {
+    const payload = await request("/agent/gexbot/test", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({symbol})
+    });
+    const spot = payload.spot == null ? "n/a" : payload.spot;
+    const zeroGamma = payload.zero_gamma == null ? "n/a" : payload.zero_gamma;
+    byId("gexbot-test-status").textContent = `连接成功：${payload.symbol} · spot ${spot} · zero gamma ${zeroGamma} · ${payload.source_timestamp}`;
+  } catch (error) {
+    byId("gexbot-test-status").textContent = "连接测试失败。";
+    byId("query-error").textContent = error.message;
+  } finally {
+    byId("test-gexbot").disabled = false;
+  }
+});
+
 byId("save-robinhood-research").addEventListener("click", async () => {
   const file = byId("robinhood-research-token").files?.[0];
   byId("query-error").textContent = "";
