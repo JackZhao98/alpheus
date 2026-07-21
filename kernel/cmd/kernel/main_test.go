@@ -3080,9 +3080,10 @@ func TestComputedRiskCannotBeUnderDeclared(t *testing.T) {
 		status      string
 		reason      string
 	}{
-		{"under-declared", `,"max_risk_usd":10`, "REJECT", "rejected", "risk_declaration_mismatch"},
+		{"under-declared", `,"max_risk_usd":10`, "REJECT", "rejected", "risk_exceeds_declared"},
 		{"truthful", `,"max_risk_usd":300`, "C", "pending_review", ""},
-		{"explicit zero", `,"max_risk_usd":0`, "REJECT", "rejected", "risk_declaration_mismatch"},
+		{"over-declared", `,"max_risk_usd":500`, "C", "pending_review", ""},
+		{"explicit zero", `,"max_risk_usd":0`, "REJECT", "rejected", "risk_exceeds_declared"},
 		{"omitted", "", "C", "pending_review", ""},
 	}
 	for _, tc := range tests {

@@ -157,20 +157,39 @@ func TestChecklistFailureMatrix(t *testing.T) {
 	}
 }
 
-func TestRiskDeclarationMismatchUsesTolerance(t *testing.T) {
+func TestRiskDeclarationIsACeiling(t *testing.T) {
+	// Understating risk -- declaring less than the kernel derives -- is a
+	// malfunction and rejects. testOpen("300") derives 300.
 	op := testOpen("300")
-	declared := units.MustMicros("10")
-	op.MaxRiskUSD = &declared
-	verdict := Classify(op, limitsForTest(), testDay(), testQuote())
-	if verdict.Class != "REJECT" || verdict.Reasons[0] != "risk_declaration_mismatch" {
-		t.Fatalf("verdict=%+v", verdict)
+	for _, under := range []string{"10", "0"} {
+		declared := units.MustMicros(under)
+		op.MaxRiskUSD = &declared
+		v := Classify(op, limitsForTest(), testDay(), testQuote())
+		if v.Class != "REJECT" || v.Reasons[0] != "risk_exceeds_declared" {
+			t.Fatalf("declared %s (< derived) verdict=%+v, want REJECT risk_exceeds_declared", under, v)
+		}
 	}
 
-	zero := units.Micros(0)
-	op.MaxRiskUSD = &zero
-	verdict = Classify(op, limitsForTest(), testDay(), testQuote())
-	if verdict.Class != "REJECT" || verdict.Reasons[0] != "risk_declaration_mismatch" {
-		t.Fatalf("explicit zero verdict=%+v", verdict)
+	// Declaring a ceiling at or above the derived risk is conservative and
+	// allowed: the declaration never trips, classification proceeds on the real
+	// checks (here per_trade_budget still fails 300 > 105 -> Class C).
+	for _, over := range []string{"300", "500"} {
+		declared := units.MustMicros(over)
+		op.MaxRiskUSD = &declared
+		v := Classify(op, limitsForTest(), testDay(), testQuote())
+		for _, reason := range v.Reasons {
+			if reason == "risk_exceeds_declared" {
+				t.Fatalf("declared %s (>= derived) should not trip the ceiling: %+v", over, v)
+			}
+		}
+	}
+
+	// An in-budget trade with an over-declared ceiling clears all the way to B.
+	small := testOpen("35")
+	over := units.MustMicros("50")
+	small.MaxRiskUSD = &over
+	if v := Classify(small, limitsForTest(), testDay(), testQuote()); v.Class != "B" {
+		t.Fatalf("over-declared within budget verdict=%+v, want B", v)
 	}
 }
 

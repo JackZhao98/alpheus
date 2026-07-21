@@ -138,9 +138,14 @@ func ClassifyAt(op Operation, limits config.Limits, day DayState, quote *broker.
 	if op.RequiredCash > day.BuyingPower {
 		return reject("insufficient_buying_power")
 	}
-	if op.MaxRiskUSD != nil &&
-		units.DifferenceExceeds(*op.MaxRiskUSD, op.DerivedMaxRisk, limits.RiskDeclarationTolerance) {
-		return reject("risk_declaration_mismatch")
+	// max_risk_usd is a declared ceiling, not an exact figure: reject only when
+	// the kernel-computed risk exceeds it beyond tolerance (the proposer
+	// understated its risk). Declaring a ceiling above the derived risk is
+	// conservative and allowed; the binding per-trade limit is per_trade_budget
+	// below, which gates the derived risk, not the declaration.
+	if op.MaxRiskUSD != nil && op.DerivedMaxRisk > *op.MaxRiskUSD &&
+		units.DifferenceExceeds(op.DerivedMaxRisk, *op.MaxRiskUSD, limits.RiskDeclarationTolerance) {
+		return reject("risk_exceeds_declared")
 	}
 
 	// Percentage caps round down, against the account: a fractional micro-dollar

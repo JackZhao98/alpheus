@@ -153,11 +153,17 @@ invariant 9; 0 disables the age check until M8A supplies timestamps).
   may add a provider-side hold back only after matching it to the exact durable
   Alpheus broker order. Approximate matching by symbol, side or quantity is
   forbidden.
-- Payload `max_risk_usd` is a **declaration**: if present and
-  `abs(declared - derived_max_risk) > risk_declaration_tolerance` → REJECT
-  `risk_declaration_mismatch`. Rationale: a proposer that misstates its own
-  risk is malfunctioning, and there is nothing a human could usefully approve;
-  but the declaration is worth keeping as an honesty signal in the journal.
+- Payload `max_risk_usd` is a **declared ceiling** (amendment v1.9.6): if
+  present and `derived_max_risk - declared > risk_declaration_tolerance` →
+  REJECT `risk_exceeds_declared`. Rationale: a proposer that *understates* its
+  own risk — claiming to risk less than the kernel derives — is malfunctioning,
+  and there is nothing a human could usefully approve. Declaring a ceiling at or
+  above the derived risk is conservative and allowed; the binding per-trade
+  limit is `per_trade_budget`, which gates the derived risk, never the
+  declaration. The declaration is worth keeping as an honesty signal in the
+  journal. (The prior rule rejected any `abs(declared - derived)` difference;
+  it fired only on price-bounded orders, where risk is trivial arithmetic, and
+  penalized harmless over-declaration — see the amendment log.)
 
 *`open` + `sell` is REJECT, with no coverage exception:*
 - In the current **single-leg** model there is no representation for "this
@@ -201,9 +207,11 @@ invariant 9; 0 disables the age check until M8A supplies timestamps).
 
 **Acceptance:**
 - Option open qty 1 @ 3.00, $300 account, declaring `max_risk_usd: 10` →
-  REJECT `risk_declaration_mismatch`, no broker order. Declaring 300 → Class C
-  with `per_trade_budget` failed (300 > 105). Declaring 0 explicitly → REJECT
-  mismatch (not skipped). Omitting → Class C `per_trade_budget`. In no case B.
+  REJECT `risk_exceeds_declared`, no broker order (derived 300 exceeds the
+  declared 10). Declaring 300 → Class C with `per_trade_budget` failed
+  (300 > 105). Declaring 500 (above derived) → Class C `per_trade_budget`, not a
+  declaration reject. Declaring 0 explicitly → REJECT `risk_exceeds_declared`
+  (not skipped). Omitting → Class C `per_trade_budget`. In no case B.
 - An open whose `required_cash` is one micro-dollar above broker buying power →
   REJECT `insufficient_buying_power`; equality is allowed before other checks.
 - A DTO carrying `derived_max_risk` or `verified_reduction` → 400 unknown field.
