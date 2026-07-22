@@ -105,5 +105,7 @@ run_sql agent-platform/migrations/0022_cortex_workflow_schema_fix.sql 0022_corte
 run_sql agent-platform/migrations/0023_cortex_web_fetch_tool.sql 0023_cortex_web_fetch_tool
 run_sql agent-platform/migrations/0024_cortex_tool_authorization_lease.sql 0024_cortex_tool_authorization_lease
 run_sql agent-platform/migrations/0025_cortex_conversation_history.sql 0025_cortex_conversation_history
+run_sql agent-platform/migrations/0026_cortex_tool_recovery.sql 0026_cortex_tool_recovery
+run_sql agent-platform/migrations/0027_cortex_tool_recovery_claim_fix.sql 0027_cortex_tool_recovery_claim_fix
 
 echo "agent-platform migration bootstrap complete"

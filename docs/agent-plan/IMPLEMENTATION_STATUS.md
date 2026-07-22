@@ -186,8 +186,19 @@ its answer names that source. Agent Lab trace now retains the Tool call, Tool
 identifier and receipt identifier so the page displays actual Tool evidence
 rather than a fabricated timeline. This is not a generic browser or search
 capability, not a raw-source archive, and not AP3 registry/activation
-completion. Next is the explicit interrupted-Tool reconciler, then a separate
-Scout/Research child-work admission slice.
+completion. Migrations `0026_cortex_tool_recovery` and
+`0027_cortex_tool_recovery_claim_fix` now add the explicit interrupted-Tool
+reconciler: Cortex Control waits 45 seconds after the original authorization,
+then durably claims only an unacknowledged immutable `tool_call_id` with a
+short fenced lease. It retries the exact Research request with bounded
+backoff; Research first returns an already persisted receipt instead of
+fetching again after a lost Control response. A stale recovery lease cannot
+requeue a newer owner, and no recovery path creates an intent, changes a URL,
+or revives the old Worker/Attempt. The deployed reconciler recovered two
+historical interrupted calls (one missing only the Control acknowledgement and
+one missing its Research receipt); the permanent queue is now fully
+acknowledged and has an append-only claim/receipt audit trail. Next is the
+separate Scout/Research child-work admission slice.
 
 The first persistent, turn-by-turn Cortex Conversation slice is also deployed
 locally. Agent Lab now retains one Cortex Conversation identifier in the page

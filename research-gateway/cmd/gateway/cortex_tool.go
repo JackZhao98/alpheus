@@ -131,6 +131,22 @@ func (g *gateway) cortexWebFetch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "tool authorization unavailable"})
 		return
 	}
+	// The durable receipt is the Tool's idempotency result.  A Control crash
+	// after Research committed it must return this exact pair rather than issue
+	// another public HTTP request while a Worker or recovery loop retries.
+	if existing, found, err := g.loadCortexWebFetchReceipt(r.Context(), auth.ToolCallID); err != nil {
+		log.Printf("Cortex web fetch receipt lookup failed: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tool receipt unavailable"})
+		return
+	} else if found {
+		if !validCortexToolResult(existing, auth) {
+			log.Printf("Cortex web fetch persisted receipt validation failed")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tool receipt unavailable"})
+			return
+		}
+		writeJSON(w, http.StatusOK, existing)
+		return
+	}
 	document, err := g.fetchPublicPage(r.Context(), auth.URL, auth.MaxChars)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "web page unavailable"})
@@ -167,6 +183,32 @@ func (g *gateway) authorizeCortexWebFetch(ctx context.Context, toolCallID string
 		return cortexWebFetchAuthorization{}, fmt.Errorf("authorization response invalid")
 	}
 	return auth, nil
+}
+
+func (g *gateway) loadCortexWebFetchReceipt(ctx context.Context, toolCallID string) (cortexToolResult, bool, error) {
+	var raw []byte
+	err := g.withResearchRole(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.get_research_web_fetch_receipt($1)::TEXT`, toolCallID).Scan(&raw)
+	})
+	if err != nil {
+		return cortexToolResult{}, false, fmt.Errorf("receipt lookup unavailable: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return cortexToolResult{}, false, nil
+	}
+	if len(raw) > maxCortexToolResponseBytes {
+		return cortexToolResult{}, false, fmt.Errorf("receipt lookup too large")
+	}
+	var result cortexToolResult
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return cortexToolResult{}, false, fmt.Errorf("receipt lookup decode: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return cortexToolResult{}, false, fmt.Errorf("receipt lookup trailing data: %w", err)
+	}
+	return result, true, nil
 }
 
 func (g *gateway) recordCortexWebFetchReceipt(ctx context.Context, toolCallID string, document webPageDocument) (cortexToolResult, error) {

@@ -70,6 +70,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	recoveryContext, stopRecovery := context.WithCancel(context.Background())
+	defer stopRecovery()
+	startCortexWebFetchRecovery(recoveryContext, adapter, researchHTTP, researchURL, researchToken)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,

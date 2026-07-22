@@ -422,6 +422,80 @@ type CortexWebFetchResult struct {
 	Evidence capability.WebFetchEvidence `json:"evidence"`
 }
 
+// WebFetchRecoveryClaim is a short-lived Control-owned lease over an already
+// immutable Tool intent.  It is intentionally not a Worker lease: recovery
+// must never impersonate or revive the Worker that originally authorized it.
+type WebFetchRecoveryClaim struct {
+	ToolCallID      string
+	LeaseGeneration int64
+	LeaseToken      string
+	LeaseExpiresAt  time.Time
+}
+
+// ClaimWebFetchRecoveries exposes only the bounded, database-fenced recovery
+// queue.  Callers receive a ToolCallID, never an arbitrary URL or connector
+// request; Research re-reads the exact immutable authorization itself.
+func (adapter *PostgresAdapter) ClaimWebFetchRecoveries(ctx context.Context, limit, leaseSeconds int) ([]WebFetchRecoveryClaim, error) {
+	if adapter == nil || adapter.db == nil || limit < 1 || limit > 32 || leaseSeconds < 5 || leaseSeconds > 60 {
+		return nil, fmt.Errorf("invalid Cortex web fetch recovery claim")
+	}
+	claims := make([]WebFetchRecoveryClaim, 0, limit)
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT tool_call_id,lease_generation,lease_token::TEXT,lease_expires_at
+			FROM agent_control.claim_cortex_tool_recoveries($1,$2)`, limit, leaseSeconds)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var claim WebFetchRecoveryClaim
+			if err := rows.Scan(&claim.ToolCallID, &claim.LeaseGeneration, &claim.LeaseToken, &claim.LeaseExpiresAt); err != nil {
+				return err
+			}
+			claim.LeaseExpiresAt = claim.LeaseExpiresAt.UTC()
+			if claim.ToolCallID == "" || claim.LeaseGeneration < 1 || claim.LeaseToken == "" || claim.LeaseExpiresAt.IsZero() {
+				return fmt.Errorf("invalid Cortex web fetch recovery claim result")
+			}
+			claims = append(claims, claim)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim Cortex web fetch recoveries: %w", err)
+	}
+	return claims, nil
+}
+
+// RequeueWebFetchRecovery releases only the caller's current recovery lease.
+// A stale process gets false and must not retry or overwrite a newer owner.
+func (adapter *PostgresAdapter) RequeueWebFetchRecovery(ctx context.Context, claim WebFetchRecoveryClaim, reasonCode string) (bool, error) {
+	if adapter == nil || adapter.db == nil || claim.ToolCallID == "" || claim.LeaseGeneration < 1 || claim.LeaseToken == "" ||
+		!recoveryReasonCodeValid(reasonCode) {
+		return false, fmt.Errorf("invalid Cortex web fetch recovery requeue")
+	}
+	var requeued bool
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.requeue_cortex_tool_recovery($1,$2,$3::UUID,$4)`,
+			claim.ToolCallID, claim.LeaseGeneration, claim.LeaseToken, reasonCode).Scan(&requeued)
+	})
+	if err != nil {
+		return false, fmt.Errorf("requeue Cortex web fetch recovery: %w", err)
+	}
+	return requeued, nil
+}
+
+func recoveryReasonCodeValid(value string) bool {
+	if len(value) < 1 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func (adapter *PostgresAdapter) AuthorizeWebFetch(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken, rawURL string, maxChars int) (WebFetchAuthorization, error) {
 	request := capability.WebFetchRequest{URL: strings.TrimSpace(rawURL), MaxChars: maxChars}
 	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 || leaseToken == "" || request.Validate() != nil {
