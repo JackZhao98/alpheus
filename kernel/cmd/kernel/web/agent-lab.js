@@ -34,6 +34,9 @@ function renderTrace(job) {
       stage: event.stage,
       state: event.state,
       target_role: event.target_role,
+      tool_call_id: event.tool_call_id,
+      tool_id: event.tool_id,
+      receipt_id: event.receipt_id,
       error_code: event.error_code || undefined,
     })),
   };

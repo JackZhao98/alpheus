@@ -15,6 +15,7 @@ import (
 
 	"alpheus/agentplatform/blob"
 	"alpheus/agentplatform/canonical"
+	"alpheus/agentplatform/capability"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputcontract"
 	"alpheus/agentplatform/outputcontract"
@@ -264,6 +265,82 @@ type CortexTraceEvent struct {
 	Stage      string `json:"stage"`
 	State      string `json:"state,omitempty"`
 	TargetRole string `json:"target_role,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolID     string `json:"tool_id,omitempty"`
+	ReceiptID  string `json:"receipt_id,omitempty"`
+}
+
+// WebFetchAuthorization is the only external-read Tool authorization enabled
+// in this slice.  Its URL came from immutable user input; callers cannot send
+// a free-form connector request to Research Gateway.
+type WebFetchAuthorization struct {
+	Status        string `json:"status"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolID        string `json:"tool_id"`
+	RequestDigest string `json:"request_digest"`
+	URL           string `json:"url"`
+	MaxChars      int    `json:"max_chars"`
+}
+
+type CortexWebFetchResult struct {
+	Receipt  capability.ToolReceipt      `json:"receipt"`
+	Evidence capability.WebFetchEvidence `json:"evidence"`
+}
+
+func (adapter *PostgresAdapter) AuthorizeWebFetch(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken, rawURL string, maxChars int) (WebFetchAuthorization, error) {
+	request := capability.WebFetchRequest{URL: strings.TrimSpace(rawURL), MaxChars: maxChars}
+	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 || leaseToken == "" || request.Validate() != nil {
+		return WebFetchAuthorization{}, fmt.Errorf("invalid Cortex web fetch authorization")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.authorize_cortex_web_fetch($1,$2,$3,$4::UUID,$5,$6)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken, request.URL, request.MaxChars).Scan(&raw)
+	})
+	if err != nil {
+		return WebFetchAuthorization{}, fmt.Errorf("authorize Cortex web fetch: %w", err)
+	}
+	var result WebFetchAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Status != "authorized" ||
+		result.ToolCallID == "" || result.ToolID != string(capability.ToolResearchWebFetch) || result.RequestDigest == "" ||
+		result.URL != request.URL || result.MaxChars != request.MaxChars {
+		return WebFetchAuthorization{}, fmt.Errorf("Cortex web fetch authorization was denied or mismatched")
+	}
+	return result, nil
+}
+
+// RecordWebFetchReceipt proves that the Research response is the exact
+// Research-owned durable receipt for the Control-owned intent.  No Worker can
+// manufacture a receipt from context text alone.
+func (adapter *PostgresAdapter) RecordWebFetchReceipt(ctx context.Context, result CortexWebFetchResult) error {
+	if adapter == nil || adapter.db == nil || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != result.Evidence.ToolCallID || result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID ||
+		result.Receipt.Evidence.RecordDigest == "" {
+		return fmt.Errorf("invalid Research web fetch receipt")
+	}
+	receiptRaw, err := json.Marshal(result.Receipt)
+	if err != nil {
+		return err
+	}
+	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var raw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_tool_receipt($1,$2::JSONB)::TEXT`,
+			result.Receipt.ToolCallID, string(receiptRaw)).Scan(&raw); err != nil {
+			return err
+		}
+		var response struct {
+			Status     string `json:"status"`
+			ReceiptID  string `json:"receipt_id"`
+			EvidenceID string `json:"evidence_id"`
+		}
+		if json.Unmarshal(raw, &response) != nil || response.Status != "recorded" || response.ReceiptID != result.Receipt.ReceiptID ||
+			response.EvidenceID != result.Evidence.EvidenceID {
+			return fmt.Errorf("Research receipt acknowledgement mismatch")
+		}
+		return nil
+	})
 }
 
 func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {

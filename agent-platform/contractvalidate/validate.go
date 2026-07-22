@@ -13,6 +13,7 @@ import (
 
 	"alpheus/agentplatform/blob"
 	"alpheus/agentplatform/canonical"
+	"alpheus/agentplatform/capability"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/delivery"
 	"alpheus/agentplatform/governance"
@@ -110,8 +111,14 @@ var runtimeTypes = map[string]func() validatable{
 	"turn":                       func() validatable { return &runtimecontract.Turn{} },
 }
 
+var capabilityTypes = map[string]func() validatable{
+	"tool_call_intent":   func() validatable { return &capability.ToolCallIntent{} },
+	"tool_receipt":       func() validatable { return &capability.ToolReceipt{} },
+	"web_fetch_evidence": func() validatable { return &capability.WebFetchEvidence{} },
+}
+
 func SupportedTypes() []string {
-	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+len(runtimeTypes)+1)
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+len(runtimeTypes)+len(capabilityTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
@@ -125,6 +132,9 @@ func SupportedTypes() []string {
 		values = append(values, name)
 	}
 	for name := range runtimeTypes {
+		values = append(values, name)
+	}
+	for name := range capabilityTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
@@ -178,6 +188,15 @@ func RuntimeTypes() []string {
 	return values
 }
 
+func CapabilityTypes() []string {
+	values := make([]string, 0, len(capabilityTypes))
+	for name := range capabilityTypes {
+		values = append(values, name)
+	}
+	sort.Strings(values)
+	return values
+}
+
 // Validate returns canonical JSON and its contract-domain digest.
 func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, maxContractBytes+1))
@@ -212,6 +231,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	}
 	if !ok {
 		factory, ok = runtimeTypes[contractType]
+	}
+	if !ok {
+		factory, ok = capabilityTypes[contractType]
 	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)

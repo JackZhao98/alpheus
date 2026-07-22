@@ -1,0 +1,3 @@
+-- Cortex Control may authorize a registered external-read Tool.  Research
+-- Gateway may execute that exact intent and write its own evidence/receipt.
+-- Workers receive neither connector credentials nor direct Research writes.

@@ -1,0 +1,12 @@
+{
+  "machines": {
+    "web_fetch_tool_call": {
+      "states": ["authorized", "receipt_succeeded", "unknown"],
+      "transitions": {
+        "authorized": ["receipt_succeeded", "unknown"],
+        "receipt_succeeded": [],
+        "unknown": []
+      }
+    }
+  }
+}

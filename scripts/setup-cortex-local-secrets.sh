@@ -18,11 +18,22 @@ if [ ! -s "$directory/activator-database-password" ]; then
     umask 077
     openssl rand -hex 32 >"$directory/activator-database-password"
 fi
+if [ ! -s "$directory/research-database-password" ]; then
+    umask 077
+    openssl rand -hex 32 >"$directory/research-database-password"
+fi
+if [ ! -s "$directory/research-tool-token" ]; then
+    umask 077
+    openssl rand -hex 32 >"$directory/research-tool-token"
+fi
 password=$(tr -d '\r\n' <"$directory/database-password")
 activator_password=$(tr -d '\r\n' <"$directory/activator-database-password")
+research_password=$(tr -d '\r\n' <"$directory/research-database-password")
 umask 077
 printf 'postgresql://cortex-control-1:%s@db:5432/alpheus?sslmode=disable\n' "$password" >"$directory/database-url"
 printf 'postgresql://cortex-activator-1:%s@db:5432/alpheus?sslmode=disable\n' "$activator_password" >"$directory/activator-database-url"
+printf 'postgresql://research-gateway-1:%s@db:5432/alpheus?sslmode=disable\n' "$research_password" >"$directory/research-database-url"
 chmod 600 "$directory/database-password" "$directory/database-url" "$directory/input-token" \
-    "$directory/activator-database-password" "$directory/activator-database-url"
+    "$directory/activator-database-password" "$directory/activator-database-url" \
+    "$directory/research-database-password" "$directory/research-database-url" "$directory/research-tool-token"
 printf 'Cortex local secrets are ready in %s\n' "$directory"

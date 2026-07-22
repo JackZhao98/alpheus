@@ -56,6 +56,13 @@ services:
     build: ./research-gateway
     environment:
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
+      CORTEX_RESEARCH_TOKEN_FILE: /run/secrets/cortex/research-tool-token
+      RESEARCH_DATABASE_URL_FILE: /run/secrets/cortex/research-database-url
+      RESEARCH_PRINCIPAL_ID: research-gateway-1
+    volumes:
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    depends_on:
+      cortex-research-login: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8300/health >/dev/null"]
       interval: 3s
@@ -90,6 +97,24 @@ services:
       - ./:/workspace:ro
       - ./.secrets/cortex:/run/secrets/cortex:ro
     entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-control-login.sh"]
+    depends_on:
+      agent-platform-migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  # Research Gateway receives its own NOINHERIT LOGIN.  Cortex can authorize
+  # one read-only Tool but cannot write Research evidence or receive connector
+  # credentials; the service identity below owns those durable records.
+  cortex-research-login:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      CORTEX_RESEARCH_DATABASE_PASSWORD_FILE: /run/secrets/cortex/research-database-password
+      CORTEX_RESEARCH_DATABASE_URL_FILE: /run/secrets/cortex/research-database-url
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-research-login.sh"]
     depends_on:
       agent-platform-migrate: { condition: service_completed_successfully }
     restart: "no"
@@ -145,6 +170,8 @@ services:
       CORTEX_DATABASE_URL_FILE: /run/secrets/cortex/database-url
       CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
       CORTEX_WORKER_CONTROL_TOKEN_FILE: /run/secrets/cortex/worker-control-token
+      CORTEX_RESEARCH_TOKEN_FILE: /run/secrets/cortex/research-tool-token
+      CORTEX_RESEARCH_URL: http://research-gateway:8300
       CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
       CORTEX_INPUT_ADDR: :8400
     ports: ["127.0.0.1:8400:8400"]
@@ -159,6 +186,7 @@ services:
     depends_on:
       cortex-control-login: { condition: service_completed_successfully }
       cortex-owner-policy-activate: { condition: service_completed_successfully }
+      cortex-research-login: { condition: service_completed_successfully }
 
   cortex-openai-secret-export:
     build: ./kernel

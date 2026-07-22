@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -42,6 +43,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	researchToken, err := loadSecretEnv("CORTEX_RESEARCH_TOKEN_FILE")
+	if err != nil {
+		return err
+	}
+	researchURL := strings.TrimRight(env("CORTEX_RESEARCH_URL", "http://research-gateway:8300"), "/")
+	researchHTTP := &http.Client{Timeout: 25 * time.Second}
 	store, err := blob.NewLocalStore(env("CORTEX_BLOB_ROOT", "/var/lib/alpheus/cortex-blobs"))
 	if err != nil {
 		return fmt.Errorf("open Cortex BlobStore: %w", err)
@@ -193,6 +200,52 @@ func run() error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded"})
 	})
+	mux.HandleFunc("POST /internal/v1/tool-calls/web-fetch", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string `json:"source_call_id"`
+			AttemptID       string `json:"attempt_id"`
+			LeaseGeneration int64  `json:"lease_generation"`
+			LeaseToken      string `json:"lease_token"`
+			URL             string `json:"url"`
+			MaxChars        int    `json:"max_chars"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid tool call", http.StatusBadRequest)
+			return
+		}
+		authorization, err := adapter.AuthorizeWebFetch(request.Context(), strings.TrimSpace(body.SourceCallID), strings.TrimSpace(body.AttemptID),
+			body.LeaseGeneration, strings.TrimSpace(body.LeaseToken), strings.TrimSpace(body.URL), body.MaxChars)
+		if err != nil {
+			log.Printf("Cortex web fetch authorization failed: %v", err)
+			http.Error(w, "tool authorization denied", http.StatusForbidden)
+			return
+		}
+		result, err := invokeResearchWebFetch(request.Context(), researchHTTP, researchURL, researchToken, authorization.ToolCallID)
+		if err != nil {
+			log.Printf("Research web fetch failed for %s: %v", authorization.ToolCallID, err)
+			http.Error(w, "research tool unavailable", http.StatusBadGateway)
+			return
+		}
+		if result.Receipt.ToolCallID != authorization.ToolCallID || string(result.Receipt.ToolID) != authorization.ToolID ||
+			result.Receipt.RequestDigest != authorization.RequestDigest || result.Evidence.ToolCallID != authorization.ToolCallID {
+			http.Error(w, "research tool response invalid", http.StatusBadGateway)
+			return
+		}
+		if err := adapter.RecordWebFetchReceipt(request.Context(), result); err != nil {
+			log.Printf("Cortex web fetch receipt recording failed: %v", err)
+			http.Error(w, "research receipt unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
 		Handler:           mux,
@@ -216,6 +269,35 @@ func validateModelOutput(schemas map[string][]byte, outputContractDigest string,
 		return outputcontract.Evidence{}, err
 	}
 	return evidence, nil
+}
+
+func invokeResearchWebFetch(ctx context.Context, client *http.Client, baseURL, token, toolCallID string) (inputgateway.CortexWebFetchResult, error) {
+	if client == nil || baseURL == "" || token == "" || toolCallID == "" {
+		return inputgateway.CortexWebFetchResult{}, fmt.Errorf("Research tool is unavailable")
+	}
+	body, _ := json.Marshal(map[string]string{"tool_call_id": toolCallID})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/v1/cortex-tools/web-fetch", bytes.NewReader(body))
+	if err != nil {
+		return inputgateway.CortexWebFetchResult{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return inputgateway.CortexWebFetchResult{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil || len(raw) == 0 || len(raw) >= 64<<10 || response.StatusCode != http.StatusOK {
+		return inputgateway.CortexWebFetchResult{}, fmt.Errorf("Research tool HTTP %d", response.StatusCode)
+	}
+	var result inputgateway.CortexWebFetchResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil {
+		return inputgateway.CortexWebFetchResult{}, fmt.Errorf("Research tool returned an invalid receipt")
+	}
+	return result, nil
 }
 
 func validBearer(request *http.Request, token string) bool {

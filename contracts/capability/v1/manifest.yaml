@@ -1,0 +1,28 @@
+{
+  "pack": "alpheus.capability",
+  "owner": "agent_control_and_research_gateway",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": ["tool_call_intent", "tool_receipt", "web_fetch_evidence"],
+  "commands": [],
+  "events": [],
+  "state_machines": ["web_fetch_tool_call"],
+  "assets": {
+    "schemas": ["schema/capability.schema.json"],
+    "state_machines": "state-machines/capability.yaml",
+    "permissions": "permissions/roles.sql",
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": ["golden/valid/tool_call_intent.json", "golden/valid/web_fetch_evidence.json", "golden/valid/tool_receipt.json"],
+    "invalid": ["golden/invalid/tool_call_private_url.json", "golden/invalid/receipt_wrong_owner.json"],
+    "digests": []
+  },
+  "effect_ceiling": "external_read",
+  "enabled_tools": ["research_web_fetch"],
+  "forbidden": ["external_mutation", "connector_credentials_in_cortex", "generic_http_request"]
+}

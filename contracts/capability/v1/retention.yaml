@@ -1,0 +1,7 @@
+{
+  "records": {
+    "tool_call_intent": {"minimum_retention": "365d", "immutable": true},
+    "web_fetch_evidence": {"minimum_retention": "365d", "immutable": true, "source_class": "untrusted"},
+    "tool_receipt": {"minimum_retention": "365d", "immutable": true}
+  }
+}

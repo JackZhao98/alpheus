@@ -8,6 +8,7 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 const (
@@ -59,14 +62,26 @@ type gateway struct {
 	braveBase   string
 	lookupIP    lookupIPFunc
 	dialContext dialContextFunc
+	cortexToken string
+	db          *sql.DB
+	principal   string
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	token := strings.TrimSpace(os.Getenv("KERNEL_TOKEN"))
 	if token == "" {
-		log.Fatal("KERNEL_TOKEN is required")
+		return fmt.Errorf("KERNEL_TOKEN is required")
 	}
 	g := newGateway(token)
+	if err := g.configureCortexTool(); err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -74,8 +89,9 @@ func main() {
 	mux.HandleFunc("POST /v1/robinhood/news", g.news)
 	mux.HandleFunc("POST /v1/web/search", g.webSearch)
 	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
+	mux.HandleFunc("POST /internal/v1/cortex-tools/web-fetch", g.cortexWebFetch)
 	log.Printf("research-gateway listening on :8300")
-	log.Fatal(http.ListenAndServe(":8300", mux))
+	return http.ListenAndServe(":8300", mux)
 }
 
 func (g *gateway) news(w http.ResponseWriter, r *http.Request) {

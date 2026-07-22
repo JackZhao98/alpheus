@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/capability/v1/schema/capability.schema.json",
+  "title": "Alpheus AP3 Tool Capability Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/ToolCallIntent"},
+    {"$ref": "#/$defs/WebFetchEvidence"},
+    {"$ref": "#/$defs/ToolReceipt"}
+  ],
+  "$defs": {
+    "Identifier": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u0020\\u007f]+$"},
+    "Digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "Timestamp": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "AuditActor": {"$ref": "https://alpheus.local/contracts/common/v1/schema/common.schema.json#/$defs/AuditActor"},
+    "RecordRef": {"$ref": "https://alpheus.local/contracts/common/v1/schema/common.schema.json#/$defs/RecordRef"},
+    "WebFetchRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["url", "max_chars"],
+      "properties": {
+        "url": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^https?://"},
+        "max_chars": {"type": "integer", "minimum": 1, "maximum": 12000}
+      }
+    },
+    "ToolCallIntent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "tool_call_id", "tool_id", "source_result", "request", "request_digest", "authorized_by", "authorized_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "tool_call_id": {"$ref": "#/$defs/Identifier"}, "tool_id": {"const": "research_web_fetch"},
+        "source_result": {"$ref": "#/$defs/RecordRef"}, "request": {"$ref": "#/$defs/WebFetchRequest"}, "request_digest": {"$ref": "#/$defs/Digest"},
+        "authorized_by": {"$ref": "#/$defs/AuditActor"}, "authorized_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "WebFetchEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "evidence_id", "tool_call_id", "source", "url", "content_type", "text", "truncated", "content_digest", "observed_at", "available_at", "archived_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "evidence_id": {"$ref": "#/$defs/Identifier"}, "tool_call_id": {"$ref": "#/$defs/Identifier"},
+        "source": {"const": "web-page-untrusted"}, "url": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^https?://"},
+        "title": {"type": "string", "maxLength": 1000}, "content_type": {"enum": ["text/html", "application/xhtml+xml", "text/plain", "application/json"]},
+        "text": {"type": "string", "minLength": 1, "maxLength": 12000}, "truncated": {"type": "boolean"}, "content_digest": {"$ref": "#/$defs/Digest"},
+        "observed_at": {"$ref": "#/$defs/Timestamp"}, "available_at": {"$ref": "#/$defs/Timestamp"}, "archived_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "ToolReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_revision", "receipt_id", "tool_call_id", "tool_id", "request_digest", "state", "evidence", "executor", "completed_at"],
+      "properties": {
+        "schema_revision": {"const": 1}, "receipt_id": {"$ref": "#/$defs/Identifier"}, "tool_call_id": {"$ref": "#/$defs/Identifier"},
+        "tool_id": {"const": "research_web_fetch"}, "request_digest": {"$ref": "#/$defs/Digest"}, "state": {"const": "succeeded"},
+        "evidence": {"$ref": "#/$defs/RecordRef"}, "executor": {"$ref": "#/$defs/AuditActor"}, "completed_at": {"$ref": "#/$defs/Timestamp"}
+      }
+    }
+  }
+}

@@ -159,13 +159,35 @@ than returning a fabricated array. On 2026-07-21, Run
 `intent_interpreter_completed → handoff_to_desk → decision_desk_completed`,
 with both Turns `result_committed` and the Run `succeeded`.
 
-This is deliberately narrower than the frozen target architecture: it is an
-in-Attempt Desk handoff, not a child Task/Session; Scout is not installed;
-there is no Cortex Tool capability, Research-Gateway invocation, browser use,
-or fabricated Tool receipt. The next module is the typed cross-plane Tool
-authorization/evidence/receipt path, followed by Scout/Research child-work
-admission. The UI no longer asks the user to choose a route; its compatibility
+This remains deliberately narrower than the frozen target architecture: it is
+an in-Attempt Desk handoff, not child Task/Session admission; Scout is not
+installed. The UI no longer asks the user to choose a route; its compatibility
 field is forced to `auto` and never enters the immutable UserRequest.
+
+The first AP3 cross-plane Tool slice is now deployed locally. It enables only
+one bounded external read: `research_web_fetch`, and only when a normal Desk
+handoff sees exactly one explicit public HTTP(S) URL in the immutable user
+text. Cortex Control owns the Tool-call intent, policy/budget charge and final
+receipt acknowledgement; Research Gateway owns connector execution, normalized
+untrusted web Evidence and the durable receipt. The Research login has no
+direct table-write grant and may call only its reviewed authorization/receipt
+functions. Workers never receive Research credentials and may include source
+text in the Desk prompt only after Control has matched the exact persisted
+Research receipt.
+
+Migrations `0023_cortex_web_fetch_tool` and
+`0024_cortex_tool_authorization_lease` add the immutable intent, evidence,
+receipt and acknowledgement records plus a live-lease fence for every
+idempotent authorization read. Run
+`120b598d-7f80-4a0b-993c-f34ebb177e55` completed the real sequence
+`intent_interpreter_completed → handoff_to_desk → tool_call_authorized →
+tool_receipt_succeeded → decision_desk_completed` against `https://example.com`;
+its answer names that source. Agent Lab trace now retains the Tool call, Tool
+identifier and receipt identifier so the page displays actual Tool evidence
+rather than a fabricated timeline. This is not a generic browser or search
+capability, not a raw-source archive, and not AP3 registry/activation
+completion. Next is the explicit interrupted-Tool reconciler, then a separate
+Scout/Research child-work admission slice.
 
 ## Current read-only Research Gateway slice
 
