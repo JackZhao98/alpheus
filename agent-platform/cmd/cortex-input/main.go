@@ -142,6 +142,20 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+	mux.HandleFunc("GET /v1/conversations/{id}", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		entries, err := adapter.ConversationHistory(request.Context(), strings.TrimSpace(request.PathValue("id")), subject.PrincipalID, "")
+		if err != nil {
+			http.Error(w, "conversation unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"conversation_id": strings.TrimSpace(request.PathValue("id")), "entries": entries})
+	})
 	mux.HandleFunc("POST /internal/v1/model-outputs", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

@@ -20,6 +20,10 @@
         <span class="badge">NO ORDERS</span>
       </div>
       <p class="muted">Team 模式先由 Scout 生成证据简报，再由 Decision Desk 汇总。此页面不能创建 operation 或下单。</p>
+      <div class="conversation-bar">
+        <p id="conversation-status" class="field-note">新对话：第一条消息会创建一个永久 Cortex Conversation。</p>
+        <button id="new-conversation" class="secondary" type="button">新对话</button>
+      </div>
       <form id="query-form">
         <div class="credential-row">
           <div><label for="openai-token">OpenAI API Token</label><p id="openai-status" class="field-note">检查配置中…</p></div>
@@ -64,6 +68,8 @@
         <textarea id="question" rows="5" maxlength="4000" autocomplete="off" spellcheck="false" required>现在的价格走势里，最值得进一步验证的是什么？</textarea>
         <button id="run" type="submit">Run Agent Query</button>
       </form>
+      <div class="result-head"><span>Conversation</span><strong id="conversation-count">0 EXCHANGES</strong></div>
+      <div id="conversation" class="conversation" aria-live="polite"><p class="field-note">后续问题会沿用同一个 Cortex Conversation；历史来自已持久化的 UserRequest 和回答 Artifact。</p></div>
       <div class="result-head"><span>结果</span><strong id="status">READY</strong></div>
       <pre id="result">提交一个问题开始测试。</pre>
       <div class="result-head"><span>运行 Trace（调试）</span><strong id="trace-status">NO JOB</strong></div>

@@ -15,6 +15,62 @@ function formatError(error) {
   return error?.code ? `[${error.code}] ${error.message}` : error.message;
 }
 
+let currentConversation = null;
+let conversationEntries = [];
+
+function renderConversation() {
+  const target = byId("conversation");
+  const count = conversationEntries.length;
+  byId("conversation-count").textContent = `${count} ${count === 1 ? "EXCHANGE" : "EXCHANGES"}`;
+  if (!count) {
+    target.replaceChildren(Object.assign(document.createElement("p"), {
+      className: "field-note",
+      textContent: "后续问题会沿用同一个 Cortex Conversation；历史来自已持久化的 UserRequest 和回答 Artifact。",
+    }));
+    return;
+  }
+  const nodes = [];
+  for (const entry of conversationEntries) {
+    for (const [role, text] of [["user", entry.user_text], ["assistant", entry.assistant_text]]) {
+      const message = document.createElement("div");
+      message.className = `conversation-message ${role}`;
+      const label = document.createElement("strong");
+      label.textContent = role === "user" ? "YOU" : "CORTEX";
+      const body = document.createElement("div");
+      body.textContent = text;
+      message.append(label, body);
+      nodes.push(message);
+    }
+  }
+  target.replaceChildren(...nodes);
+  target.scrollTop = target.scrollHeight;
+}
+
+function setConversation(conversation) {
+  currentConversation = conversation;
+  const status = byId("conversation-status");
+  if (!conversation) {
+    status.textContent = "新对话：第一条消息会创建一个永久 Cortex Conversation。";
+    return;
+  }
+  status.textContent = `当前 Conversation：${conversation.id.slice(-12)} · 后续消息会带入最近已确认的上下文。`;
+  const url = new URL(window.location.href);
+  url.searchParams.set("conversation", conversation.id);
+  url.searchParams.set("conversation_created_at", conversation.createdAt);
+  history.replaceState(null, "", url);
+}
+
+async function restoreConversation() {
+  const url = new URL(window.location.href);
+  const id = url.searchParams.get("conversation");
+  const createdAt = url.searchParams.get("conversation_created_at");
+  if (!id || !createdAt) return;
+  const data = await request(`/agent/cortex-conversations/${encodeURIComponent(id)}`);
+  conversationEntries = Array.isArray(data?.entries) ? data.entries : [];
+  setConversation({id, createdAt});
+  renderConversation();
+}
+
 function renderTrace(job) {
   const trace = Array.isArray(job?.trace) ? job.trace : [];
   byId("trace-status").textContent = job?.id
@@ -48,10 +104,23 @@ async function restoreSession() {
     await request("/agent/auth/session");
     await refreshCredentialStatus();
 	  await refreshRobinhoodConnection();
+    await restoreConversation();
   } catch (error) {
     byId("query-error").textContent = formatError(error);
   }
 }
+
+byId("new-conversation").addEventListener("click", () => {
+  currentConversation = null;
+  conversationEntries = [];
+  const url = new URL(window.location.href);
+  url.searchParams.delete("conversation");
+  url.searchParams.delete("conversation_created_at");
+  history.replaceState(null, "", url);
+  setConversation(null);
+  renderConversation();
+  byId("question").focus();
+});
 
 function setRobinhoodStatus(message, connectLabel = "Connect Robinhood") {
   byId("robinhood-status").textContent = message;
@@ -258,12 +327,21 @@ byId("query-form").addEventListener("submit", async (event) => {
   try {
     let job = await request("/agent/cortex-requests", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({workflow:"auto", symbol, query})
+      body:JSON.stringify({workflow:"auto", symbol, query,
+        conversation_id: currentConversation?.id,
+        conversation_created_at: currentConversation?.createdAt})
     });
+    if (!job.conversation_id || !job.conversation_created_at) throw new Error("Cortex conversation was not accepted");
+    setConversation({id: job.conversation_id, createdAt: job.conversation_created_at});
     job = await waitForAgentQuery(job);
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");
     const result = job.result;
     byId("result").textContent = JSON.stringify(result, null, 2);
+    if (typeof result?.answer === "string" && result.answer.trim()) {
+      conversationEntries.push({user_text: `Symbol: ${symbol}\n\n${query}`, assistant_text: result.answer});
+      conversationEntries = conversationEntries.slice(-6);
+      renderConversation();
+    }
     if (result.workflow === "ask_user") {
       byId("status").textContent = "NEEDS YOUR INPUT · NO OPERATION";
       byId("question").value = `${query}\n\n补充回答：`;

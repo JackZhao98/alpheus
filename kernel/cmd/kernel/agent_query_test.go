@@ -265,3 +265,16 @@ func TestAgentQueryRejectsBrowserSuppliedCredential(t *testing.T) {
 		t.Fatalf("missing stable error code: %s", response.Body.String())
 	}
 }
+
+func TestCortexConversationIDRejectsURLSyntax(t *testing.T) {
+	for _, value := range []string{"agent-lab-123", "Conversation_01"} {
+		if !validCortexConversationID(value) {
+			t.Fatalf("valid conversation id rejected: %q", value)
+		}
+	}
+	for _, value := range []string{"", "agent-lab/other", "agent-lab?x=1", "agent lab"} {
+		if validCortexConversationID(value) {
+			t.Fatalf("invalid conversation id accepted: %q", value)
+		}
+	}
+}

@@ -27,9 +27,17 @@ type agentQueryInput struct {
 }
 
 type agentQueryRequest struct {
-	Workflow string `json:"workflow"`
-	Symbol   string `json:"symbol"`
-	Query    string `json:"query"`
+	Workflow              string `json:"workflow"`
+	Symbol                string `json:"symbol"`
+	Query                 string `json:"query"`
+	ConversationID        string `json:"conversation_id,omitempty"`
+	ConversationCreatedAt string `json:"conversation_created_at,omitempty"`
+}
+
+type cortexSubmission struct {
+	RunID                 string `json:"run_id"`
+	ConversationID        string `json:"conversation_id"`
+	ConversationCreatedAt string `json:"conversation_created_at"`
 }
 
 func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
@@ -47,12 +55,13 @@ func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
 		writeAgentQueryError(w, http.StatusBadRequest, "cortex_input_invalid", "symbol and query are required")
 		return
 	}
-	runID, code := s.submitCortexRequest(r.Context(), input)
+	accepted, code := s.submitCortexRequest(r.Context(), input)
 	if code != "" {
 		writeAgentQueryError(w, http.StatusServiceUnavailable, code, "Cortex request was not accepted")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": runID, "status": "running", "workflow": input.Workflow, "symbol": input.Symbol, "trace": []any{}})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": accepted.RunID, "status": "running", "workflow": input.Workflow, "symbol": input.Symbol,
+		"conversation_id": accepted.ConversationID, "conversation_created_at": accepted.ConversationCreatedAt, "trace": []any{}})
 }
 
 func (s *server) getCortexRun(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +82,20 @@ func (s *server) getCortexRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *server) getCortexConversation(w http.ResponseWriter, r *http.Request) {
+	conversationID := strings.TrimSpace(r.PathValue("id"))
+	if !validCortexConversationID(conversationID) {
+		writeAgentQueryError(w, http.StatusBadRequest, "cortex_conversation_invalid", "Conversation is invalid")
+		return
+	}
+	entries, code := s.fetchCortexConversation(r.Context(), conversationID)
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable, code, "Cortex conversation is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversation_id": conversationID, "entries": entries})
+}
+
 func (s *server) cortexToken() (string, error) {
 	raw, err := os.ReadFile(s.cortexTokenFile)
 	if err != nil {
@@ -84,14 +107,32 @@ func (s *server) cortexToken() (string, error) {
 	}
 	return token, nil
 }
-func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (string, string) {
+func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (cortexSubmission, string) {
 	token, err := s.cortexToken()
 	if err != nil {
-		return "", "cortex_credential_unavailable"
+		return cortexSubmission{}, "cortex_credential_unavailable"
 	}
 	id := store.NewID()
 	now := time.Now().UTC()
-	body := map[string]any{"conversation_id": "agent-lab-" + id, "conversation_created_at": now, "request_id": id, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query), "idempotency_key": "agent-lab-" + id, "causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
+	conversationID := strings.TrimSpace(input.ConversationID)
+	conversationCreatedAt := now
+	kind := "new_request"
+	if conversationID != "" || strings.TrimSpace(input.ConversationCreatedAt) != "" {
+		if !validCortexConversationID(conversationID) {
+			return cortexSubmission{}, "cortex_conversation_invalid"
+		}
+		parsed, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ConversationCreatedAt))
+		if parseErr != nil || parsed.Location() != time.UTC || parsed.After(now) {
+			return cortexSubmission{}, "cortex_conversation_invalid"
+		}
+		conversationCreatedAt = parsed
+		kind = "continuation"
+	} else {
+		conversationID = "agent-lab-" + id
+	}
+	body := map[string]any{"conversation_id": conversationID, "conversation_created_at": conversationCreatedAt, "request_id": id, "kind": kind,
+		"text": fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query), "idempotency_key": "agent-lab-" + id,
+		"causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cortexURL, "/")+"/v1/user-requests", bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -102,20 +143,24 @@ func (s *server) submitCortexRequest(ctx context.Context, input agentQueryReques
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "cortex_unavailable"
+		return cortexSubmission{}, "cortex_unavailable"
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
 	if resp.StatusCode != http.StatusAccepted {
-		return "", "cortex_rejected"
+		return cortexSubmission{}, "cortex_rejected"
 	}
 	var accepted struct {
-		RunID string `json:"run_id"`
+		RunID                 string    `json:"run_id"`
+		ConversationID        string    `json:"conversation_id"`
+		ConversationCreatedAt time.Time `json:"conversation_created_at"`
 	}
-	if json.Unmarshal(data, &accepted) != nil || accepted.RunID == "" {
-		return "", "cortex_response_invalid"
+	if json.Unmarshal(data, &accepted) != nil || accepted.RunID == "" || accepted.ConversationID != conversationID || accepted.ConversationCreatedAt.IsZero() ||
+		!accepted.ConversationCreatedAt.Equal(conversationCreatedAt) {
+		return cortexSubmission{}, "cortex_response_invalid"
 	}
-	return accepted.RunID, ""
+	return cortexSubmission{RunID: accepted.RunID, ConversationID: accepted.ConversationID,
+		ConversationCreatedAt: accepted.ConversationCreatedAt.UTC().Format(time.RFC3339Nano)}, ""
 }
 func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, string, []any, string) {
 	token, err := s.cortexToken()
@@ -146,6 +191,48 @@ func (s *server) fetchCortexRun(ctx context.Context, runID string) (string, stri
 		return "", "", nil, "cortex_response_invalid"
 	}
 	return result.State, result.Text, result.Trace, ""
+}
+
+func (s *server) fetchCortexConversation(ctx context.Context, conversationID string) ([]any, string) {
+	token, err := s.cortexToken()
+	if err != nil {
+		return nil, "cortex_credential_unavailable"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.cortexURL, "/")+"/v1/conversations/"+conversationID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "cortex_unavailable"
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxAgentQueryResponseBytes))
+	if resp.StatusCode != http.StatusOK {
+		return nil, "cortex_conversation_unavailable"
+	}
+	var result struct {
+		ConversationID string `json:"conversation_id"`
+		Entries        []any  `json:"entries"`
+	}
+	if json.Unmarshal(data, &result) != nil || result.ConversationID != conversationID || len(result.Entries) > 6 {
+		return nil, "cortex_response_invalid"
+	}
+	return result.Entries, ""
+}
+
+func validCortexConversationID(value string) bool {
+	if value == "" || len(value) > 200 || value != strings.TrimSpace(value) {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // postAgentQuery creates a durable, non-trading MVP job. The encrypted model

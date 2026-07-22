@@ -189,6 +189,20 @@ capability, not a raw-source archive, and not AP3 registry/activation
 completion. Next is the explicit interrupted-Tool reconciler, then a separate
 Scout/Research child-work admission slice.
 
+The first persistent, turn-by-turn Cortex Conversation slice is also deployed
+locally. Agent Lab now retains one Cortex Conversation identifier in the page
+URL (never a prompt or secret), reuses it for a `continuation` request, and
+can reload its transcript from the authenticated Cortex read model. Control
+does not accept browser-supplied history: it binds each immutable user-input
+Blob and reads at most six completed UserRequest/Artifact pairs from the same
+subject-bound Conversation. The resulting, size-bounded exchange list is
+sealed into the next Session's context manifest, which the Worker reads as
+record data rather than instructions. Run
+`f98c3e00-2a7d-49a2-bddf-c2a1491ca57a` answered `HORIZON-37` from the prior
+persisted exchange, and the conversation read endpoint returned both durable
+turns. This is bounded context continuity, not an unbounded transcript,
+memory system, or a mechanism for a prior message to grant new authority.
+
 ## Current read-only Research Gateway slice
 
 Commit `2d6aa00` adds the first narrowly typed `research-gateway` connector.

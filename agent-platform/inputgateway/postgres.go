@@ -27,6 +27,9 @@ const (
 	maxRawInputBytes     = 1 << 20
 	stageTTLSeconds      = 300
 	controlJSONMediaType = "application/json"
+	maxConversationTurns = 6
+	maxConversationBytes = 24 << 10
+	maxConversationItem  = 8 << 10
 )
 
 // PostgresAdapter connects the existing bounded local BlobStore to the AP0
@@ -101,6 +104,14 @@ func (adapter *PostgresAdapter) CommitControlJSON(ctx context.Context, recordTyp
 // PrepareRootSession installs immutable execution/context inputs and grants the
 // configured Worker read access before the Task becomes discoverable.
 func (adapter *PostgresAdapter) PrepareRootSession(ctx context.Context, admission Admission, run RunAdmission) error {
+	if err := adapter.bindConversationRaw(ctx, admission.Command.Request); err != nil {
+		return fmt.Errorf("bind Conversation raw input: %w", err)
+	}
+	history, err := adapter.ConversationHistory(ctx, admission.Command.Conversation.ConversationID,
+		admission.Command.Request.Subject.PrincipalID, admission.Command.Request.RequestID)
+	if err != nil {
+		return fmt.Errorf("read Conversation history: %w", err)
+	}
 	worker := "cortex-worker-1"
 	executionValue := map[string]any{"schema_revision": 1, "task_id": run.RootTaskID,
 		"worker_principal_id": worker, "provider": "openai", "model": "gpt-5.6-sol"}
@@ -110,7 +121,8 @@ func (adapter *PostgresAdapter) PrepareRootSession(ctx context.Context, admissio
 		return fmt.Errorf("commit execution binding: %w", err)
 	}
 	contextValue := map[string]any{"schema_revision": 1, "request_id": admission.Command.Request.RequestID,
-		"raw_input": admission.Blob}
+		"conversation_id": admission.Command.Conversation.ConversationID, "raw_input": admission.Blob,
+		"conversation": map[string]any{"schema_revision": 1, "entries": history}}
 	contextRef, err := adapter.CommitControlJSON(ctx, "context_manifest", admission.Command.Request.RequestID,
 		"agent-platform.contract.context_manifest.v1", contextValue)
 	if err != nil {
@@ -243,6 +255,129 @@ func (adapter *PostgresAdapter) SubmitUserRequest(ctx context.Context, command i
 		return fmt.Errorf("submit immutable user request was denied or mismatched")
 	}
 	return nil
+}
+
+// ConversationEntry is a bounded, immutable exchange that Control has read
+// from the Conversation's persisted UserRequest and Artifact records. It is
+// context data, not a prompt supplied by the browser.
+type ConversationEntry struct {
+	RequestID     string `json:"request_id"`
+	Kind          string `json:"kind"`
+	CreatedAt     string `json:"created_at"`
+	RunID         string `json:"run_id"`
+	UserText      string `json:"user_text"`
+	AssistantText string `json:"assistant_text"`
+}
+
+type storedConversationEntry struct {
+	RequestID string              `json:"request_id"`
+	Kind      string              `json:"kind"`
+	CreatedAt string              `json:"created_at"`
+	Request   contracts.RecordRef `json:"request"`
+	RawInput  blob.BlobRef        `json:"raw_input"`
+	RunID     string              `json:"run_id"`
+	Artifact  contracts.RecordRef `json:"artifact"`
+	Response  blob.BlobRef        `json:"response"`
+}
+
+func (adapter *PostgresAdapter) bindConversationRaw(ctx context.Context, request inputcontract.UserRequest) error {
+	if adapter == nil || request.Validate() != nil {
+		return fmt.Errorf("invalid Conversation raw binding")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.bind_cortex_conversation_raw($1)::TEXT`, request.RequestID).Scan(&raw)
+	}); err != nil {
+		return err
+	}
+	var result struct {
+		Status    string `json:"status"`
+		BindingID string `json:"binding_id"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.Status != "bound" || result.BindingID != conversationRawBinding(request.RequestID) {
+		return fmt.Errorf("Conversation raw binding was denied or mismatched")
+	}
+	return nil
+}
+
+// ConversationHistory is the only Cortex read model used to construct a
+// follow-up turn. It returns at most six completed exchanges and verifies each
+// immutable BlobRef through a durable Control-owned binding before exposing
+// its text to a Worker or the authenticated web projection.
+func (adapter *PostgresAdapter) ConversationHistory(ctx context.Context, conversationID, subjectID, excludeRequestID string) ([]ConversationEntry, error) {
+	if adapter == nil || adapter.db == nil || conversationID == "" || subjectID == "" {
+		return nil, fmt.Errorf("invalid Conversation history request")
+	}
+	var excluded any
+	if excludeRequestID != "" {
+		excluded = excludeRequestID
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.get_cortex_conversation_history($1,$2,$3)::TEXT`,
+			conversationID, subjectID, excluded).Scan(&raw)
+	}); err != nil {
+		return nil, err
+	}
+	var stored []storedConversationEntry
+	if len(raw) == 0 || json.Unmarshal(raw, &stored) != nil || len(stored) > maxConversationTurns {
+		return nil, fmt.Errorf("invalid Conversation history response")
+	}
+	entries := make([]ConversationEntry, 0, len(stored))
+	used := 0
+	for _, item := range stored {
+		if item.RequestID == "" || item.RequestID == excludeRequestID || item.Kind == "" || item.CreatedAt == "" || item.RunID == "" ||
+			item.Request.Validate() != nil || item.Request.Owner != contracts.OwnerAgentControl || item.Request.RecordType != "user_request" || item.Request.RecordID != item.RequestID ||
+			item.RawInput.Validate() != nil || item.Artifact.Validate() != nil || item.Artifact.Owner != contracts.OwnerAgentControl || item.Artifact.RecordType != "artifact" ||
+			item.Response.Validate() != nil || item.RawInput.SizeBytes > maxConversationItem || item.Response.SizeBytes > maxConversationItem {
+			return nil, fmt.Errorf("invalid Conversation history item")
+		}
+		userRaw, err := adapter.readConversationBlob(ctx, item.RawInput, conversationRawBinding(item.RequestID), item.Request)
+		if err != nil {
+			return nil, err
+		}
+		assistantRaw, err := adapter.readConversationBlob(ctx, item.Response, artifactBinding(item.Artifact.RecordID, item.Response.BlobID), item.Artifact)
+		if err != nil {
+			return nil, err
+		}
+		var assistant struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(assistantRaw, &assistant) != nil || strings.TrimSpace(string(userRaw)) == "" || strings.TrimSpace(assistant.Text) == "" {
+			return nil, fmt.Errorf("invalid Conversation history text")
+		}
+		used += len(userRaw) + len(assistantRaw)
+		if used > maxConversationBytes {
+			return nil, fmt.Errorf("Conversation history exceeds its fixed context limit")
+		}
+		entries = append(entries, ConversationEntry{RequestID: item.RequestID, Kind: item.Kind, CreatedAt: item.CreatedAt,
+			RunID: item.RunID, UserText: string(userRaw), AssistantText: assistant.Text})
+	}
+	return entries, nil
+}
+
+func (adapter *PostgresAdapter) readConversationBlob(ctx context.Context, ref blob.BlobRef, bindingID string, owner contracts.RecordRef) ([]byte, error) {
+	if ref.Validate() != nil || owner.Validate() != nil || bindingID == "" {
+		return nil, fmt.Errorf("invalid Conversation Blob read")
+	}
+	read, err := adapter.local.OpenVerified(ctx, blob.ReadRequest{PrincipalID: adapter.principal, BindingID: bindingID,
+		BlobID: ref.BlobID, OwningReference: owner}, adapter)
+	if err != nil {
+		return nil, err
+	}
+	defer read.Close()
+	data, err := io.ReadAll(io.LimitReader(read, ref.SizeBytes+1))
+	if err != nil || int64(len(data)) != ref.SizeBytes {
+		return nil, fmt.Errorf("Conversation Blob read failed")
+	}
+	return data, nil
+}
+
+func conversationRawBinding(requestID string) string {
+	return "cortex-conversation:" + requestID + ":raw"
+}
+func artifactBinding(artifactID, blobID string) string {
+	return "artifact:" + artifactID + ":blob:" + blobID
 }
 
 type RunAdmission struct {
