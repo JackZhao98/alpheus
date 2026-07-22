@@ -195,7 +195,7 @@ func (s *server) captureProviderSnapshotFrom(ctx context.Context, purpose string
 	if err != nil || accountID == "" {
 		return nil, fmt.Errorf("provider account identity unavailable")
 	}
-	if expected := strings.TrimSpace(s.mode.LiveAccountID); expected != "" && accountID != expected {
+	if expected := strings.TrimSpace(s.boundRobinhoodAccountID()); expected != "" && accountID != expected {
 		return nil, fmt.Errorf("provider account binding mismatch")
 	}
 

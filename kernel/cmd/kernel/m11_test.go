@@ -114,7 +114,7 @@ func m11Server(cap string) (*server, *memoryStore, *broker.Fake) {
 	st.liveCanary.CleanDaysBeforeRaise = 3
 	return &server{
 		mode: protectedMode(config.ModeLive), limits: limits,
-		broker: venue, store: st,
+		broker: venue, store: st, robinhoodAccountID: "fake-account",
 	}, st, venue
 }
 
@@ -871,7 +871,7 @@ func TestHaltReportsPreCutSentAttempt(t *testing.T) {
 	}
 	st.mu.Lock()
 	prepared := st.attempts[claimed.ID]
-	prepared.ProviderAccountID = s.mode.LiveAccountID
+	prepared.ProviderAccountID = s.boundRobinhoodAccountID()
 	prepared.ProviderIntent = json.RawMessage(`{"kind":"equity"}`)
 	prepared.IntentFingerprint = make([]byte, sha256.Size)
 	st.attempts[claimed.ID] = prepared

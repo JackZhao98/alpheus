@@ -5,7 +5,7 @@ import "testing"
 func validNonSim(mode string) ModeConfig {
 	return ModeConfig{
 		TradingMode: mode, RuntimeToken: "runtime", AdminToken: "admin",
-		KernelToken: "kernel", LiveTradingEnabled: true, LiveAccountID: "account",
+		KernelToken: "kernel", LiveTradingEnabled: true, LiveAccountID: "test-account",
 	}
 }
 
@@ -15,9 +15,8 @@ func TestModeConfigFailClosed(t *testing.T) {
 		cfg  ModeConfig
 	}{
 		{"unknown mode", ModeConfig{TradingMode: "paper"}},
-		{"live missing admin", ModeConfig{TradingMode: ModeLive, RuntimeToken: "runtime", KernelToken: "kernel", LiveTradingEnabled: true, LiveAccountID: "account"}},
+		{"live missing admin", ModeConfig{TradingMode: ModeLive, RuntimeToken: "runtime", KernelToken: "kernel", LiveTradingEnabled: true}},
 		{"live disabled", func() ModeConfig { c := validNonSim(ModeLive); c.LiveTradingEnabled = false; return c }()},
-		{"live missing account", func() ModeConfig { c := validNonSim(ModeLive); c.LiveAccountID = ""; return c }()},
 		{"tokens overlap", func() ModeConfig { c := validNonSim(ModeShadow); c.AdminToken = c.RuntimeToken; return c }()},
 		{"agent password without key", ModeConfig{TradingMode: ModeSim, AgentWebPassword: "long-enough-password"}},
 		{"agent password too short", ModeConfig{TradingMode: ModeSim, AgentWebPassword: "short", AgentWebSessionKey: "12345678901234567890123456789012"}},

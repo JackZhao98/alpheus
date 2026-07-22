@@ -22,7 +22,7 @@ type Robinhood struct {
 
 func NewRobinhood(caller rhmcp.Caller, accountID string) (*Robinhood, error) {
 	if caller == nil || strings.TrimSpace(accountID) == "" {
-		return nil, fmt.Errorf("Robinhood account provider requires caller and LIVE_ACCOUNT_ID")
+		return nil, fmt.Errorf("Robinhood account provider requires caller and explicit account binding")
 	}
 	return &Robinhood{caller: caller, accountID: strings.TrimSpace(accountID)}, nil
 }

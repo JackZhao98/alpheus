@@ -103,6 +103,8 @@ type memoryStore struct {
 	agentQueryJobs           map[string]store.AgentQueryJob
 	agentQueryTraceSequence  int64
 	agentSecrets             map[string][]byte
+	robinhoodOAuthFlows      map[string]store.RobinhoodOAuthFlow
+	robinhoodOAuthConsumed   map[string]bool
 }
 
 func newMemoryStore() *memoryStore {
@@ -148,6 +150,8 @@ func newMemoryStore() *memoryStore {
 		controlExternalFilled:    map[string]units.Qty{},
 		agentQueryJobs:           map[string]store.AgentQueryJob{},
 		agentSecrets:             map[string][]byte{},
+		robinhoodOAuthFlows:      map[string]store.RobinhoodOAuthFlow{},
+		robinhoodOAuthConsumed:   map[string]bool{},
 		eventPayloads:            map[string][]any{},
 		dayOpenEquity:            map[string]units.Micros{},
 		realizedPnL:              map[string]units.Micros{},
@@ -2347,6 +2351,32 @@ func (m *memoryStore) ListAgentSecretNames() ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func (m *memoryStore) CreateRobinhoodOAuthFlow(flow store.RobinhoodOAuthFlow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.robinhoodOAuthFlows[flow.StateDigest] = flow
+	return nil
+}
+
+func (m *memoryStore) ConsumeRobinhoodOAuthFlow(stateDigest string) (*store.RobinhoodOAuthFlow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	flow, ok := m.robinhoodOAuthFlows[stateDigest]
+	if !ok || m.robinhoodOAuthConsumed[stateDigest] || !flow.ExpiresAt.After(time.Now().UTC()) {
+		return nil, nil
+	}
+	m.robinhoodOAuthConsumed[stateDigest] = true
+	flow.VerifierCiphertext = append([]byte(nil), flow.VerifierCiphertext...)
+	return &flow, nil
+}
+
+func (m *memoryStore) ActivateM3A(_ store.M3AActivationSnapshot) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.m3aActive = true
+	return nil
 }
 
 func (m *memoryStore) LoadGlobalHalt() (bool, string, error) {

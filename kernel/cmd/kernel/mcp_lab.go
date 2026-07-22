@@ -207,19 +207,25 @@ func sanitizeMCPValue(key string, value any) any {
 }
 
 func (s *server) getMCPReadTools(w http.ResponseWriter, _ *http.Request) {
-	if s.mcpLab == nil {
+	s.providerMu.RLock()
+	lab := s.mcpLab
+	s.providerMu.RUnlock()
+	if lab == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live MCP lab unavailable"})
 		return
 	}
-	tools := s.mcpLab.catalog(time.Now().UTC())
+	tools := lab.catalog(time.Now().UTC())
 	writeJSON(w, http.StatusOK, map[string]any{
-		"source": "robinhood-mcp", "account": maskedAccountID(s.mcpLab.accountID),
+		"source": "robinhood-mcp", "account": maskedAccountID(lab.accountID),
 		"safe_tools": len(tools), "blocked_mutations": 15, "tools": tools,
 	})
 }
 
 func (s *server) postMCPReadQuery(w http.ResponseWriter, r *http.Request) {
-	if s.mcpLab == nil {
+	s.providerMu.RLock()
+	lab := s.mcpLab
+	s.providerMu.RUnlock()
+	if lab == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live MCP lab unavailable"})
 		return
 	}
@@ -239,7 +245,7 @@ func (s *server) postMCPReadQuery(w http.ResponseWriter, r *http.Request) {
 		input.Args = map[string]any{}
 	}
 	started := time.Now()
-	result, err := s.mcpLab.query(r.Context(), input.Tool, input.Args)
+	result, err := lab.query(r.Context(), input.Tool, input.Args)
 	if err != nil {
 		if strings.Contains(err.Error(), "argument") || strings.Contains(err.Error(), "account_number") {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -252,7 +258,7 @@ func (s *server) postMCPReadQuery(w http.ResponseWriter, r *http.Request) {
 		s.store.Event("mcp_read_query", map[string]string{"tool": input.Tool, "subject": authenticatedSubject(r)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"tool": input.Tool, "source": "robinhood-mcp", "account": maskedAccountID(s.mcpLab.accountID),
+		"tool": input.Tool, "source": "robinhood-mcp", "account": maskedAccountID(lab.accountID),
 		"duration_ms": time.Since(started).Milliseconds(), "result": result,
 	})
 }

@@ -121,7 +121,7 @@ func (s *server) assertLiveAccountBinding(ctx context.Context, operationID strin
 	if err != nil {
 		reason = "resolution_failed"
 	}
-	if err == nil && actual == s.mode.LiveAccountID {
+	if err == nil && actual != "" && actual == s.boundRobinhoodAccountID() {
 		return nil
 	}
 	if eventErr := s.store.InsertEvent("account_binding_violation", map[string]string{

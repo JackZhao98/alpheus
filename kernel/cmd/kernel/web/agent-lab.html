@@ -45,6 +45,18 @@
         </div>
         <input id="robinhood-research-token" type="file" accept="application/json,.json">
         <p class="field-note">选择 robinhood-cli 的 credentials.json。浏览器读取后直接加密写入数据库；文件内容不进入 job、日志或浏览器存储。</p>
+        <div class="credential-row">
+          <div><label>Robinhood Trading</label><p id="robinhood-status" class="field-note">检查连接状态中…</p></div>
+          <button id="connect-robinhood" class="secondary" type="button">Connect Robinhood</button>
+        </div>
+        <p class="field-note">通过 Robinhood 授权页完成连接。回调、访问令牌、刷新令牌及你明确选择的账户均以 AES-256-GCM 密文写入数据库；不使用环境变量或浏览器存储。此页面不会自动选择账户。</p>
+        <div id="robinhood-account-picker" class="credential-row" hidden>
+          <div><label for="robinhood-account">选择 Agentic Trading 账户</label><p class="field-note">只显示可用的活跃 Agentic 账户。选择后才会启用只读账户数据。</p></div>
+          <div>
+            <select id="robinhood-account" aria-label="Robinhood account"></select>
+            <button id="bind-robinhood" class="secondary" type="button">确认账户</button>
+          </div>
+        </div>
         <p class="field-note">由 Cortex 根据请求自行决定是否交接给已安装的专业角色。</p>
         <label for="symbol">股票代码</label>
         <input id="symbol" value="SOFI" maxlength="16" autocomplete="off" spellcheck="false" required>

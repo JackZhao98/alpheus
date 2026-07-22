@@ -44,9 +44,52 @@ async function restoreSession() {
   try {
     await request("/agent/auth/session");
     await refreshCredentialStatus();
+	  await refreshRobinhoodConnection();
   } catch (error) {
     byId("query-error").textContent = formatError(error);
   }
+}
+
+function setRobinhoodStatus(message, connectLabel = "Connect Robinhood") {
+  byId("robinhood-status").textContent = message;
+  byId("connect-robinhood").textContent = connectLabel;
+}
+
+async function refreshRobinhoodConnection() {
+  const picker = byId("robinhood-account-picker");
+  picker.hidden = true;
+  const connection = await request("/agent/robinhood/connection");
+  if (!connection?.enabled) {
+    setRobinhoodStatus("当前 Kernel 未启用 Robinhood。", "Robinhood unavailable");
+    byId("connect-robinhood").disabled = true;
+    return;
+  }
+  byId("connect-robinhood").disabled = false;
+  if (connection.status === "disconnected") {
+    setRobinhoodStatus("尚未连接。", "Connect Robinhood");
+    return;
+  }
+  if (connection.status === "connected") {
+    setRobinhoodStatus(`已连接并绑定 ${connection.account || "账户"}；只读数据已就绪。`, "Reconnect Robinhood");
+    return;
+  }
+  setRobinhoodStatus("已授权；请明确选择一个活跃的 Agentic Trading 账户。", "Reconnect Robinhood");
+  const accounts = await request("/agent/robinhood/accounts");
+  const eligible = (accounts?.accounts || []).filter((account) =>
+    account.agentic_allowed && account.state === "active" && !account.deactivated && !account.permanently_deactivated
+  );
+  if (!eligible.length) {
+    byId("robinhood-status").textContent = "已授权，但未发现可用的活跃 Agentic Trading 账户。";
+    return;
+  }
+  const select = byId("robinhood-account");
+  select.replaceChildren(...eligible.map((account) => {
+    const option = document.createElement("option");
+    option.value = account.masked_account;
+    option.textContent = `${account.masked_account}${account.nickname ? ` · ${account.nickname}` : ""} · ${account.brokerage_account_type}`;
+    return option;
+  }));
+  picker.hidden = false;
 }
 
 async function refreshCredentialStatus() {
@@ -148,6 +191,36 @@ byId("save-robinhood-research").addEventListener("click", async () => {
     byId("query-error").textContent = error.message;
   } finally {
     byId("save-robinhood-research").disabled = false;
+  }
+});
+
+byId("connect-robinhood").addEventListener("click", async () => {
+  byId("query-error").textContent = "";
+  byId("connect-robinhood").disabled = true;
+  try {
+    const connection = await request("/agent/robinhood/connect", {method:"POST"});
+    if (!connection?.authorization_url) throw new Error("Robinhood authorization URL unavailable");
+    window.location.assign(connection.authorization_url);
+  } catch (error) {
+    byId("query-error").textContent = formatError(error);
+    byId("connect-robinhood").disabled = false;
+  }
+});
+
+byId("bind-robinhood").addEventListener("click", async () => {
+  const maskedAccount = byId("robinhood-account").value;
+  if (!maskedAccount) return;
+  byId("query-error").textContent = "";
+  byId("bind-robinhood").disabled = true;
+  try {
+    await request("/agent/robinhood/bind", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({masked_account: maskedAccount})
+    });
+    await refreshRobinhoodConnection();
+  } catch (error) {
+    byId("query-error").textContent = formatError(error);
+  } finally {
+    byId("bind-robinhood").disabled = false;
   }
 });
 

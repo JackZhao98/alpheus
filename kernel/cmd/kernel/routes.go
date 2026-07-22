@@ -27,6 +27,13 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /agent/secrets/{name}", s.authorizeAgentWeb(s.putAgentSecret))
 	mux.HandleFunc("DELETE /agent/secrets/{name}", s.authorizeAgentWeb(s.deleteAgentSecret))
 	mux.HandleFunc("POST /agent/gexbot/test", s.authorizeAgentWeb(s.postGEXBotTest))
+	mux.HandleFunc("GET /agent/robinhood/connection", s.authorizeAgentWeb(s.getRobinhoodConnection))
+	mux.HandleFunc("POST /agent/robinhood/connect", s.authorizeAgentWeb(s.postRobinhoodConnect))
+	// OAuth returns from Robinhood without the Agent Lab session cookie in some
+	// browser configurations; the one-time PKCE state is the callback proof.
+	mux.HandleFunc("GET /agent/robinhood/callback", s.getRobinhoodCallback)
+	mux.HandleFunc("GET /agent/robinhood/accounts", s.authorizeAgentWeb(s.getRobinhoodAccounts))
+	mux.HandleFunc("POST /agent/robinhood/bind", s.authorizeAgentWeb(s.postRobinhoodBind))
 	mux.HandleFunc("GET /limits", s.authorize(permissionRead, s.getLimits))
 	mux.HandleFunc("GET /auth/capabilities", s.authorize(permissionRead, s.getAuthCapabilities))
 	mux.HandleFunc("GET /state", s.authorize(permissionRead, s.getState))

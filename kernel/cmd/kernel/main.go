@@ -29,15 +29,23 @@ import (
 )
 
 type server struct {
-	limits           config.Limits
-	mode             config.ModeConfig
-	account          broker.AccountProvider
-	authorityAccount broker.AccountProvider
-	execution        broker.ExecutionProvider
-	market           marketdata.Provider
-	authorityMarket  marketdata.Provider
-	mcpLab           *mcpReadLab
-	simVenue         *broker.Fake
+	limits             config.Limits
+	mode               config.ModeConfig
+	account            broker.AccountProvider
+	authorityAccount   broker.AccountProvider
+	execution          broker.ExecutionProvider
+	market             marketdata.Provider
+	authorityMarket    marketdata.Provider
+	mcpLab             *mcpReadLab
+	simVenue           *broker.Fake
+	providerMu         sync.RWMutex
+	robinhoodEnabled   bool
+	robinhoodSnapshot  rhmcp.CapabilitySnapshot
+	robinhoodAccountID string
+	// Test seams keep the browser callback path verifiable without contacting
+	// Robinhood. Production leaves both nil and uses rhmcp directly.
+	robinhoodBegin    func(context.Context, string) (rhmcp.AuthorizationStart, error)
+	robinhoodExchange func(context.Context, string, string, string, string) (rhmcp.OAuthToken, error)
 	// broker is a simulation/test compatibility seam. Production construction
 	// leaves it nil and registers read and execution capabilities separately.
 	broker                            broker.Adapter
@@ -113,6 +121,7 @@ type storeAPI interface {
 	LedgerResources(ledger, excludeOperationID string) (store.LedgerResources, error)
 	InsertDayOpen(marketDay time.Time, ledger string, equity units.Micros) error
 	FeatureActive(name string) (bool, error)
+	ActivateM3A(snapshot store.M3AActivationSnapshot) error
 	LoadLiveCanaryAuthority() (*store.LiveCanaryRevision, error)
 	LoadLiveCanaryDayAttestations(accountID string, limit int) ([]store.LiveCanaryDayAttestation, error)
 	LoadKernelPolicyAuthority() (*store.KernelPolicyRevision, error)
@@ -169,90 +178,6 @@ func main() {
 		log.Fatalf("execution config: %v", err)
 	}
 	brokerName := config.Env("BROKER", "fake")
-	var account broker.AccountProvider
-	var authorityAccount broker.AccountProvider
-	var execution broker.ExecutionProvider
-	var market marketdata.Provider
-	var authorityMarket marketdata.Provider
-	var mcpLab *mcpReadLab
-	var simVenue *broker.Fake
-	switch brokerName {
-	case "fake":
-		simVenue = broker.NewFake(units.MustMicros("300"))
-		account, execution = simVenue, simVenue
-		authorityAccount = simVenue
-		market = marketdata.NewFakeProvider(simVenue)
-		authorityMarket = market
-	case "robinhood":
-		if mode.LiveAccountID == "" {
-			log.Fatalf("broker: LIVE_ACCOUNT_ID is required for Robinhood reads")
-		}
-		snapshot, err := rhmcp.LoadCapabilitySnapshot(config.Env("RH_MCP_CAPABILITIES_FILE", "../docs/rh_mcp_capabilities.json"))
-		if err != nil {
-			log.Fatalf("broker: %v", err)
-		}
-		client, err := rhmcp.New(rhmcp.Config{
-			TokenFile: config.Env("RH_MCP_TOKEN_FILE", ""), AllowedTools: rhmcp.SafeQueryTools,
-		})
-		if err != nil {
-			log.Fatalf("broker: %v", err)
-		}
-		if err := rhmcp.ValidateSnapshot(context.Background(), client, snapshot, rhmcp.SafeQueryTools); err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: capability snapshot validation failed: %v", err)
-		}
-		robinhoodAccount, err := broker.NewRobinhood(client, mode.LiveAccountID)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		account = robinhoodAccount
-		authorityClient, err := rhmcp.NewAuthorityClient(client)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		authorityRobinhoodAccount, err := broker.NewRobinhood(authorityClient, mode.LiveAccountID)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		authorityAccount = authorityRobinhoodAccount
-		mcpLab, err = newMCPReadLab(client, mode.LiveAccountID, snapshot)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		robinhoodMarket, err := marketdata.NewRobinhoodProvider(client, client, snapshot.Version)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		market = robinhoodMarket
-		authorityRobinhoodMarket, err := marketdata.NewRobinhoodProvider(authorityClient, client, snapshot.Version)
-		if err != nil {
-			_ = client.Close()
-			log.Fatalf("broker: %v", err)
-		}
-		authorityMarket = authorityRobinhoodMarket
-		if mode.TradingMode == config.ModeLive {
-			mutation, mutationErr := rhmcp.NewMutation(rhmcp.Config{
-				TokenFile: config.Env("RH_MCP_TOKEN_FILE", ""),
-			}, mode.LiveAccountID)
-			if mutationErr != nil {
-				_ = client.Close()
-				log.Fatalf("broker: %v", mutationErr)
-			}
-			execution, err = broker.NewRobinhoodExecution(authorityRobinhoodAccount, mutation, authorityRobinhoodMarket)
-			if err != nil {
-				_ = mutation.Close()
-				_ = client.Close()
-				log.Fatalf("broker: %v", err)
-			}
-		}
-	default:
-		log.Fatalf("broker: unknown BROKER %q", brokerName)
-	}
 	dbTimeout, err := databaseTimeout()
 	if err != nil {
 		log.Fatalf("store: %v", err)
@@ -278,52 +203,8 @@ func main() {
 	if _, err := requireLiveCanaryAuthority(mode.TradingMode, st); err != nil {
 		log.Fatalf("live canary authority: %v", err)
 	}
-	if brokerName == "robinhood" {
-		bindingCtx, cancel := context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
-		actual, bindingErr := account.AccountID(bindingCtx)
-		cancel()
-		if bindingErr != nil || actual != mode.LiveAccountID {
-			st.Event("account_binding_violation", map[string]string{
-				"reason": "read_provider_binding_failed", "mode": mode.TradingMode,
-			})
-			log.Fatalf("broker: account binding failed")
-		}
-	}
-	m3aActive, err := st.FeatureActive("m3a")
-	if err != nil {
-		log.Fatalf("M3A activation marker: %v", err)
-	}
-	if !m3aActive {
-		activationCtx, cancel := context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
-		activationAccount, accountErr := account.Account(activationCtx)
-		cancel()
-		if accountErr != nil || !activationAccount.EquityKnown {
-			log.Fatalf("M3A activation: account snapshot unavailable")
-		}
-		activationCtx, cancel = context.WithTimeout(context.Background(), attemptConfig.brokerTimeout)
-		activationPositions, positionErr := account.Positions(activationCtx)
-		cancel()
-		if positionErr != nil {
-			log.Fatalf("M3A activation: position snapshot unavailable")
-		}
-		positions := make([]store.ActivationPosition, 0, len(activationPositions))
-		for _, position := range activationPositions {
-			positions = append(positions, store.ActivationPosition{
-				Symbol: position.Symbol, Kind: position.Kind,
-				Multiplier: position.Multiplier, Qty: position.Qty,
-			})
-		}
-		if err := st.ActivateM3A(store.M3AActivationSnapshot{
-			Equity: activationAccount.Equity, BuyingPower: activationAccount.BuyingPower,
-			Positions: positions,
-		}); err != nil {
-			log.Fatalf("M3A activation: %v", err)
-		}
-	}
 	s := &server{
-		limits: limits, mode: mode, account: account, authorityAccount: authorityAccount,
-		execution: execution, market: market, authorityMarket: authorityMarket,
-		mcpLab: mcpLab, simVenue: simVenue, broker: compatibilityBroker(simVenue), store: st,
+		limits: limits, mode: mode, store: st,
 		instanceID: store.NewID(), brokerTimeout: attemptConfig.brokerTimeout,
 		claimTimeout: attemptConfig.claimTimeout, attemptStale: attemptConfig.attemptStale,
 		replayCreationGuard: attemptConfig.replayCreationGuard,
@@ -343,6 +224,38 @@ func main() {
 		researchURL:     config.Env("RESEARCH_URL", "http://research-gateway:8300"),
 		consoleOrigin:   consoleOrigin,
 		marketTZ:        marketTZ,
+	}
+	switch brokerName {
+	case "fake":
+		s.simVenue = broker.NewFake(units.MustMicros("300"))
+		s.account, s.execution = s.simVenue, s.simVenue
+		s.authorityAccount = s.simVenue
+		s.market = marketdata.NewFakeProvider(s.simVenue)
+		s.authorityMarket = s.market
+		s.broker = compatibilityBroker(s.simVenue)
+	case "robinhood":
+		snapshot, loadErr := rhmcp.LoadCapabilitySnapshot(config.Env("RH_MCP_CAPABILITIES_FILE", "../docs/rh_mcp_capabilities.json"))
+		if loadErr != nil {
+			log.Fatalf("broker: %v", loadErr)
+		}
+		s.robinhoodEnabled, s.robinhoodSnapshot = true, snapshot
+		if activateErr := s.activateRobinhood(context.Background()); activateErr != nil {
+			st.Event("robinhood_connect_required", map[string]string{"mode": mode.TradingMode})
+			if mode.TradingMode == config.ModeLive {
+				log.Fatalf("broker: a persisted Robinhood connection and explicit account binding are required in live mode")
+			}
+			log.Printf("Robinhood provider inactive: connect it from Agent Lab")
+		}
+	default:
+		log.Fatalf("broker: unknown BROKER %q", brokerName)
+	}
+	if s.broker == nil {
+		s.broker = compatibilityBroker(s.simVenue)
+	}
+	if s.account != nil {
+		if err := s.activateM3AIfNeeded(context.Background()); err != nil {
+			log.Fatalf("%v", err)
+		}
 	}
 	if err := s.loadGlobalHalt(); err != nil {
 		log.Fatalf("halt state: %v", err)
@@ -691,27 +604,36 @@ func (s *server) getLimits(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) accountProvider() broker.AccountProvider {
-	if s.account != nil {
-		return s.account
+	s.providerMu.RLock()
+	account, compatibility := s.account, s.broker
+	s.providerMu.RUnlock()
+	if account != nil {
+		return account
 	}
-	return s.broker
+	return compatibility
 }
 
 // authorityAccountProvider is the only account capability eligible to support
 // a Live decision or broker-effect reconciliation. Production wiring supplies
 // a non-cacheable Provider; fake/test wiring naturally falls back to account.
 func (s *server) authorityAccountProvider() broker.AccountProvider {
-	if s.authorityAccount != nil {
-		return s.authorityAccount
+	s.providerMu.RLock()
+	authority := s.authorityAccount
+	s.providerMu.RUnlock()
+	if authority != nil {
+		return authority
 	}
 	return s.accountProvider()
 }
 
 func (s *server) executionProvider() broker.ExecutionProvider {
-	if s.execution != nil {
-		return s.execution
+	s.providerMu.RLock()
+	execution, compatibility := s.execution, s.broker
+	s.providerMu.RUnlock()
+	if execution != nil {
+		return execution
 	}
-	return s.broker
+	return compatibility
 }
 
 func compatibilityBroker(fake *broker.Fake) broker.Adapter {
@@ -725,10 +647,13 @@ func compatibilityBroker(fake *broker.Fake) broker.Adapter {
 }
 
 func (s *server) marketProvider() marketdata.Provider {
-	if s.market != nil {
-		return s.market
+	s.providerMu.RLock()
+	market, compatibility := s.market, s.broker
+	s.providerMu.RUnlock()
+	if market != nil {
+		return market
 	}
-	if fake, ok := s.broker.(*broker.Fake); ok {
+	if fake, ok := compatibility.(*broker.Fake); ok {
 		return marketdata.NewFakeProvider(fake)
 	}
 	return nil
@@ -737,8 +662,11 @@ func (s *server) marketProvider() marketdata.Provider {
 // authorityMarketProvider is the non-cacheable market capability for Live
 // decisions. Cached market data remains available only through marketProvider.
 func (s *server) authorityMarketProvider() marketdata.Provider {
-	if s.authorityMarket != nil {
-		return s.authorityMarket
+	s.providerMu.RLock()
+	authority := s.authorityMarket
+	s.providerMu.RUnlock()
+	if authority != nil {
+		return authority
 	}
 	return s.marketProvider()
 }
@@ -1800,8 +1728,12 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 				})
 				return nil, errors.Join(evidenceErr, resolveErr)
 			}
+			boundAccountID := s.boundRobinhoodAccountID()
+			if boundAccountID == "" {
+				return nil, fmt.Errorf("live provider account binding is unavailable")
+			}
 			if replay {
-				if attempt.ProviderAccountID != s.mode.LiveAccountID || !providerIntentEvidenceMatches(attempt, canonical, fingerprint) {
+				if attempt.ProviderAccountID != boundAccountID || !providerIntentEvidenceMatches(attempt, canonical, fingerprint) {
 					_, resolveErr := s.store.ResolveAttempt(attempt.ID, attempt.Attempt, store.AttemptResolution{
 						State: "unknown", LastError: "same-ref replay evidence mismatch",
 						ProviderErrorCode: "replay_intent_mismatch",
@@ -1809,11 +1741,11 @@ func (s *server) executeClaimedAttemptWithReplay(ctx context.Context, attempt *s
 					return nil, errors.Join(fmt.Errorf("same-ref replay evidence mismatch"), resolveErr)
 				}
 				replayEvidence = &store.ProviderIntentEvidence{
-					AccountID: s.mode.LiveAccountID, Canonical: canonical, Fingerprint: fingerprint,
+					AccountID: boundAccountID, Canonical: canonical, Fingerprint: fingerprint,
 				}
 			} else {
 				prepared, evidenceErr := s.store.PrepareAttemptProviderIntent(
-					attempt.ID, attempt.Attempt, s.mode.LiveAccountID, canonical, fingerprint,
+					attempt.ID, attempt.Attempt, boundAccountID, canonical, fingerprint,
 				)
 				if evidenceErr != nil || !prepared {
 					return nil, errors.Join(evidenceErr, fmt.Errorf("provider intent evidence was not durably prepared"))

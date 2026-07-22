@@ -22,6 +22,16 @@ var agentSecretNames = map[string]bool{
 	"robinhood_research": true,
 }
 
+// storedAgentSecretNames includes service-owned secrets that must never be
+// accepted from the generic browser credential upload API.
+var storedAgentSecretNames = map[string]bool{
+	"openai":             true,
+	"brave":              true,
+	"gexbot":             true,
+	"robinhood_research": true,
+	"robinhood_mcp":      true,
+}
+
 func (s *server) getAgentSecrets(w http.ResponseWriter, _ *http.Request) {
 	names, err := s.store.ListAgentSecretNames()
 	if err != nil {
@@ -109,7 +119,7 @@ func (s *server) deleteAgentSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) loadAgentSecret(name string) (string, error) {
-	if s.store == nil || !agentSecretNames[name] {
+	if s.store == nil || !storedAgentSecretNames[name] {
 		return "", fmt.Errorf("agent credential unavailable")
 	}
 	record, err := s.store.GetAgentSecret(name)

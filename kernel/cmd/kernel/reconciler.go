@@ -830,7 +830,7 @@ func (s *server) exactPlaceCandidatesForAttempt(ctx context.Context, execution b
 		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("durable provider intent is invalid")
 	}
 	digest := sha256.Sum256(canonical)
-	if attempt.ProviderAccountID != s.mode.LiveAccountID || !bytes.Equal(digest[:], attempt.IntentFingerprint) ||
+	if attempt.ProviderAccountID != s.boundRobinhoodAccountID() || !bytes.Equal(digest[:], attempt.IntentFingerprint) ||
 		attempt.SendWindowStart.IsZero() || attempt.SendWindowEnd.IsZero() {
 		return nil, broker.ProviderPlaceIntent{}, fmt.Errorf("durable provider intent evidence mismatch")
 	}

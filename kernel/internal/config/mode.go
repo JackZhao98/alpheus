@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -27,15 +26,14 @@ type ModeConfig struct {
 	AgentWebSessionKey string `json:"-" yaml:"-"`
 	AgentWebAuthMode   string `json:"-" yaml:"-"`
 	LiveTradingEnabled bool
-	LiveAccountID      string `json:"-" yaml:"-"`
+	// LiveAccountID is retained only as an in-process test seam. LoadModeConfig
+	// never reads it from an environment variable or file; production account
+	// binding is loaded from Kernel's encrypted database connection record.
+	LiveAccountID string `json:"-" yaml:"-"`
 }
 
 func LoadModeConfig() (ModeConfig, error) {
 	mode := strings.TrimSpace(Env("TRADING_MODE", ModeSim))
-	liveAccountID, err := loadLiveAccountID()
-	if err != nil {
-		return ModeConfig{}, err
-	}
 	cfg := ModeConfig{
 		TradingMode:        mode,
 		RuntimeToken:       osValue("RUNTIME_TOKEN"),
@@ -45,36 +43,11 @@ func LoadModeConfig() (ModeConfig, error) {
 		AgentWebSessionKey: osValue("AGENT_WEB_SESSION_KEY"),
 		AgentWebAuthMode:   strings.TrimSpace(Env("AGENT_WEB_AUTH_MODE", AgentWebAuthPassword)),
 		LiveTradingEnabled: strings.EqualFold(strings.TrimSpace(osValue("LIVE_TRADING_ENABLED")), "true"),
-		LiveAccountID:      liveAccountID,
 	}
 	if err := cfg.Validate(); err != nil {
 		return ModeConfig{}, err
 	}
 	return cfg, nil
-}
-
-func loadLiveAccountID() (string, error) {
-	direct := strings.TrimSpace(osValue("LIVE_ACCOUNT_ID"))
-	path := strings.TrimSpace(osValue("LIVE_ACCOUNT_ID_FILE"))
-	if direct != "" && path != "" {
-		return "", fmt.Errorf("set only one of LIVE_ACCOUNT_ID or LIVE_ACCOUNT_ID_FILE")
-	}
-	if path == "" {
-		return direct, nil
-	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 1 || info.Size() > 256 {
-		return "", fmt.Errorf("LIVE_ACCOUNT_ID_FILE must be a private regular file with mode 0600")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read LIVE_ACCOUNT_ID_FILE")
-	}
-	value := strings.TrimSpace(string(raw))
-	if value == "" || strings.ContainsAny(value, "\r\n\t ") {
-		return "", fmt.Errorf("LIVE_ACCOUNT_ID_FILE is invalid")
-	}
-	return value, nil
 }
 
 func osValue(key string) string {
@@ -110,9 +83,6 @@ func (c ModeConfig) Validate() error {
 	if c.TradingMode == ModeLive {
 		if !c.LiveTradingEnabled {
 			return fmt.Errorf("LIVE_TRADING_ENABLED must be true in live mode")
-		}
-		if c.LiveAccountID == "" {
-			return fmt.Errorf("LIVE_ACCOUNT_ID required in live mode")
 		}
 	}
 	authMode := c.AgentWebAuthMode

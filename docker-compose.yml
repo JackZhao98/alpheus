@@ -37,8 +37,6 @@ services:
       RESEARCH_URL: ${RESEARCH_URL:-http://research-gateway:8300}
       CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
-      LIVE_ACCOUNT_ID: ${LIVE_ACCOUNT_ID:-}
-      RH_MCP_TOKEN_FILE: ${RH_MCP_TOKEN_FILE:-}
       RH_MCP_CAPABILITIES_FILE: ${RH_MCP_CAPABILITIES_FILE:-/docs/rh_mcp_capabilities.json}
       TZ_MARKET: America/New_York
     ports: ["8100:8100"]

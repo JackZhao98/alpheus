@@ -28,6 +28,7 @@ const (
 type Config struct {
 	Endpoint     string
 	TokenFile    string
+	TokenStore   OAuthTokenStore
 	CallTimeout  time.Duration
 	ConnectWait  time.Duration
 	IdleTTL      time.Duration
@@ -206,7 +207,13 @@ func newClient(cfg Config, allowedTools []string) (*Client, error) {
 		cfg.CacheLimit = 256
 	}
 	if cfg.HTTPClient == nil {
-		transport, err := NewFileTokenTransport(cfg.TokenFile, nil)
+		var transport http.RoundTripper
+		var err error
+		if cfg.TokenStore != nil {
+			transport, err = NewStoredTokenTransport(cfg.TokenStore, nil)
+		} else {
+			transport, err = NewFileTokenTransport(cfg.TokenFile, nil)
+		}
 		if err != nil {
 			return nil, err
 		}

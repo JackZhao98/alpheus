@@ -223,7 +223,7 @@ func (s *server) getProviderStatus(w http.ResponseWriter, _ *http.Request) {
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"connected": false, "source": "unavailable", "last_error": "provider status unavailable",
-			"schema_drift": true, "mode": s.tradingMode(), "account": maskedAccountID(s.mode.LiveAccountID),
+			"schema_drift": true, "mode": s.tradingMode(), "account": maskedAccountID(s.boundRobinhoodAccountID()),
 		})
 		return
 	}
@@ -232,6 +232,6 @@ func (s *server) getProviderStatus(w http.ResponseWriter, _ *http.Request) {
 		"connected": status.Connected, "source": status.Source,
 		"snapshot_version": status.SnapshotVersion, "last_successful_read": status.LastSuccessfulRead,
 		"last_error": status.LastError, "schema_drift": status.SchemaDrift,
-		"mode": s.tradingMode(), "account": maskedAccountID(s.mode.LiveAccountID),
+		"mode": s.tradingMode(), "account": maskedAccountID(s.boundRobinhoodAccountID()),
 	})
 }
