@@ -198,7 +198,11 @@ or revives the old Worker/Attempt. The deployed reconciler recovered two
 historical interrupted calls (one missing only the Control acknowledgement and
 one missing its Research receipt); the permanent queue is now fully
 acknowledged and has an append-only claim/receipt audit trail. Next is the
-separate Scout/Research child-work admission slice.
+separate Scout/Research child-work admission slice. Its first bounded
+`Intent → Scout → Desk` state machine is now frozen in
+`SCOUT_CHILD_ADMISSION.md`; implementation must add the admission and parent
+continuation records as one crash-safe unit rather than presenting Scout as an
+in-prompt label.
 
 The first persistent, turn-by-turn Cortex Conversation slice is also deployed
 locally. Agent Lab now retains one Cortex Conversation identifier in the page
