@@ -51,6 +51,9 @@ type workItem struct {
 	ScoutMemoBind  string       `json:"scout_memo_binding_id"`
 	ScoutArtifact  string       `json:"scout_artifact_id"`
 	ScoutDigest    string       `json:"scout_artifact_digest"`
+	RecoveryTurnID string       `json:"recovery_turn_id"`
+	RecoveryState  string       `json:"recovery_turn_state"`
+	RecoveryGen    int64        `json:"recovery_turn_state_generation"`
 }
 type claimResult struct {
 	Status            string `json:"status"`
@@ -58,6 +61,9 @@ type claimResult struct {
 	LeaseToken        string `json:"lease_token"`
 	AttemptGeneration int64  `json:"attempt_state_generation"`
 	LeaseGeneration   int64  `json:"lease_generation"`
+	Reclaimed         bool   `json:"reclaimed"`
+	UnresolvedTurnID  string `json:"unresolved_turn_id"`
+	UnresolvedState   string `json:"unresolved_turn_state"`
 }
 
 func main() {
@@ -140,6 +146,9 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	}
 	if claim.Status != "committed" {
 		return fmt.Errorf("claim denied")
+	}
+	if claim.Reclaimed {
+		return w.recoverAmbiguousModelTurn(ctx, item, claim)
 	}
 	start := runtimecontract.StartAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("start_attempt", claim.AttemptID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: claim.AttemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken}
 	var started struct {
@@ -251,7 +260,7 @@ func (w *worker) executeModelTurn(ctx context.Context, item workItem, claim clai
 	callID, turnID, idem := uuid(), uuid(), uuid()
 	requestRaw, _ := json.Marshal(requestBody)
 	requestDigest, promptDigest := digest(requestRaw), digest([]byte(fmt.Sprint(requestBody["input"])))
-	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: 2000, ReservedInputTokens: reservedInputTokens(requestRaw), ReservedExternalCostMicroUSD: 0, TimeoutMS: 75000, TemperatureMicros: 0}}
+	dispatch := runtimecontract.DispatchModelCallCommand{SchemaRevision: 1, Envelope: w.envelope("dispatch_model_call", callID, item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, TurnID: turnID, Manifest: runtimecontract.ModelCallManifestCandidate{CallID: callID, IdempotencyKey: idem, Provider: "openai", Model: w.model, PromptDigest: promptDigest, ContextManifest: item.Context, OutputContractDigest: item.OutputDigest, RequestDigest: requestDigest, MaxOutputTokens: modelOutputTokenLimit(item), ReservedInputTokens: reservedInputTokens(requestRaw), ReservedExternalCostMicroUSD: 0, TimeoutMS: 75000, TemperatureMicros: 0}}
 	var dispatched struct {
 		Status         string `json:"status"`
 		ManifestDigest string `json:"manifest_digest"`
@@ -265,7 +274,7 @@ func (w *worker) executeModelTurn(ctx context.Context, item workItem, claim clai
 	}
 	providerCtx, cancelProvider := context.WithTimeout(ctx, 75*time.Second)
 	heartbeatDone := make(chan error, 1)
-	go func() { heartbeatDone <- w.heartbeatLoop(providerCtx, item, claim, attemptGeneration, 20*time.Second) }()
+	go func() { heartbeatDone <- w.heartbeatLoop(providerCtx, item, claim, attemptGeneration, 65*time.Second) }()
 	startedAt := time.Now()
 	response, uncertain, err := w.callOpenAI(providerCtx, requestBody, idem)
 	cancelProvider()
@@ -422,7 +431,18 @@ func scoutMemoSchema() map[string]any {
 
 func scoutMemoRequest(model, prompt, objective, rationale string) map[string]any {
 	instructions := "You are Cortex Scout Research. Produce a bounded research memo for Decision Desk, not a user-facing answer. The parent objective is: " + objective + ". Rationale: " + rationale + ". Work only from the immutable user request and conversation context supplied. Do not execute actions, give trade instructions, claim browsing, tools, or live information that was not actually supplied, and do not delegate. Clearly identify limitations. Return only JSON matching the memo schema."
-	return map[string]any{"model": model, "instructions": instructions, "input": prompt, "store": false, "max_output_tokens": 2000, "reasoning": map[string]any{"effort": "low"}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "cortex_scout_research_memo", "strict": true, "schema": scoutMemoSchema()}}}
+	return map[string]any{"model": model, "instructions": instructions, "input": prompt, "store": false, "max_output_tokens": 4000, "reasoning": map[string]any{"effort": "low"}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "cortex_scout_research_memo", "strict": true, "schema": scoutMemoSchema()}}}
+}
+
+// Scout's immutable child limit allows up to 8k output tokens.  It needs a
+// larger single-call ceiling than the user-facing workflow contract because a
+// memo must carry evidence and limitations for a later Desk Turn.  The exact
+// manifest reservation remains database-enforced for every individual call.
+func modelOutputTokenLimit(item workItem) int64 {
+	if item.Role == "scout" {
+		return 4000
+	}
+	return 2000
 }
 
 func workflowRequest(model, instructions, prompt string, scoutEnabled bool) map[string]any {
@@ -461,7 +481,14 @@ func extractOutput(r openAIResponse) ([]byte, error) {
 		observed = append(observed, o.Type+":"+o.Role)
 		if o.Type == "message" {
 			for _, c := range o.Content {
-				observed = append(observed, c.Type)
+				observation := c.Type
+				if c.Type == "output_text" {
+					sum := sha256.Sum256([]byte(c.Text))
+					observation = fmt.Sprintf("output_text(bytes=%d,sha256=%s)", len(c.Text), hex.EncodeToString(sum[:8]))
+				} else if c.Type == "refusal" {
+					observation = fmt.Sprintf("refusal(bytes=%d)", len(c.Refusal))
+				}
+				observed = append(observed, observation)
 				if c.Type == "output_text" && c.Text != "" {
 					var value map[string]any
 					if json.Unmarshal([]byte(c.Text), &value) == nil && len(value) > 0 {
@@ -856,9 +883,8 @@ func (w *worker) heartbeatLoop(ctx context.Context, item workItem, c claimResult
 				AttemptID:      c.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration,
 				LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken,
 				// Runtime policy freezes the maximum extension at 60 seconds.
-				// The original lease is 120 seconds; renewing it every 20
-				// seconds with the policy-safe increment keeps a slow model
-				// call fenced without producing a denied command.
+				// The initial lease is 120 seconds, so heartbeat only after it
+				// is close enough for this policy-safe extension to advance it.
 				RequestedExtensionSeconds: 60,
 			}
 			var result struct {
@@ -910,6 +936,46 @@ func (w *worker) failAfterResolved(ctx context.Context, item workItem, c claimRe
 	}
 	return nil
 }
+
+// recoverAmbiguousModelTurn handles only the lease-expiry window after a
+// durable model dispatch. The old provider response is intentionally never
+// accepted after its lease fence has expired. Control first marks that Turn
+// unknown and rotates the lease; this Worker then closes it as an
+// infrastructure failure so the immutable Task can retry under its frozen
+// budget with a fresh Attempt and provider idempotency identity.
+func (w *worker) recoverAmbiguousModelTurn(ctx context.Context, item workItem, claim claimResult) error {
+	turnID, turnGeneration, err := ambiguousRecoveryTurn(item, claim)
+	if err != nil {
+		return err
+	}
+	failure := contracts.Failure{Code: "provider_outcome_ambiguous", Message: "prior Worker lease expired after model dispatch", Retryable: true}
+	if err := w.resolveFailure(ctx, item, claim, claim.AttemptGeneration, turnID, turnGeneration, runtimecontract.RetryInfrastructure, failure); err != nil {
+		return fmt.Errorf("resolve expired model dispatch: %w", err)
+	}
+	log.Printf("Cortex Task %s recovered expired model Turn %s into a bounded retry", item.TaskID, turnID)
+	return nil
+}
+
+func ambiguousRecoveryTurn(item workItem, claim claimResult) (string, int64, error) {
+	if !claim.Reclaimed || item.RecoveryTurnID == "" || item.RecoveryTurnID != claim.UnresolvedTurnID || item.RecoveryGen < 1 {
+		return "", 0, fmt.Errorf("invalid expired model recovery identity")
+	}
+	switch item.RecoveryState {
+	case "dispatched":
+		if claim.UnresolvedState != "unknown" {
+			return "", 0, fmt.Errorf("dispatched model Turn was not marked unknown")
+		}
+		return item.RecoveryTurnID, item.RecoveryGen + 1, nil
+	case "unknown":
+		if claim.UnresolvedState != "" && claim.UnresolvedState != "unknown" {
+			return "", 0, fmt.Errorf("unknown model Turn changed during recovery")
+		}
+		return item.RecoveryTurnID, item.RecoveryGen, nil
+	default:
+		return "", 0, fmt.Errorf("invalid expired model Turn state")
+	}
+}
+
 func (w *worker) markUnknown(ctx context.Context, item workItem, c claimResult, gen int64, turn string, turnGen int64, f contracts.Failure) error {
 	command := runtimecontract.MarkModelCallUnknownCommand{SchemaRevision: 1, Envelope: w.envelope("mark_model_call_unknown", turn+"-unknown", item.Deadline), AttemptID: c.AttemptID, ExpectedAttemptStateGeneration: gen, LeaseGeneration: c.LeaseGeneration, LeaseToken: c.LeaseToken, TurnID: turn, ExpectedTurnStateGeneration: turnGen, Failure: f}
 	var result struct {

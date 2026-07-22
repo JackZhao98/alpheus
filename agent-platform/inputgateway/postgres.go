@@ -729,6 +729,18 @@ type ScoutContinuation struct {
 	ParentSessionID string `json:"parent_session_id"`
 }
 
+// ScoutParentFailure is the durable terminal bridge used when the one
+// admitted Scout child has exhausted its bounded retries.  It closes the
+// waiting parent and its Run instead of leaving the UI in a permanent running
+// state.
+type ScoutParentFailure struct {
+	Status       string `json:"status"`
+	RequestID    string `json:"request_id"`
+	RunID        string `json:"run_id"`
+	ParentTaskID string `json:"parent_task_id"`
+	ChildTaskID  string `json:"child_task_id"`
+}
+
 type scoutContinuationSeed struct {
 	RequestID          string              `json:"request_id"`
 	ConversationID     string              `json:"conversation_id"`
@@ -766,6 +778,54 @@ func (adapter *PostgresAdapter) ListScoutContinuationCandidates(ctx context.Cont
 			return nil, fmt.Errorf("invalid Cortex Scout continuation identity")
 		}
 		result = append(result, value.RequestID)
+	}
+	return result, nil
+}
+
+// ListScoutFailureCandidates exposes only admitted Scout children that are
+// terminal without a memo, while their root parent is still waiting.
+func (adapter *PostgresAdapter) ListScoutFailureCandidates(ctx context.Context, limit int) ([]string, error) {
+	if adapter == nil || limit < 1 || limit > 32 {
+		return nil, fmt.Errorf("invalid Cortex Scout failure limit")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.list_cortex_scout_failure_candidates($1)::TEXT`, limit).Scan(&raw)
+	}); err != nil {
+		return nil, fmt.Errorf("list Cortex Scout failures: %w", err)
+	}
+	var values []struct {
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal(raw, &values) != nil {
+		return nil, fmt.Errorf("invalid Cortex Scout failure candidates")
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.RequestID == "" {
+			return nil, fmt.Errorf("invalid Cortex Scout failure identity")
+		}
+		result = append(result, value.RequestID)
+	}
+	return result, nil
+}
+
+// FailScoutParent is idempotent and only closes the exact parent parked for a
+// terminal admitted Scout. It cannot create a new Task or alter the child.
+func (adapter *PostgresAdapter) FailScoutParent(ctx context.Context, admissionRequestID string) (ScoutParentFailure, error) {
+	if adapter == nil || strings.TrimSpace(admissionRequestID) == "" {
+		return ScoutParentFailure{}, fmt.Errorf("invalid Cortex Scout failure request")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.fail_cortex_parent_from_scout($1)::TEXT`, admissionRequestID).Scan(&raw)
+	}); err != nil {
+		return ScoutParentFailure{}, fmt.Errorf("fail Cortex parent from Scout: %w", err)
+	}
+	var result ScoutParentFailure
+	if json.Unmarshal(raw, &result) != nil || result.Status != "failed" || result.RequestID != admissionRequestID ||
+		result.RunID == "" || result.ParentTaskID == "" || result.ChildTaskID == "" {
+		return ScoutParentFailure{}, fmt.Errorf("invalid Cortex Scout parent failure response")
 	}
 	return result, nil
 }

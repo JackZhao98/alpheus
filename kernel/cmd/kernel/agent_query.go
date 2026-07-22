@@ -130,9 +130,12 @@ func (s *server) submitCortexRequest(ctx context.Context, input agentQueryReques
 	} else {
 		conversationID = "agent-lab-" + id
 	}
+	// A bounded Scout retry must survive a 120-second Worker lease expiry and
+	// still leave time for the Desk continuation. Keep this below the Agent
+	// Lab's nine-minute polling window.
 	body := map[string]any{"conversation_id": conversationID, "conversation_created_at": conversationCreatedAt, "request_id": id, "kind": kind,
 		"text": fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query), "idempotency_key": "agent-lab-" + id,
-		"causation_id": id, "correlation_id": id, "deadline": now.Add(5 * time.Minute)}
+		"causation_id": id, "correlation_id": id, "deadline": now.Add(8 * time.Minute)}
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cortexURL, "/")+"/v1/user-requests", bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -362,7 +365,7 @@ func (s *server) callCortex(ctx context.Context, job *store.AgentQueryJob, input
 	}
 	now := time.Now().UTC()
 	requestID := job.ID
-	body := map[string]any{"conversation_id": "agent-lab-" + job.ID, "conversation_created_at": now, "request_id": requestID, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\nWorkflow: %s\n\n%s", input.Symbol, input.Workflow, input.Query), "idempotency_key": "agent-lab-" + job.ID, "causation_id": job.ID, "correlation_id": job.ID, "deadline": now.Add(5 * time.Minute)}
+	body := map[string]any{"conversation_id": "agent-lab-" + job.ID, "conversation_created_at": now, "request_id": requestID, "kind": "new_request", "text": fmt.Sprintf("Symbol: %s\nWorkflow: %s\n\n%s", input.Symbol, input.Workflow, input.Query), "idempotency_key": "agent-lab-" + job.ID, "causation_id": job.ID, "correlation_id": job.ID, "deadline": now.Add(8 * time.Minute)}
 	raw, _ := json.Marshal(body)
 	base := strings.TrimRight(s.cortexURL, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/user-requests", bytes.NewReader(raw))

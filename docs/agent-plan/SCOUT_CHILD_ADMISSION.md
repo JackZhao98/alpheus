@@ -54,6 +54,7 @@ It is not a runnable task. Cortex Control owns the following derived records:
 | `cortex_scout_child_admission` | Cortex Control | one exact admission/rejection per child request; binds parent, child Task, request, and reason |
 | `runtime_task` / `runtime_session` / task budget ledger | Cortex Control | the admitted Scout Task and its immutable execution/context inputs |
 | `cortex_parent_continuation` | Cortex Control | one parent-resume identity bound to the Scout Artifact and original handoff |
+| `cortex_parent_scout_failure` | Cortex Control | one terminal parent/Run failure identity when the admitted Scout cannot produce a valid memo |
 | new parent Session context manifest | Cortex Control | immutable Desk-only continuation context containing the Scout Artifact reference |
 
 Research Gateway continues to own normalized Evidence and Tool receipts. The
@@ -79,7 +80,10 @@ writes a Research record or reads a Research credential.
 6. A Control reconciler observes a completed admitted Scout Task. In one
    fenced transition it records `cortex_parent_continuation`, closes the old
    parent Session, creates a new Desk-only parent Session/context, and moves
-   the parent `waiting -> ready`.
+   the parent `waiting -> ready`. If the admitted Scout reaches `failed` or
+   `dead_lettered` without that Artifact, a separate idempotent reconciler
+   records `cortex_parent_scout_failure`, releases the parked parent slot, and
+   moves the parent and original Run to `failed`.
 7. The resumed parent Worker reads the exact Scout Artifact from its new
    context and executes Decision Desk only. Its final Artifact completes the
    original Run.
@@ -94,7 +98,8 @@ existence of an Artifact without its admission/continuation record.
 | before child request commit | original parent Attempt may retry; no child exists |
 | after request, before admission | Control idempotently admits or records the same rejection |
 | after child admission, before parent parks | admission reconciler parks the exact parent or rejects stale source lease; it never creates another child |
-| Scout lease loss | ordinary Task recovery retries the same Scout Task within its frozen budget |
+| expired Scout model Turn after Worker loss | the Worker receives only the exact expired Turn, marks it `provider_outcome_ambiguous`, then performs an ordinary bounded retry; it never accepts the late old provider response |
+| Scout exhausts retries without a valid memo | Control records one immutable parent-failure record and terminalizes the parked parent Task/Run; the UI trace exposes `scout_parent_failed` |
 | Scout Artifact committed, before parent resume | continuation reconciler creates exactly one continuation from that Artifact |
 | parent continuation lease loss | the same Desk-only parent Task retries; it never reruns Intent or Scout |
 | duplicate delivery/concurrent reconcilers | unique request/admission/continuation keys plus row locks return the already committed identity |
@@ -137,5 +142,11 @@ intent_interpreter_completed
 ```
 
 This validates the normal success path and its database-owned authorization
-boundaries. The crash/duplicate probes remain the next hardening work, not a
-claim that generic collaboration is complete.
+boundaries. A second live probe, Run
+`dac82d5d-f1d3-4285-ab67-912da6335cdc`, stopped the Worker after Scout dispatch.
+After the 120-second lease expired, the old Turn was terminalized as
+`provider_outcome_ambiguous`, one bounded new Scout Attempt completed, and the
+parent Desk finished the original Run. A separate historical Scout dead-letter
+Run was reconciled into one durable parent/Run failure record rather than
+remaining `running`. The full crash and duplicate matrix still remains future
+hardening work; this is not a claim that generic collaboration is complete.

@@ -21,6 +21,8 @@ const (
 type scoutContinuationStore interface {
 	ListScoutContinuationCandidates(context.Context, int) ([]string, error)
 	ContinueScoutParent(context.Context, string) (inputgateway.ScoutContinuation, error)
+	ListScoutFailureCandidates(context.Context, int) ([]string, error)
+	FailScoutParent(context.Context, string) (inputgateway.ScoutParentFailure, error)
 }
 
 func startCortexScoutContinuationRecovery(ctx context.Context, store scoutContinuationStore) {
@@ -62,6 +64,25 @@ func reconcileCortexScoutContinuations(ctx context.Context, store scoutContinuat
 		}
 		if continuation.Status != "ready" || continuation.ParentTaskID == "" || continuation.ParentSessionID == "" {
 			return completed, fmt.Errorf("continue %s returned an invalid response", requestID)
+		}
+		completed++
+	}
+	failures, err := store.ListScoutFailureCandidates(ctx, cortexScoutContinuationBatch)
+	if err != nil {
+		return completed, err
+	}
+	for _, requestID := range failures {
+		if ctx.Err() != nil {
+			return completed, ctx.Err()
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		failed, err := store.FailScoutParent(callCtx, requestID)
+		cancel()
+		if err != nil {
+			return completed, fmt.Errorf("fail parent for %s: %w", requestID, err)
+		}
+		if failed.Status != "failed" || failed.RequestID != requestID || failed.RunID == "" || failed.ParentTaskID == "" || failed.ChildTaskID == "" {
+			return completed, fmt.Errorf("fail parent for %s returned an invalid response", requestID)
 		}
 		completed++
 	}

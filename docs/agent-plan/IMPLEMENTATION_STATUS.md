@@ -105,7 +105,7 @@ milestones and not independent authorization gates.
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
 | AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission and immutable Cortex output-validation evidence deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits an exact-current-policy Run/root Task, and validates each model output against the exact committed schema before binding its Blob to Worker. The fixed validator identity plus exact schema/output digests are immutable database evidence. Formal Result-linked validation receipts, cancellation reconciliation, child admission, and complete unknown-outcome recovery remain deferred. |
 | AP1-3 Control Plane and bounded Worker execution | Canonical MVP deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches a Responses API call to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual input/output token usage, validates and publishes the structured output through Control, then resolves and commits the Attempt and Artifact. The first bounded AI-selected route is also deployed: Intent Interpreter may answer directly or record an immutable `handoff_to_desk`, then a separate persisted Desk Turn returns the answer. This is an in-Attempt handoff, not child-Task admission. Invalid provider output and exhausted Control publication retries now close the Turn/Attempt through explicit failure commands instead of leaving dispatched work behind. The legacy Kernel query queue remains compatibility-only and is not used by Agent Lab. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
-| AP1-4 crash/concurrency acceptance and stage seal | Started; deployed success-path budget/output-evidence probe passed | Race, crash-window, duplicate-delivery, stale-lease, cancellation, unknown-outcome recovery, and non-money acceptance evidence still need the complete seal. The deployed success path proves bounded reservation (2,918 reserved versus 52 actual input tokens in the recorded probe), actual output-token settlement, canonical terminal states, and immutable local-validator evidence. |
+| AP1-4 crash/concurrency acceptance and stage seal | Started; real expired-Scout recovery and terminal-child reconciliation now deployed | The complete race, duplicate-delivery, stale-lease, cancellation and stage-seal matrix remains open. The deployed probes now prove bounded reservation, actual token settlement, immutable validator evidence, fail-closed recovery of an expired dispatched Scout Turn, and deterministic parent/Run terminalization when a Scout exhausts its bounded retries. |
 
 AP1-1 freezes data shape and fail-closed validation only. It does not create
 tables, start a scheduler, claim work, call a model, publish a behavior event,
@@ -221,6 +221,28 @@ continuations; it reports in-progress versus completed stages rather than
 pretending a dispatched Scout has finished. The Worker heartbeat extension is
 also aligned to the frozen 60-second policy maximum, so slow valid provider
 calls renew their lease without denied-heartbeat noise.
+
+The next hardening slice is also deployed locally. Migration `0035` exposes
+only an expired `dispatched` or `unknown` model Turn to the Worker; after the
+database reclaims its lease, the Worker marks that exact old Turn
+`provider_outcome_ambiguous` and permits an ordinary bounded retry. It never
+accepts a late response from the pre-crash provider call. Migration `0036`
+adds the complementary terminal path: when an admitted Scout exhausts its
+retries without a valid memo, Control records an immutable
+`cortex_parent_scout_failure`, releases the parked parent slot, and moves the
+parent Task and Run to `failed` instead of leaving the UI permanently
+`running`. The read-only trace now includes `scout_parent_failed`.
+
+Two live probes substantiate these paths. Run
+`254ef676-55d9-4fe2-85f0-bcca0f1be9df` reached Scout dead-letter after repeated
+invalid provider output and was reconciled to terminal `failed` with its
+complete trace retained. Run `dac82d5d-f1d3-4285-ab67-912da6335cdc` was stopped
+after its Scout call was dispatched; after lease expiry, its old Turn was
+failed as `provider_outcome_ambiguous`, its Scout retried exactly once, and the
+Run then completed `scout_research_completed → desk_continuation_ready →
+decision_desk_completed`. A normal post-change Run
+`ff656937-4ba0-46f5-868c-62d3d721dd01` also completed the same chain with the
+Scout manifest bounded at 4,000 output tokens.
 
 The first persistent, turn-by-turn Cortex Conversation slice is also deployed
 locally. Agent Lab now retains one Cortex Conversation identifier in the page
