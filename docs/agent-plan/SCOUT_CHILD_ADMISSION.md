@@ -1,8 +1,10 @@
 # Bounded Scout child-work admission — first implementation slice
 
-Status: **frozen implementation boundary**. This document narrows the already
-frozen Runtime and Collaboration contracts; it does not activate generic AP5
-roles, scheduling, search, or any Kernel-facing capability.
+Status: **implemented and deployed locally (2026-07-22)**. This document
+narrows the already frozen Runtime and Collaboration contracts; it does not
+activate generic AP5 roles, scheduling, search, or any Kernel-facing
+capability. Run `af7eb22e-0f60-498e-adc4-98d53a818c59` completed the full
+durable path described below.
 
 ## Goal
 
@@ -30,8 +32,9 @@ silently continue a parent after a process restart.
 - One child per parent Task, maximum depth one, no Scout-to-child delegation.
 - The same existing Worker pool executes both roles under distinct immutable
   execution bindings; no new credential is introduced.
-- The child has effect ceiling `none`. It can use the already installed,
-  exact-URL `research_web_fetch` Tool only under the existing Tool policy.
+- The child has effect ceiling `none`. This slice does not expose a Scout Tool
+  call; the existing exact-URL `research_web_fetch` path and its independent
+  recovery remain unchanged.
 - The child emits a typed Scout Artifact, never a user-facing final response.
 - The resumed parent executes only Decision Desk. It cannot run Intent again
   or re-authorize a second Scout request.
@@ -117,3 +120,22 @@ restricted Control/Worker/Research roles:
    without duplicate Tool authorization; and
 7. the displayed trace derives `handoff_to_scout`, child admission, Scout
    completion, parent continuation and Desk completion from these records.
+
+## Deployed probe
+
+The deployed Run above selected `scout` from the typed Intent output, created
+one admitted child Task and one typed memo Artifact, then resumed the original
+parent in a new Desk-only Session. Its Agent Lab trace was:
+
+```text
+intent_interpreter_completed
+→ handoff_to_scout
+→ scout_task_admitted
+→ scout_research_completed
+→ desk_continuation_ready
+→ decision_desk_completed
+```
+
+This validates the normal success path and its database-owned authorization
+boundaries. The crash/duplicate probes remain the next hardening work, not a
+claim that generic collaboration is complete.

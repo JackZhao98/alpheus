@@ -73,6 +73,7 @@ func run() error {
 	recoveryContext, stopRecovery := context.WithCancel(context.Background())
 	defer stopRecovery()
 	startCortexWebFetchRecovery(recoveryContext, adapter, researchHTTP, researchURL, researchToken)
+	startCortexScoutContinuationRecovery(recoveryContext, adapter)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,
@@ -93,6 +94,30 @@ func run() error {
 			"text":      map[string]any{"type": "string", "maxLength": 16000},
 		},
 	}
+	scoutWorkflowSchema := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"kind", "target", "objective", "rationale", "text"},
+		"properties": map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":    map[string]any{"type": "string", "enum": []string{"desk", "scout", "user"}},
+			"objective": map[string]any{"type": "string", "maxLength": 4000},
+			"rationale": map[string]any{"type": "string", "maxLength": 4000},
+			"text":      map[string]any{"type": "string", "maxLength": 16000},
+		},
+	}
+	scoutMemoSchema := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"summary", "evidence", "limitations"},
+		"properties": map[string]any{
+			"summary":     map[string]any{"type": "string", "maxLength": 12000},
+			"evidence":    map[string]any{"type": "array", "maxItems": 12, "items": map[string]any{"type": "string", "maxLength": 4000}},
+			"limitations": map[string]any{"type": "string", "maxLength": 4000},
+		},
+	}
 	answerSchemaRaw, err := json.Marshal(answerSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex answer schema: %w", err)
@@ -100,6 +125,14 @@ func run() error {
 	workflowSchemaRaw, err := json.Marshal(workflowSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex workflow schema: %w", err)
+	}
+	scoutWorkflowSchemaRaw, err := json.Marshal(scoutWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex Scout workflow schema: %w", err)
+	}
+	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex Scout memo schema: %w", err)
 	}
 	answerSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", answerSchema)
@@ -111,13 +144,25 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex workflow schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef)
+	scoutWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v3",
+		"agent-platform.contract.output_contract_schema.v1", scoutWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex Scout workflow schema: %w", err)
+	}
+	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
+		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
+	}
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, scoutMemoSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
 	outputSchemas := map[string][]byte{
-		runtimeDefinitions.AnswerOutputContractDigest:   answerSchemaRaw,
-		runtimeDefinitions.WorkflowOutputContractDigest: workflowSchemaRaw,
+		runtimeDefinitions.AnswerOutputContractDigest:        answerSchemaRaw,
+		runtimeDefinitions.WorkflowOutputContractDigest:      workflowSchemaRaw,
+		runtimeDefinitions.ScoutWorkflowOutputContractDigest: scoutWorkflowSchemaRaw,
+		runtimeDefinitions.ScoutMemoOutputContractDigest:     scoutMemoSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
@@ -215,6 +260,16 @@ func run() error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if strings.TrimSpace(body.Target) == "scout" {
+			admission, err := adapter.AdmitScoutChild(request.Context(), strings.TrimSpace(body.CallID))
+			if err != nil {
+				log.Printf("Cortex Scout child admission failed: %v", err)
+				http.Error(w, "scout child admission failed", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(admission)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded"})
 	})
 	mux.HandleFunc("POST /internal/v1/tool-calls/web-fetch", func(w http.ResponseWriter, request *http.Request) {

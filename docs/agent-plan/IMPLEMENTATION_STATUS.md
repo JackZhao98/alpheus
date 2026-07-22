@@ -159,10 +159,10 @@ than returning a fabricated array. On 2026-07-21, Run
 `intent_interpreter_completed → handoff_to_desk → decision_desk_completed`,
 with both Turns `result_committed` and the Run `succeeded`.
 
-This remains deliberately narrower than the frozen target architecture: it is
-an in-Attempt Desk handoff, not child Task/Session admission; Scout is not
-installed. The UI no longer asks the user to choose a route; its compatibility
-field is forced to `auto` and never enters the immutable UserRequest.
+This direct Desk edge remains deliberately narrow: it is an in-Attempt Desk
+handoff for requests that do not need a separate research memo. The UI never
+asks the user to select it; its compatibility field is forced to `auto` and
+never enters the immutable UserRequest.
 
 The first AP3 cross-plane Tool slice is now deployed locally. It enables only
 one bounded external read: `research_web_fetch`, and only when a normal Desk
@@ -197,12 +197,30 @@ requeue a newer owner, and no recovery path creates an intent, changes a URL,
 or revives the old Worker/Attempt. The deployed reconciler recovered two
 historical interrupted calls (one missing only the Control acknowledgement and
 one missing its Research receipt); the permanent queue is now fully
-acknowledged and has an append-only claim/receipt audit trail. Next is the
-separate Scout/Research child-work admission slice. Its first bounded
-`Intent → Scout → Desk` state machine is now frozen in
-`SCOUT_CHILD_ADMISSION.md`; implementation must add the admission and parent
-continuation records as one crash-safe unit rather than presenting Scout as an
-in-prompt label.
+acknowledged and has an append-only claim/receipt audit trail.
+
+The first bounded persistent collaboration slice is now deployed locally. An
+Intent Interpreter may itself choose the fixed `scout` route only when its
+immutable Run has the Scout workflow contract. Control persists the handoff,
+an immutable child-work request, `cortex_scout_child_admission`, exactly one
+Scout Task/Session/ledger, a typed `scout_research_memo` Artifact, and exactly
+one `cortex_parent_continuation` before the parent Desk Task resumes. The
+parent cannot re-run Intent or create another Scout child, and the Desk reads
+the memo through an Artifact-owned Blob binding rather than a fabricated
+prompt reference. The Worker uses the same credential-free role pool with
+fixed `intent`, `scout`, and `desk` execution modes; this slice does not add a
+generic role registry, arbitrary fan-out, or a new Scout Tool surface.
+
+On 2026-07-22, real Agent Lab Run
+`af7eb22e-0f60-498e-adc4-98d53a818c59` completed
+`intent_interpreter_completed → handoff_to_scout → scout_task_admitted →
+scout_research_completed → desk_continuation_ready →
+decision_desk_completed`, ending in the parent user-facing Artifact. Its trace
+is read-only projection from durable Turns, handoffs, admissions and
+continuations; it reports in-progress versus completed stages rather than
+pretending a dispatched Scout has finished. The Worker heartbeat extension is
+also aligned to the frozen 60-second policy maximum, so slow valid provider
+calls renew their lease without denied-heartbeat noise.
 
 The first persistent, turn-by-turn Cortex Conversation slice is also deployed
 locally. Agent Lab now retains one Cortex Conversation identifier in the page

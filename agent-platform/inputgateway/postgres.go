@@ -606,13 +606,229 @@ func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) 
 }
 
 func (adapter *PostgresAdapter) RecordHandoff(ctx context.Context, callID, target, objective, rationale string) error {
-	if callID == "" || target != "desk" || objective == "" || rationale == "" {
+	if callID == "" || (target != "desk" && target != "scout") || objective == "" || rationale == "" {
 		return fmt.Errorf("invalid Cortex handoff")
 	}
 	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
 		var raw []byte
 		return tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_handoff($1,$2,$3,$4)::TEXT`, callID, target, objective, rationale).Scan(&raw)
 	})
+}
+
+// ScoutChildAdmission is the durable Control decision for the one installed
+// child-work capability. A rejection is a stable decision, not a transient
+// transport failure, so the Worker can choose its bounded parent fallback.
+type ScoutChildAdmission struct {
+	Status         string `json:"status"`
+	RequestID      string `json:"request_id"`
+	ReasonCode     string `json:"reason_code"`
+	ChildTaskID    string `json:"child_task_id"`
+	ChildSessionID string `json:"child_session_id"`
+}
+
+type scoutChildSeed struct {
+	RequestID          string       `json:"request_id"`
+	ConversationID     string       `json:"conversation_id"`
+	SubjectPrincipalID string       `json:"subject_principal_id"`
+	RawInput           blob.BlobRef `json:"raw_input"`
+	Objective          string       `json:"objective"`
+	Rationale          string       `json:"rationale"`
+	HandoffID          string       `json:"handoff_id"`
+}
+
+// AdmitScoutChild keeps the Worker out of Blob writes and direct Runtime DML.
+// Its source is the already committed Scout handoff; all IDs are deterministic
+// from that source so HTTP retries return the same request/child identity.
+func (adapter *PostgresAdapter) AdmitScoutChild(ctx context.Context, callID string) (ScoutChildAdmission, error) {
+	if adapter == nil || strings.TrimSpace(callID) == "" {
+		return ScoutChildAdmission{}, fmt.Errorf("invalid Cortex Scout child source")
+	}
+	var seedRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.get_cortex_scout_child_seed($1)::TEXT`, callID).Scan(&seedRaw)
+	}); err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("read Cortex Scout child seed: %w", err)
+	}
+	var seed scoutChildSeed
+	if json.Unmarshal(seedRaw, &seed) != nil || seed.RequestID == "" || seed.ConversationID == "" ||
+		seed.SubjectPrincipalID == "" || seed.RawInput.Validate() != nil || strings.TrimSpace(seed.Objective) == "" ||
+		strings.TrimSpace(seed.Rationale) == "" || seed.HandoffID == "" {
+		return ScoutChildAdmission{}, fmt.Errorf("invalid Cortex Scout child seed")
+	}
+	history, err := adapter.ConversationHistory(ctx, seed.ConversationID, seed.SubjectPrincipalID, seed.RequestID)
+	if err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("read Cortex Scout Conversation history: %w", err)
+	}
+	requestID := "cortex-scout-request-" + callID
+	childTaskID := "cortex-scout-task-" + requestID
+	objective, err := adapter.CommitControlJSON(ctx, "task_objective", requestID,
+		"agent-platform.contract.scout_task_objective.v1", map[string]any{
+			"schema_revision": 1, "handoff_id": seed.HandoffID, "source_call_id": callID,
+			"objective": seed.Objective, "rationale": seed.Rationale,
+		})
+	if err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("commit Cortex Scout task objective: %w", err)
+	}
+	execution, err := adapter.CommitControlJSON(ctx, "execution_binding", childTaskID,
+		"agent-platform.contract.scout_execution_binding.v1", map[string]any{
+			"schema_revision": 1, "task_id": childTaskID, "role": "scout",
+			"worker_principal_id": "cortex-worker-1", "provider": "openai", "model": "gpt-5.6-sol",
+		})
+	if err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("commit Cortex Scout execution binding: %w", err)
+	}
+	contextRef, err := adapter.CommitControlJSON(ctx, "context_manifest", "cortex-scout-context-"+requestID,
+		"agent-platform.contract.scout_context_manifest.v1", map[string]any{
+			"schema_revision": 1, "role": "scout", "request_id": seed.RequestID,
+			"conversation_id": seed.ConversationID, "raw_input": seed.RawInput,
+			"objective": seed.Objective, "rationale": seed.Rationale, "handoff_id": seed.HandoffID,
+			"conversation": map[string]any{"schema_revision": 1, "entries": history},
+		})
+	if err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("commit Cortex Scout context manifest: %w", err)
+	}
+	objectiveRaw, _ := json.Marshal(objective)
+	executionRaw, _ := json.Marshal(execution)
+	contextRaw, _ := json.Marshal(contextRef)
+	var admittedRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var recordedRaw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_scout_child_request($1,$2,$3::JSONB)::TEXT`,
+			callID, "cortex-worker-1", string(objectiveRaw)).Scan(&recordedRaw); err != nil {
+			return err
+		}
+		var recorded struct {
+			Status    string `json:"status"`
+			RequestID string `json:"child_request_id"`
+		}
+		if json.Unmarshal(recordedRaw, &recorded) != nil || recorded.Status != "recorded" || recorded.RequestID != requestID {
+			return fmt.Errorf("Cortex Scout child request was not recorded")
+		}
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_scout_child($1,$2::JSONB,$3::JSONB,$4)::TEXT`,
+			requestID, string(executionRaw), string(contextRaw), "cortex-worker-1").Scan(&admittedRaw)
+	}); err != nil {
+		return ScoutChildAdmission{}, fmt.Errorf("admit Cortex Scout child: %w", err)
+	}
+	var result ScoutChildAdmission
+	if json.Unmarshal(admittedRaw, &result) != nil || result.RequestID != requestID ||
+		(result.Status != "admitted" && result.Status != "rejected") {
+		return ScoutChildAdmission{}, fmt.Errorf("invalid Cortex Scout admission response")
+	}
+	if result.Status == "admitted" && (result.ChildTaskID == "" || result.ChildSessionID == "") {
+		return ScoutChildAdmission{}, fmt.Errorf("Cortex Scout admission missing child identity")
+	}
+	return result, nil
+}
+
+// ScoutContinuation is the durable identity of the parent Task's Desk-only
+// Session. Control creates it only from an admitted, completed Scout Artifact.
+type ScoutContinuation struct {
+	Status          string `json:"status"`
+	RequestID       string `json:"request_id"`
+	ParentTaskID    string `json:"parent_task_id"`
+	ParentSessionID string `json:"parent_session_id"`
+}
+
+type scoutContinuationSeed struct {
+	RequestID          string              `json:"request_id"`
+	ConversationID     string              `json:"conversation_id"`
+	SubjectPrincipalID string              `json:"subject_principal_id"`
+	RawInput           blob.BlobRef        `json:"raw_input"`
+	ParentTaskID       string              `json:"parent_task_id"`
+	HandoffID          string              `json:"handoff_id"`
+	Objective          string              `json:"objective"`
+	Rationale          string              `json:"rationale"`
+	ScoutArtifact      contracts.RecordRef `json:"scout_artifact"`
+	ScoutMemo          blob.BlobRef        `json:"scout_memo"`
+}
+
+// ListScoutContinuationCandidates is deliberately a small reconciler input:
+// candidates are already-admitted child Tasks with a committed Scout memo.
+func (adapter *PostgresAdapter) ListScoutContinuationCandidates(ctx context.Context, limit int) ([]string, error) {
+	if adapter == nil || limit < 1 || limit > 32 {
+		return nil, fmt.Errorf("invalid Cortex Scout continuation limit")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.list_cortex_scout_continuation_candidates($1)::TEXT`, limit).Scan(&raw)
+	}); err != nil {
+		return nil, fmt.Errorf("list Cortex Scout continuations: %w", err)
+	}
+	var values []struct {
+		RequestID string `json:"request_id"`
+	}
+	if json.Unmarshal(raw, &values) != nil {
+		return nil, fmt.Errorf("invalid Cortex Scout continuation candidates")
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.RequestID == "" {
+			return nil, fmt.Errorf("invalid Cortex Scout continuation identity")
+		}
+		result = append(result, value.RequestID)
+	}
+	return result, nil
+}
+
+// ContinueScoutParent is idempotent across Control restarts. The SQL command
+// creates the new Session, all Worker grants, continuation record, and the
+// waiting -> ready transition as one transaction.
+func (adapter *PostgresAdapter) ContinueScoutParent(ctx context.Context, admissionRequestID string) (ScoutContinuation, error) {
+	if adapter == nil || strings.TrimSpace(admissionRequestID) == "" {
+		return ScoutContinuation{}, fmt.Errorf("invalid Cortex Scout continuation request")
+	}
+	var seedRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.get_cortex_parent_continuation_seed($1)::TEXT`, admissionRequestID).Scan(&seedRaw)
+	}); err != nil {
+		return ScoutContinuation{}, fmt.Errorf("read Cortex Scout continuation seed: %w", err)
+	}
+	var seed scoutContinuationSeed
+	if json.Unmarshal(seedRaw, &seed) != nil || seed.RequestID == "" || seed.ConversationID == "" ||
+		seed.SubjectPrincipalID == "" || seed.RawInput.Validate() != nil || seed.ParentTaskID == "" ||
+		seed.HandoffID == "" || strings.TrimSpace(seed.Objective) == "" || strings.TrimSpace(seed.Rationale) == "" ||
+		seed.ScoutArtifact.Validate() != nil || seed.ScoutArtifact.RecordType != "artifact" || seed.ScoutMemo.Validate() != nil {
+		return ScoutContinuation{}, fmt.Errorf("invalid Cortex Scout continuation seed")
+	}
+	history, err := adapter.ConversationHistory(ctx, seed.ConversationID, seed.SubjectPrincipalID, seed.RequestID)
+	if err != nil {
+		return ScoutContinuation{}, fmt.Errorf("read Cortex Desk Conversation history: %w", err)
+	}
+	executionRecordID := "cortex-desk-continuation-" + admissionRequestID
+	execution, err := adapter.CommitControlJSON(ctx, "execution_binding", executionRecordID,
+		"agent-platform.contract.desk_execution_binding.v1", map[string]any{
+			"schema_revision": 1, "task_id": seed.ParentTaskID, "role": "desk",
+			"worker_principal_id": "cortex-worker-1", "provider": "openai", "model": "gpt-5.6-sol",
+		})
+	if err != nil {
+		return ScoutContinuation{}, fmt.Errorf("commit Cortex Desk execution binding: %w", err)
+	}
+	contextRef, err := adapter.CommitControlJSON(ctx, "context_manifest", "cortex-desk-context-"+admissionRequestID,
+		"agent-platform.contract.desk_context_manifest.v1", map[string]any{
+			"schema_revision": 1, "role": "desk", "request_id": seed.RequestID,
+			"conversation_id": seed.ConversationID, "raw_input": seed.RawInput,
+			"objective": seed.Objective, "rationale": seed.Rationale, "handoff_id": seed.HandoffID,
+			"scout_artifact": seed.ScoutArtifact, "scout_memo": seed.ScoutMemo,
+			"conversation": map[string]any{"schema_revision": 1, "entries": history},
+		})
+	if err != nil {
+		return ScoutContinuation{}, fmt.Errorf("commit Cortex Desk continuation context: %w", err)
+	}
+	executionRaw, _ := json.Marshal(execution)
+	contextRaw, _ := json.Marshal(contextRef)
+	var continuedRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.continue_cortex_parent_from_scout($1,$2::JSONB,$3::JSONB,$4)::TEXT`,
+			admissionRequestID, string(executionRaw), string(contextRaw), "cortex-worker-1").Scan(&continuedRaw)
+	}); err != nil {
+		return ScoutContinuation{}, fmt.Errorf("continue Cortex parent from Scout: %w", err)
+	}
+	var result ScoutContinuation
+	if json.Unmarshal(continuedRaw, &result) != nil || result.Status != "ready" || result.RequestID != admissionRequestID ||
+		result.ParentTaskID != seed.ParentTaskID || result.ParentSessionID == "" {
+		return ScoutContinuation{}, fmt.Errorf("invalid Cortex Scout continuation response")
+	}
+	return result, nil
 }
 
 func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request blob.ReadRequest) (blob.ReadAuthorization, error) {
@@ -628,15 +844,27 @@ func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request b
 }
 
 type RuntimeDefinitions struct {
-	AnswerOutputContractDigest   string
-	WorkflowOutputContractDigest string
+	AnswerOutputContractDigest        string
+	WorkflowOutputContractDigest      string
+	ScoutWorkflowOutputContractDigest string
+	ScoutMemoOutputContractDigest     string
 }
 
-func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema blob.BlobRef) (RuntimeDefinitions, error) {
-	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType {
+func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
+	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
+		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
+		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
 		return RuntimeDefinitions{}, fmt.Errorf("invalid Cortex output schema BlobRef")
 	}
 	answerRaw, err := json.Marshal(answerSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	scoutWorkflowRaw, err := json.Marshal(scoutWorkflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	scoutMemoRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
 		return RuntimeDefinitions{}, err
 	}
@@ -665,6 +893,20 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 			return fmt.Errorf("Cortex workflow output contract was not selected")
 		}
 		definitions.WorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v3($1::JSONB)::TEXT`, string(scoutWorkflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex Scout workflow output contract was not selected")
+		}
+		definitions.ScoutWorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_scout_memo_output_contract($1::JSONB)::TEXT`, string(scoutMemoRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex Scout memo output contract was not selected")
+		}
+		definitions.ScoutMemoOutputContractDigest = response.OutputContractDigest
 		return nil
 	})
 	if err != nil {
@@ -703,7 +945,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v2($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v4($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)
