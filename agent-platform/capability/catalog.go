@@ -30,12 +30,12 @@ var toolCatalog = []ToolDescriptor{
 	{
 		ID: ToolResearchWebFetch, Revision: 1, Provider: "research_gateway", SourceTool: "web-fetch",
 		Category: "web", Description: "Fetch one explicit public HTTP(S) page as bounded, untrusted evidence.",
-		Effect: "read_only", TargetRoles: []string{"intent", "decision_desk"}, State: CatalogStateActive,
+		Effect: "read_only", TargetRoles: []string{"discovery_scout", "decision_desk"}, State: CatalogStateActive,
 	},
 	{
 		ID: ToolResearchGEXBOTAsOf, Revision: 1, Provider: "gexbot_provider", SourceTool: "gexbot-as-of",
 		Category: "market_options", Description: "Read one bounded archived SPX GEX observation behind an as_of fence.",
-		Effect: "read_only", TargetRoles: []string{"intent", "decision_desk"}, State: CatalogStateActive,
+		Effect: "read_only", TargetRoles: []string{"options_scout", "decision_desk"}, State: CatalogStateActive,
 	},
 	{
 		ID: "kernel_accounts", Revision: 1, Provider: "kernel_robinhood_mcp", SourceTool: "get_accounts",
@@ -45,12 +45,12 @@ var toolCatalog = []ToolDescriptor{
 	{
 		ID: "kernel_earnings_calendar", Revision: 1, Provider: "kernel_robinhood_mcp", SourceTool: "get_earnings_calendar",
 		Category: "catalyst", Description: "Read a bounded set of upcoming earnings dates for an explicit symbol.",
-		Effect: "read_only", TargetRoles: []string{"fundamental_scout"}, State: CatalogStateActive,
+		Effect: "read_only", TargetRoles: []string{"catalyst_scout"}, State: CatalogStateActive,
 	},
 	{
 		ID: ToolKernelEarningsResults, Revision: 1, Provider: "kernel_robinhood_mcp", SourceTool: "get_earnings_results",
 		Category: "catalyst", Description: "Read normalized published earnings results for one explicit symbol.",
-		Effect: "read_only", TargetRoles: []string{"intent", "decision_desk"}, State: CatalogStateActive,
+		Effect: "read_only", TargetRoles: []string{"catalyst_scout", "decision_desk"}, State: CatalogStateActive,
 	},
 	{
 		ID: "kernel_equity_fundamentals", Revision: 1, Provider: "kernel_robinhood_mcp", SourceTool: "get_equity_fundamentals",
