@@ -106,6 +106,7 @@ func (g *gateway) handler() http.Handler {
 	// Moody Blues is the canonical temporal-data surface. The older /gexbot
 	// paths remain narrow compatibility aliases while callers migrate.
 	mux.HandleFunc("GET /internal/v1/moody-blues/providers/gexbot-classic/status", g.moodyBluesGEXBOTStatus)
+	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/live", g.cortexGEXBOTLive)
 	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/as-of", g.cortexGEXBOTAsOf)
 	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/replays", g.cortexGEXBOTReplay)
 	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/replays/{id}/next", g.cortexGEXBOTReplayNext)

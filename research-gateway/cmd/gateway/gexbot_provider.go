@@ -64,6 +64,27 @@ func (g *gateway) cortexGEXBOTAsOf(w http.ResponseWriter, r *http.Request) {
 	g.proxyGEXBOT(w, r, "/v1/as-of", input)
 }
 
+func (g *gateway) cortexGEXBOTLive(w http.ResponseWriter, r *http.Request) {
+	if !g.validCortexToolToken(r) || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "live") {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var input struct {
+		Symbol   string `json:"symbol"`
+		Category string `json:"category"`
+	}
+	if !decodeGatewayJSON(w, r, &input) {
+		return
+	}
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Category = strings.TrimSpace(input.Category)
+	if input.Symbol != "SPX" || !validGEXBOTCategory(input.Category) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBOT live query"})
+		return
+	}
+	g.proxyGEXBOTLive(w, r, input)
+}
+
 func (g *gateway) cortexGEXBOTReplay(w http.ResponseWriter, r *http.Request) {
 	if !g.validCortexToolToken(r) || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "replay") {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -152,6 +173,51 @@ func (g *gateway) proxyGEXBOT(w http.ResponseWriter, r *http.Request, path strin
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(raw)
+}
+
+func (g *gateway) proxyGEXBOTLive(w http.ResponseWriter, r *http.Request, input any) {
+	body, err := json.Marshal(input)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, g.gexbotURL+"/v1/live", bytes.NewReader(body))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT Provider unavailable"})
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+g.gexbotToken)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := g.http.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT Provider unavailable"})
+		return
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxGEXBOTProviderResponseBytes+1))
+	if err != nil || response.StatusCode != http.StatusOK || len(raw) == 0 || len(raw) > maxGEXBOTProviderResponseBytes {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT live response unavailable"})
+		return
+	}
+	var value map[string]json.RawMessage
+	if json.Unmarshal(raw, &value) != nil || value["payload"] != nil || value["available"] != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT live response invalid"})
+		return
+	}
+	value["available"] = json.RawMessage("true")
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT live response invalid"})
+		return
+	}
+	compacted, err := compactGEXBOTObservation(normalized)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT live transform failed"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(compacted)
 }
 
 func validGEXBOTCategory(value string) bool {

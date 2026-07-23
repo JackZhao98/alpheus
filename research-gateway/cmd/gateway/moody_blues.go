@@ -207,9 +207,9 @@ func gexbotMoodyBluesProvider() moodyBluesProvider {
 	return moodyBluesProvider{
 		SchemaRevision: 1,
 		ID:             "gexbot_classic",
-		DisplayName:    "GEXBOT Classic Archive",
+		DisplayName:    "GEXBOT Classic",
 		DataClass:      "options_gamma_snapshot",
-		Capabilities:   moodyBluesCapabilities{AsOf: true, Replay: true},
+		Capabilities:   moodyBluesCapabilities{Live: true, AsOf: true, Replay: true},
 		Temporal: moodyBluesTemporalContract{
 			QueryPrecision:        "microsecond",
 			ObservationResolution: "30s",
