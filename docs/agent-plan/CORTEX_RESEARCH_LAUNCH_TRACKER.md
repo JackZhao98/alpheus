@@ -95,7 +95,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 
 | 顺序 | 工作项 | 完成条件 | 状态 |
 |---:|---|---|---|
-| P1 | 冻结 TaskGraph / dependency / join 契约 | 计划可表达多个并行子 Task、依赖边、最大并发、deadline、预算及不可变输出契约；模型不能自行扩大权限 | 待开始 |
+| P1 | 冻结 TaskGraph / dependency / join 契约 | 计划可表达多个并行子 Task、依赖边、最大并发、deadline、预算及不可变输出契约；模型不能自行扩大权限 | 已完成：独立 frozen v1 契约、Schema、golden、DAG/Join/权限/预算校验全部通过 |
 | P2 | Control 批量 admission 与 fan-out | 一次已验证计划原子创建多个独立子 Task；每个分支绑定唯一角色、Tool grant、预算和父 Run | 待开始 |
 | P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 待开始 |
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、超时、取消和部分失败；Join 只读取已提交 Artifact/Receipt | 待开始 |
@@ -103,6 +103,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | P6 | DAG Trace 与 Agent Lab | 网页显示真实分叉、并行运行、等待、失败、汇合和下一轮，而不是伪造线性 Trace | 待开始 |
 | P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 待开始 |
 
-下一项实际开发任务是 **P1：冻结 TaskGraph 和 Join 契约**。在 P1 通过前，
-不会直接把现有 Worker 改成无边界 fan-out，也不会让模型决定并发数、预算或
-Tool 权限。
+下一项实际开发任务是 **P2：Control 批量 admission 与 fan-out**。P1 已冻结
+`task_graph_plan` 与 `admit_task_graph_command`：只有 Control 可接受计划；
+节点绑定角色/Tool/输出契约/预算/deadline，循环依赖、隐式 Join、权限扩大和
+预算超限都会 fail closed。P2 将按这份契约原子落库，但尚未启用并行执行。

@@ -218,12 +218,20 @@ read-only historical audit records; no production path can create or execute
 another one.
 
 The next highest-priority Cortex milestone is parallel multi-Agent TaskGraph
-execution. It is not implemented by the current single-Tool/Specialist chain.
-The staged TODO is tracked in
+execution. P1's independent frozen `alpheus.taskgraph` v1 pack is complete:
+`task_graph_plan` and the Control-only `admit_task_graph_command` bind exact
+role/Tool revisions, output contracts, per-node and aggregate budgets,
+deadlines, graph depth/fanout/parallelism/round ceilings, dependency edges and
+explicit `all_required` / `minimum_succeeded` Join behavior. Strict Go and JSON
+Schema parity, semantic goldens and tests reject cycles, missing joins,
+cross-role Tool grants, revision drift, Desk escalation, unbounded child
+expansion and aggregate overcommit. Execution remains disabled until P2 adds
+atomic database admission, so the deployed single-Tool/Specialist chain is
+unchanged. The staged TODO is tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
-freeze the graph/dependency/join contract first, then add atomic fan-out,
-parallel scheduling, explicit fan-in policies, bounded iterative research,
-DAG Trace/UI, and concurrency/failure acceptance.
+P2 now adds atomic fan-out, followed by parallel scheduling, explicit fan-in
+policies, bounded iterative research, DAG Trace/UI, and concurrency/failure
+acceptance.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the

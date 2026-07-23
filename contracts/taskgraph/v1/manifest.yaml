@@ -1,0 +1,26 @@
+{
+  "pack": "alpheus.taskgraph",
+  "owner": "agent_control",
+  "schema_revision": 1,
+  "lifecycle": "frozen",
+  "compatibility": "additive_reader_first",
+  "canonical_profile": "alpheus-c14n-v1",
+  "format": "json-compatible-yaml-1.2",
+  "records": ["task_graph_plan"],
+  "commands": ["admit_task_graph_command"],
+  "events": [],
+  "assets": {
+    "schemas": ["schema/taskgraph.schema.json"],
+    "retention": "retention.yaml",
+    "canonicalization": "canonicalization.md"
+  },
+  "goldens": {
+    "valid": ["golden/valid/task_graph_plan.json"],
+    "invalid": ["golden/invalid/task_graph_cycle.json"],
+    "digests": ["golden/digest/task_graph_plan.sha256"]
+  },
+  "effect_ceiling": "external_read",
+  "authority": "control_only",
+  "model_output_is_authority": false,
+  "execution": "disabled_until_atomic_admission"
+}

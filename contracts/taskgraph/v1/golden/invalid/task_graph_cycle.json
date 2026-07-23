@@ -1,0 +1,90 @@
+{
+  "schema_revision": 1,
+  "graph_id": "graph-cycle",
+  "run_id": "run-1",
+  "parent_task_id": "root-task-1",
+  "source_result": {
+    "owner": "agent_control",
+    "record_type": "model_call_result",
+    "record_id": "result-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "runtime_policy": {
+    "owner": "agent_control",
+    "record_type": "runtime_policy",
+    "record_id": "policy-1",
+    "schema_revision": 1,
+    "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation": 1
+  },
+  "round": 1,
+  "max_rounds": 1,
+  "authorized_limit": {
+    "max_model_calls": 2,
+    "max_input_tokens": 4000,
+    "max_output_tokens": 2000,
+    "max_tool_calls": 0,
+    "max_external_cost_micro_usd": 0,
+    "max_wall_time_ms": 60000,
+    "max_idle_time_ms": 10000,
+    "max_tasks": 2,
+    "max_depth": 2,
+    "max_fanout": 1,
+    "max_parallelism": 2,
+    "max_invalid_output_retries": 0,
+    "max_infrastructure_retries": 0
+  },
+  "nodes": [
+    {
+      "task_id": "task-a",
+      "role_id": "decision_desk",
+      "role_revision": 1,
+      "depth": 1,
+      "objective": {
+        "schema_revision": 1,
+        "blob_id": "00000000-0000-4000-8000-000000000001",
+        "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "media_type": "application/json",
+        "size_bytes": 20,
+        "origin": {"owner": "agent_control", "record_type": "task_objective", "record_id": "task-a-objective", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "committed_at": "2026-07-23T11:59:00Z"
+      },
+      "input_refs": [],
+      "output_contract_name": "answer_v1",
+      "output_contract": {"owner": "agent_control", "record_type": "output_contract_revision", "record_id": "answer_v1", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "generation": 1},
+      "tool_grants": [],
+      "limit": {"max_model_calls": 1, "max_input_tokens": 2000, "max_output_tokens": 1000, "max_tool_calls": 0, "max_external_cost_micro_usd": 0, "max_wall_time_ms": 30000, "max_idle_time_ms": 5000, "max_tasks": 1, "max_depth": 0, "max_fanout": 0, "max_parallelism": 1, "max_invalid_output_retries": 0, "max_infrastructure_retries": 0},
+      "deadline_at": "2026-07-23T12:02:00Z"
+    },
+    {
+      "task_id": "task-b",
+      "role_id": "decision_desk",
+      "role_revision": 1,
+      "depth": 2,
+      "objective": {
+        "schema_revision": 1,
+        "blob_id": "00000000-0000-4000-8000-000000000001",
+        "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "media_type": "application/json",
+        "size_bytes": 20,
+        "origin": {"owner": "agent_control", "record_type": "task_objective", "record_id": "task-b-objective", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "committed_at": "2026-07-23T11:59:00Z"
+      },
+      "input_refs": [],
+      "output_contract_name": "answer_v1",
+      "output_contract": {"owner": "agent_control", "record_type": "output_contract_revision", "record_id": "answer_v1", "schema_revision": 1, "record_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "generation": 1},
+      "tool_grants": [],
+      "limit": {"max_model_calls": 1, "max_input_tokens": 2000, "max_output_tokens": 1000, "max_tool_calls": 0, "max_external_cost_micro_usd": 0, "max_wall_time_ms": 30000, "max_idle_time_ms": 5000, "max_tasks": 1, "max_depth": 0, "max_fanout": 0, "max_parallelism": 1, "max_invalid_output_retries": 0, "max_infrastructure_retries": 0},
+      "deadline_at": "2026-07-23T12:02:00Z"
+    }
+  ],
+  "edges": [
+    {"from_task_id": "task-a", "to_task_id": "task-b"},
+    {"from_task_id": "task-b", "to_task_id": "task-a"}
+  ],
+  "joins": [],
+  "created_by": {"principal_id": "cortex-control-1", "kind": "workload", "audience": "control_api"},
+  "created_at": "2026-07-23T12:00:00Z",
+  "deadline_at": "2026-07-23T12:03:00Z"
+}

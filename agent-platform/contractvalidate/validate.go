@@ -20,6 +20,7 @@ import (
 	"alpheus/agentplatform/release"
 	"alpheus/agentplatform/runtimecontract"
 	"alpheus/agentplatform/security"
+	"alpheus/agentplatform/taskgraphcontract"
 )
 
 const maxContractBytes = 1 << 20
@@ -117,8 +118,13 @@ var capabilityTypes = map[string]func() validatable{
 	"web_fetch_evidence": func() validatable { return &capability.WebFetchEvidence{} },
 }
 
+var taskGraphTypes = map[string]func() validatable{
+	"admit_task_graph_command": func() validatable { return &taskgraphcontract.AdmitTaskGraphCommand{} },
+	"task_graph_plan":          func() validatable { return &taskgraphcontract.TaskGraphPlan{} },
+}
+
 func SupportedTypes() []string {
-	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+len(runtimeTypes)+len(capabilityTypes)+1)
+	values := make([]string, 0, len(commonTypes)+len(securityDeliveryTypes)+len(blobTypes)+len(governanceTypes)+len(runtimeTypes)+len(capabilityTypes)+len(taskGraphTypes)+1)
 	for name := range commonTypes {
 		values = append(values, name)
 	}
@@ -135,6 +141,9 @@ func SupportedTypes() []string {
 		values = append(values, name)
 	}
 	for name := range capabilityTypes {
+		values = append(values, name)
+	}
+	for name := range taskGraphTypes {
 		values = append(values, name)
 	}
 	values = append(values, "release_manifest")
@@ -197,6 +206,15 @@ func CapabilityTypes() []string {
 	return values
 }
 
+func TaskGraphTypes() []string {
+	values := make([]string, 0, len(taskGraphTypes))
+	for name := range taskGraphTypes {
+		values = append(values, name)
+	}
+	sort.Strings(values)
+	return values
+}
+
 // Validate returns canonical JSON and its contract-domain digest.
 func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, maxContractBytes+1))
@@ -234,6 +252,9 @@ func Validate(contractType string, reader io.Reader) ([]byte, string, error) {
 	}
 	if !ok {
 		factory, ok = capabilityTypes[contractType]
+	}
+	if !ok {
+		factory, ok = taskGraphTypes[contractType]
 	}
 	if !ok {
 		return nil, "", fmt.Errorf("unknown contract type %q", contractType)

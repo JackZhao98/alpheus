@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpheus.local/contracts/taskgraph/v1/taskgraph.schema.json",
+  "type": "object",
+  "$defs": {
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^\\S+$"
+    },
+    "Name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "UTCTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "AuditActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_id", "kind", "audience"],
+      "properties": {
+        "principal_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"enum": ["kernel", "user", "workload"]},
+        "audience": {"$ref": "#/$defs/Name"}
+      }
+    },
+    "RecordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Name"},
+        "record_type": {"$ref": "#/$defs/Name"},
+        "record_id": {"$ref": "#/$defs/Identifier"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"}
+      }
+    },
+    "RevisionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "record_type", "record_id", "schema_revision", "record_digest", "generation"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Name"},
+        "record_type": {"$ref": "#/$defs/Name"},
+        "record_id": {"$ref": "#/$defs/Identifier"},
+        "schema_revision": {"const": 1},
+        "record_digest": {"$ref": "#/$defs/Digest"},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "BlobRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_revision", "blob_id", "content_digest", "media_type", "size_bytes", "origin", "committed_at"],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "blob_id": {"type": "string", "format": "uuid"},
+        "content_digest": {"$ref": "#/$defs/Digest"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 255},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "origin": {"$ref": "#/$defs/RecordRef"},
+        "committed_at": {"$ref": "#/$defs/UTCTime"}
+      }
+    },
+    "BudgetLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_model_calls", "max_input_tokens", "max_output_tokens", "max_tool_calls",
+        "max_external_cost_micro_usd", "max_wall_time_ms", "max_idle_time_ms",
+        "max_tasks", "max_depth", "max_fanout", "max_parallelism",
+        "max_invalid_output_retries", "max_infrastructure_retries"
+      ],
+      "properties": {
+        "max_model_calls": {"type": "integer", "minimum": 0},
+        "max_input_tokens": {"type": "integer", "minimum": 0},
+        "max_output_tokens": {"type": "integer", "minimum": 0},
+        "max_tool_calls": {"type": "integer", "minimum": 0},
+        "max_external_cost_micro_usd": {"type": "integer", "minimum": 0},
+        "max_wall_time_ms": {"type": "integer", "minimum": 0},
+        "max_idle_time_ms": {"type": "integer", "minimum": 0},
+        "max_tasks": {"type": "integer", "minimum": 0},
+        "max_depth": {"type": "integer", "minimum": 0},
+        "max_fanout": {"type": "integer", "minimum": 0},
+        "max_parallelism": {"type": "integer", "minimum": 0},
+        "max_invalid_output_retries": {"type": "integer", "minimum": 0},
+        "max_infrastructure_retries": {"type": "integer", "minimum": 0}
+      }
+    },
+    "CommandEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_revision", "command_id", "actor", "audience", "command_type",
+        "idempotency_key", "request_digest", "causation_id", "correlation_id", "deadline"
+      ],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "command_id": {"$ref": "#/$defs/Identifier"},
+        "actor": {"$ref": "#/$defs/AuditActor"},
+        "audience": {"$ref": "#/$defs/Name"},
+        "command_type": {"$ref": "#/$defs/Name"},
+        "idempotency_key": {"$ref": "#/$defs/Identifier"},
+        "request_digest": {"$ref": "#/$defs/Digest"},
+        "causation_id": {"$ref": "#/$defs/Identifier"},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "deadline": {"$ref": "#/$defs/UTCTime"}
+      }
+    },
+    "ToolGrantSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_revision", "effect"],
+      "properties": {
+        "tool_id": {"$ref": "#/$defs/Name"},
+        "tool_revision": {"type": "integer", "minimum": 1},
+        "effect": {"const": "read_only"}
+      }
+    },
+    "TaskGraphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id", "role_id", "role_revision", "depth", "objective", "input_refs", "output_contract_name",
+        "output_contract", "tool_grants", "limit", "deadline_at"
+      ],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "role_id": {"$ref": "#/$defs/Name"},
+        "role_revision": {"type": "integer", "minimum": 1},
+        "depth": {"type": "integer", "minimum": 1, "maximum": 8},
+        "objective": {"$ref": "#/$defs/BlobRef"},
+        "input_refs": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/RecordRef"}
+        },
+        "output_contract_name": {"$ref": "#/$defs/Name"},
+        "output_contract": {"$ref": "#/$defs/RevisionRef"},
+        "tool_grants": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/ToolGrantSnapshot"}
+        },
+        "limit": {"$ref": "#/$defs/BudgetLimit"},
+        "deadline_at": {"$ref": "#/$defs/UTCTime"}
+      }
+    },
+    "TaskGraphEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_task_id", "to_task_id"],
+      "properties": {
+        "from_task_id": {"$ref": "#/$defs/Identifier"},
+        "to_task_id": {"$ref": "#/$defs/Identifier"}
+      }
+    },
+    "TaskGraphJoin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "join_id", "downstream_task_id", "upstream_task_ids", "policy",
+        "minimum_success", "failure_policy", "deadline_at"
+      ],
+      "properties": {
+        "join_id": {"$ref": "#/$defs/Identifier"},
+        "downstream_task_id": {"$ref": "#/$defs/Identifier"},
+        "upstream_task_ids": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Identifier"}
+        },
+        "policy": {"enum": ["all_required", "minimum_succeeded"]},
+        "minimum_success": {"type": "integer", "minimum": 1, "maximum": 64},
+        "failure_policy": {"enum": ["continue_if_threshold_met", "fail_graph"]},
+        "deadline_at": {"$ref": "#/$defs/UTCTime"}
+      }
+    },
+    "TaskGraphPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_revision", "graph_id", "run_id", "parent_task_id", "source_result",
+        "runtime_policy", "round", "max_rounds", "authorized_limit", "nodes", "edges",
+        "joins", "created_by", "created_at", "deadline_at"
+      ],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "graph_id": {"$ref": "#/$defs/Identifier"},
+        "run_id": {"$ref": "#/$defs/Identifier"},
+        "parent_task_id": {"$ref": "#/$defs/Identifier"},
+        "source_result": {"$ref": "#/$defs/RecordRef"},
+        "runtime_policy": {"$ref": "#/$defs/RevisionRef"},
+        "round": {"type": "integer", "minimum": 1, "maximum": 8},
+        "max_rounds": {"type": "integer", "minimum": 1, "maximum": 8},
+        "authorized_limit": {"$ref": "#/$defs/BudgetLimit"},
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/TaskGraphNode"}
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/TaskGraphEdge"}
+        },
+        "joins": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/TaskGraphJoin"}
+        },
+        "created_by": {"$ref": "#/$defs/AuditActor"},
+        "created_at": {"$ref": "#/$defs/UTCTime"},
+        "deadline_at": {"$ref": "#/$defs/UTCTime"}
+      }
+    },
+    "AdmitTaskGraphCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_revision", "envelope", "expected_run_state_generation",
+        "expected_parent_state_generation", "plan"
+      ],
+      "properties": {
+        "schema_revision": {"const": 1},
+        "envelope": {"$ref": "#/$defs/CommandEnvelope"},
+        "expected_run_state_generation": {"type": "integer", "minimum": 1},
+        "expected_parent_state_generation": {"type": "integer", "minimum": 1},
+        "plan": {"$ref": "#/$defs/TaskGraphPlan"}
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/TaskGraphPlan"},
+    {"$ref": "#/$defs/AdmitTaskGraphCommand"}
+  ]
+}

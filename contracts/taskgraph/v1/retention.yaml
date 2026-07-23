@@ -1,0 +1,16 @@
+{
+  "schema_revision": 1,
+  "owner": "agent_control",
+  "records": {
+    "task_graph_plan": {
+      "minimum_seconds": 31536000,
+      "immutable": true,
+      "delete_requires_owner_policy": true
+    },
+    "admit_task_graph_command": {
+      "minimum_seconds": 31536000,
+      "immutable": true,
+      "delete_requires_owner_policy": true
+    }
+  }
+}
