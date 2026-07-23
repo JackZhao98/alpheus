@@ -397,6 +397,14 @@ type TaskGraphAdmission struct {
 	ParentTaskState string   `json:"parent_task_state"`
 }
 
+type TaskGraphJoinReconciliation struct {
+	Status          string `json:"status"`
+	ResolvedJoins   int64  `json:"resolved_joins"`
+	ReadyJoins      int64  `json:"ready_joins"`
+	FailedJoins     int64  `json:"failed_joins"`
+	CompletedGraphs int64  `json:"completed_graphs"`
+}
+
 type CortexRunResult struct {
 	RunID string             `json:"run_id"`
 	State string             `json:"state"`
@@ -1403,6 +1411,40 @@ func (adapter *PostgresAdapter) AdmitAndPrepareTaskGraph(
 		}
 	}
 	return admission, nil
+}
+
+// ReconcileTaskGraphJoins advances only database-proven terminal Join state.
+// The Control loop supplies the installed Worker principal solely for
+// downstream memo ACLs; roles, thresholds, inputs and outcomes are all read
+// from immutable admitted graph records.
+func (adapter *PostgresAdapter) ReconcileTaskGraphJoins(
+	ctx context.Context,
+) (TaskGraphJoinReconciliation, error) {
+	if adapter == nil || adapter.db == nil {
+		return TaskGraphJoinReconciliation{},
+			fmt.Errorf("invalid TaskGraph Join reconciler")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.reconcile_cortex_task_graph_joins($1)::TEXT`,
+			"cortex-worker-1",
+		).Scan(&raw)
+	})
+	if err != nil {
+		return TaskGraphJoinReconciliation{},
+			fmt.Errorf("reconcile TaskGraph Joins: %w", err)
+	}
+	var result TaskGraphJoinReconciliation
+	if json.Unmarshal(raw, &result) != nil || result.Status != "reconciled" ||
+		result.ResolvedJoins < 0 || result.ReadyJoins < 0 ||
+		result.FailedJoins < 0 || result.CompletedGraphs < 0 ||
+		result.ReadyJoins+result.FailedJoins != result.ResolvedJoins {
+		return TaskGraphJoinReconciliation{},
+			fmt.Errorf("invalid TaskGraph Join reconciliation response")
+	}
+	return result, nil
 }
 
 func (adapter *PostgresAdapter) AdmitTaskGraph(

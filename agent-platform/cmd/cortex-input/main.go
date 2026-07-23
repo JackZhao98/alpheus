@@ -77,6 +77,7 @@ func run() error {
 	defer stopRecovery()
 	startCortexWebFetchRecovery(recoveryContext, adapter, researchHTTP, researchURL, researchToken)
 	startCortexScoutContinuationRecovery(recoveryContext, adapter)
+	startCortexTaskGraphJoinRecovery(recoveryContext, adapter)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,

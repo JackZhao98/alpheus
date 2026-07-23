@@ -549,6 +549,86 @@ BEGIN
 END
 $slot_release$;
 
+DO $terminal_failures$
+DECLARE
+    task_row agent_control.runtime_task%ROWTYPE;
+    attempt_row agent_control.runtime_attempt%ROWTYPE;
+    session_row agent_control.runtime_session%ROWTYPE;
+    at_time TIMESTAMPTZ:=clock_timestamp();
+BEGIN
+    FOR task_row IN
+        SELECT task.*
+        FROM agent_control.runtime_task AS task
+        WHERE task.task_id IN (
+            'tg-probe-fundamental','tg-probe-options'
+        )
+        ORDER BY task.task_id
+    LOOP
+        SELECT * INTO STRICT attempt_row
+        FROM agent_control.runtime_attempt
+        WHERE task_id=task_row.task_id AND state='leased';
+        SELECT * INTO STRICT session_row
+        FROM agent_control.runtime_session
+        WHERE session_id=task_row.session_id;
+        UPDATE agent_control.runtime_attempt
+        SET state='failed',state_generation=state_generation+1,
+            failure=jsonb_build_object(
+                'code','probe_failed','message','rollback probe failure',
+                'retryable',false),
+            updated_at=at_time,terminal_at=at_time
+        WHERE attempt_id=attempt_row.attempt_id;
+        UPDATE agent_control.runtime_task
+        SET state='failed',state_generation=state_generation+1,
+            failure=jsonb_build_object(
+                'code','probe_failed','message','rollback probe failure',
+                'retryable',false),
+            budget_slot_held=false,updated_at=at_time,terminal_at=at_time
+        WHERE task_id=task_row.task_id;
+        UPDATE agent_control.runtime_session
+        SET state='closed',generation=generation+1,closed_at=at_time
+        WHERE session_id=session_row.session_id;
+        IF NOT agent_control.runtime_release_active_slot_ancestors(
+            task_row.run_id,task_row.budget_ledger_id,at_time
+        ) THEN
+            RAISE EXCEPTION 'probe active slot release failed';
+        END IF;
+    END LOOP;
+
+    SELECT * INTO STRICT task_row
+    FROM agent_control.runtime_task
+    WHERE task_id='tg-probe-market';
+    UPDATE agent_control.runtime_task
+    SET state='dead_lettered',state_generation=state_generation+1,
+        failure=jsonb_build_object(
+            'code','probe_dead_lettered',
+            'message','rollback probe dead letter',
+            'retryable',false),
+        updated_at=at_time,terminal_at=at_time
+    WHERE task_id=task_row.task_id;
+    UPDATE agent_control.runtime_session
+    SET state='closed',generation=generation+1,closed_at=at_time
+    WHERE session_id=task_row.session_id;
+END
+$terminal_failures$;
+
+SET SESSION AUTHORIZATION "cortex-control-1";
+SET ROLE alpheus_agent_control_api;
+DO $join_failure$
+DECLARE result JSONB;
+BEGIN
+    result:=agent_control.reconcile_cortex_task_graph_joins(
+        'cortex-worker-1');
+    IF result->>'status'<>'reconciled'
+       OR (result->>'resolved_joins')::BIGINT<>1
+       OR (result->>'failed_joins')::BIGINT<>1
+       OR (result->>'ready_joins')::BIGINT<>0 THEN
+        RAISE EXCEPTION 'TaskGraph failed Join assertion failed: %',result;
+    END IF;
+END
+$join_failure$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
 DO $assertions$
 DECLARE
     graph_count INTEGER;
@@ -556,22 +636,32 @@ DECLARE
     ready_count INTEGER;
     running_count INTEGER;
     blocked_count INTEGER;
+    failed_task_count INTEGER;
     join_count INTEGER;
     admission_count INTEGER;
     session_count INTEGER;
+    closed_session_count INTEGER;
     binding_count INTEGER;
     worker_acl_count INTEGER;
     schedule_active INTEGER;
     schedule_limit INTEGER;
+    schedule_state TEXT;
+    resolution_outcome TEXT;
+    resolution_inputs INTEGER;
     parent_state TEXT;
     attempt_state TEXT;
+    run_state TEXT;
 BEGIN
     SELECT count(*) INTO graph_count FROM agent_control.cortex_task_graph
     WHERE graph_id='tg-probe-graph';
     SELECT count(*),count(*) FILTER(WHERE task.state='ready'),
         count(*) FILTER(WHERE task.state='running'),
-        count(*) FILTER(WHERE task.state='blocked')
-    INTO node_count,ready_count,running_count,blocked_count
+        count(*) FILTER(WHERE task.state='blocked'),
+        count(*) FILTER(WHERE task.state IN (
+            'failed','dead_lettered'
+        ))
+    INTO node_count,ready_count,running_count,blocked_count,
+        failed_task_count
     FROM agent_control.cortex_task_graph_node node
     JOIN agent_control.runtime_task task ON task.task_id=node.task_id
     WHERE node.graph_id='tg-probe-graph';
@@ -580,13 +670,13 @@ BEGIN
     SELECT count(*) INTO admission_count
     FROM agent_control.cortex_task_graph_admission
     WHERE graph_id='tg-probe-graph';
-    SELECT count(*) INTO session_count
+    SELECT count(*),count(*) FILTER(WHERE session.state='closed')
+    INTO session_count,closed_session_count
     FROM agent_control.cortex_task_graph_node AS node
     JOIN agent_control.runtime_task AS task ON task.task_id=node.task_id
     JOIN agent_control.runtime_session AS session
       ON session.session_id=task.session_id
      AND session.task_id=task.task_id
-     AND session.state='open'
     WHERE node.graph_id='tg-probe-graph';
     SELECT count(*) INTO binding_count
     FROM blob.blob_reference AS binding
@@ -607,21 +697,32 @@ BEGIN
     WHERE node.graph_id='tg-probe-graph'
       AND acl.principal_id='cortex-worker-1'
       AND acl.state='active';
-    SELECT active_tasks,limit_parallelism
-    INTO schedule_active,schedule_limit
+    SELECT active_tasks,limit_parallelism,state
+    INTO schedule_active,schedule_limit,schedule_state
     FROM agent_control.cortex_task_graph_schedule
     WHERE graph_id='tg-probe-graph';
     SELECT state INTO parent_state FROM agent_control.runtime_task
     WHERE task_id='tg-probe-root';
     SELECT state INTO attempt_state FROM agent_control.runtime_attempt
     WHERE attempt_id='tg-probe-attempt';
-    IF graph_count<>1 OR node_count<>4 OR ready_count<>1
-       OR running_count<>2 OR blocked_count<>1
+    SELECT state INTO run_state FROM agent_control.runtime_run
+    WHERE run_id='tg-probe-run';
+    SELECT outcome,jsonb_array_length(inputs)
+    INTO resolution_outcome,resolution_inputs
+    FROM agent_control.cortex_task_graph_join_resolution
+    WHERE graph_id='tg-probe-graph' AND join_id='tg-probe-join';
+    IF graph_count<>1 OR node_count<>4 OR ready_count<>0
+       OR running_count<>0 OR blocked_count<>0
+       OR failed_task_count<>4
        OR join_count<>1 OR admission_count<>1
-       OR session_count<>4 OR binding_count<>16 OR worker_acl_count<>16
-       OR schedule_active<>2 OR schedule_limit<>2
-       OR parent_state<>'waiting'
+       OR session_count<>4 OR closed_session_count<>4
+       OR binding_count<>16 OR worker_acl_count<>16
+       OR schedule_active<>0 OR schedule_limit<>2
+       OR schedule_state<>'closed'
+       OR resolution_outcome<>'failed' OR resolution_inputs<>0
+       OR parent_state<>'dead_lettered'
        OR attempt_state<>'superseded'
+       OR run_state<>'dead_lettered'
        OR EXISTS (
            SELECT 1 FROM agent_control.cortex_task_graph
            WHERE graph_id='tg-invalid-graph'
