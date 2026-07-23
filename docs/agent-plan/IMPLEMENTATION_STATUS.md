@@ -225,9 +225,9 @@ deadlines, graph depth/fanout/parallelism/round ceilings, dependency edges and
 explicit `all_required` / `minimum_succeeded` Join behavior. Strict Go and JSON
 Schema parity, semantic goldens and tests reject cycles, missing joins,
 cross-role Tool grants, revision drift, Desk escalation, unbounded child
-expansion and aggregate overcommit. Execution remains disabled until P2 adds
-atomic database admission, so the deployed single-Tool/Specialist chain is
-unchanged. P2's first storage slice is deployed: six default-deny immutable
+expansion and aggregate overcommit. P1 did not enable execution by itself;
+P2/P3 now provide the separately reviewed database admission and scheduler
+boundaries. P2's first storage slice is deployed: six default-deny immutable
 tables persist Graph, Node, dependency Edge, Join, Join upstream and exact
 per-node Specialist Tool-grant snapshots. Their foreign keys bind existing
 Run/Task/model Result/RuntimePolicy/OutputContract/role-grant identities;
@@ -237,17 +237,23 @@ revalidates the canonical Plan digest, exact current Run/parent generations,
 source Result, RuntimePolicy, committed objective Blobs, output contracts,
 role/Tool grants, aggregate and per-node budgets, DAG depth/fanout/cycles and
 Join edge sets before creating every ledger, Task, dependency and immutable
-snapshot in one transaction. A rollback-only database probe admits two ready
+snapshot in one transaction. A rollback-only database probe admits three ready
 Specialists plus one blocked Desk, parks the parent Attempt/Session, returns
 the exact same response on replay, rejects a cycle and changed-body replay,
 and leaves no fixture rows. Future root Tasks now receive the RuntimePolicy's
 bounded descendant Task allowance instead of the old single-Scout value 2;
-historical Runs remain immutable. P3 must prepare per-node Sessions and add
-bounded parallel scheduling before these admitted Tasks can execute. The staged TODO is tracked in
+historical Runs remain immutable. P3 is now complete: Control idempotently
+prepares every node's execution/context/request/objective Blob bindings and
+Worker ACL; four Worker lanes can claim independent effect-none Specialist
+Tasks; and a database-owned per-Graph schedule atomically accounts
+`ready → running` slots separately from the wider Run ledger. Its rollback
+probe starts two nodes at `max_parallelism=2`, rejects a third concurrent
+claim, and proves slot release/reacquisition. Tool-granted nodes and Decision
+Desk nodes remain undiscoverable until their dedicated Tool and P4 Join
+boundaries are active. The staged TODO is tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
-P2 now adds atomic fan-out, followed by parallel scheduling, explicit fan-in
-policies, bounded iterative research, DAG Trace/UI, and concurrency/failure
-acceptance.
+P4 now adds explicit fan-in policies, followed by bounded iterative research,
+DAG Trace/UI, and concurrency/failure acceptance.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the

@@ -97,14 +97,17 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 |---:|---|---|---|
 | P1 | 冻结 TaskGraph / dependency / join 契约 | 计划可表达多个并行子 Task、依赖边、最大并发、deadline、预算及不可变输出契约；模型不能自行扩大权限 | 已完成：独立 frozen v1 契约、Schema、golden、DAG/Join/权限/预算校验全部通过 |
 | P2 | Control 批量 admission 与 fan-out | 一次已验证计划原子创建多个独立子 Task；每个分支绑定唯一角色、Tool grant、预算和父 Run | 已完成：Control-only 原子命令、精确重放、三节点真实数据库探针及全回滚失败路径通过 |
-| P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 待开始 |
+| P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 已完成：4 条 Worker lane、逐节点 Session/Blob ACL、Graph 独立原子并发槽、效果为 none 的 Specialist 并行执行；带 Tool 节点继续冻结等待专用执行边界 |
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、超时、取消和部分失败；Join 只读取已提交 Artifact/Receipt | 待开始 |
 | P5 | 多阶段自适应研究 | Desk 可根据第一批 Artifact 的明确缺口提出下一批有界子链路；受最大轮次、Task 数和预算限制 | 待开始 |
 | P6 | DAG Trace 与 Agent Lab | 网页显示真实分叉、并行运行、等待、失败、汇合和下一轮，而不是伪造线性 Trace | 待开始 |
 | P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 待开始 |
 
-下一项实际开发任务是 **P3：Scheduler 有界并行调度**。P1 已冻结契约，P2
-已经能按这份契约一次事务创建整张图：两个源 Specialist Task 为 `ready`，
-依赖它们的 Desk Task 为 `blocked`，父 Attempt/Session 被安全停放。完全相同
-的命令精确重放同一响应；循环图、变更重放或任何中途失败都不留下部分 Task。
-这些 Task 还没有 Session，因此 P3 完成前不会被现有 Worker 抢占。
+下一项实际开发任务是 **P4：Join Barrier / fan-in**。P1/P2 已冻结并原子
+admit 整张图；P3 已为每个节点建立独立 Session、四类 Blob 绑定和 Worker
+ACL，并把 Worker 扩为 4 条并发 lane。每张 Graph 另有数据库原子并发槽，
+`ready → running` 占槽、离开 `running` 释放，竞态下无法超过该 Graph 自己的
+`max_parallelism`；回滚探针已同时启动两个 Specialist、拒绝第三个并验证
+释放/重新占用。当前只放行无 Tool grant 的 effect-none Specialist；带 Tool
+节点和 Decision Desk Join 节点继续不可发现，分别等待专用 Tool 执行边界与
+P4 Join 聚合，避免半成品误跑。

@@ -241,9 +241,9 @@ WITH fixture AS (
         'parent_task_id','tg-probe-root','source_result',source_result,
         'runtime_policy',runtime_policy,'round',1,'max_rounds',2,
         'authorized_limit',jsonb_build_object(
-            'max_model_calls',3,'max_input_tokens',6000,'max_output_tokens',3000,
-            'max_tool_calls',2,'max_external_cost_micro_usd',0,
-            'max_wall_time_ms',90000,'max_idle_time_ms',15000,'max_tasks',3,
+            'max_model_calls',4,'max_input_tokens',8000,'max_output_tokens',4000,
+            'max_tool_calls',1,'max_external_cost_micro_usd',0,
+            'max_wall_time_ms',120000,'max_idle_time_ms',20000,'max_tasks',4,
             'max_depth',2,'max_fanout',1,'max_parallelism',2,
             'max_invalid_output_retries',0,'max_infrastructure_retries',0
         ),
@@ -274,6 +274,18 @@ WITH fixture AS (
                     'max_invalid_output_retries',0,'max_infrastructure_retries',0),
                 'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '2 minutes')),
             jsonb_build_object(
+                'task_id','tg-probe-options','role_id','options_scout',
+                'role_revision',1,'depth',1,'objective',objective,'input_refs','[]'::JSONB,
+                'output_contract_name','specialist_memo_v1','output_contract',memo_contract,
+                'tool_grants','[]'::JSONB,
+                'limit',jsonb_build_object(
+                    'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
+                    'max_tool_calls',0,'max_external_cost_micro_usd',0,
+                    'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
+                    'max_depth',0,'max_fanout',0,'max_parallelism',1,
+                    'max_invalid_output_retries',0,'max_infrastructure_retries',0),
+                'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '2 minutes')),
+            jsonb_build_object(
                 'task_id','tg-probe-desk','role_id','decision_desk',
                 'role_revision',1,'depth',2,'objective',objective,'input_refs','[]'::JSONB,
                 'output_contract_name','answer_v1','output_contract',answer_contract,
@@ -288,11 +300,13 @@ WITH fixture AS (
         ),
         'edges',jsonb_build_array(
             jsonb_build_object('from_task_id','tg-probe-market','to_task_id','tg-probe-desk'),
-            jsonb_build_object('from_task_id','tg-probe-fundamental','to_task_id','tg-probe-desk')),
+            jsonb_build_object('from_task_id','tg-probe-fundamental','to_task_id','tg-probe-desk'),
+            jsonb_build_object('from_task_id','tg-probe-options','to_task_id','tg-probe-desk')),
         'joins',jsonb_build_array(jsonb_build_object(
             'join_id','tg-probe-join','downstream_task_id','tg-probe-desk',
-            'upstream_task_ids',jsonb_build_array('tg-probe-market','tg-probe-fundamental'),
-            'policy','all_required','minimum_success',2,'failure_policy','fail_graph',
+            'upstream_task_ids',jsonb_build_array(
+                'tg-probe-market','tg-probe-fundamental','tg-probe-options'),
+            'policy','all_required','minimum_success',3,'failure_policy','fail_graph',
             'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '3 minutes'))),
         'created_by',jsonb_build_object(
             'principal_id','cortex-control-1','kind','workload','audience','control_api'),
@@ -439,28 +453,125 @@ BEGIN
     END IF;
 END
 $discovery$;
+
+DO $parallel_claims$
+DECLARE
+    command JSONB;
+    response JSONB;
+    task_id_value TEXT;
+    command_suffix TEXT;
+BEGIN
+    FOREACH task_id_value IN ARRAY ARRAY[
+        'tg-probe-fundamental','tg-probe-options'
+    ] LOOP
+        command_suffix:=replace(task_id_value,'tg-probe-','');
+        command:=jsonb_build_object(
+            'schema_revision',1,
+            'envelope',jsonb_build_object(
+                'schema_revision',1,
+                'command_id','tg-claim-'||command_suffix,
+                'actor',jsonb_build_object(
+                    'principal_id','cortex-worker-1',
+                    'kind','workload','audience','worker'),
+                'audience','control_api','command_type','claim_task',
+                'idempotency_key','tg-claim-idem-'||command_suffix,
+                'request_digest',repeat('a',64),
+                'causation_id',task_id_value,
+                'correlation_id','tg-probe-run',
+                'deadline',to_char(
+                    clock_timestamp()+interval '2 minutes',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+            ),
+            'task_id',task_id_value,
+            'expected_task_state_generation',1,
+            'requested_lease_seconds',60
+        );
+        response:=agent_control.claim_task(command::TEXT);
+        IF response->>'status'<>'committed' THEN
+            RAISE EXCEPTION 'parallel TaskGraph claim failed: %',response;
+        END IF;
+    END LOOP;
+
+    command:=jsonb_build_object(
+        'schema_revision',1,
+        'envelope',jsonb_build_object(
+            'schema_revision',1,'command_id','tg-claim-market',
+            'actor',jsonb_build_object(
+                'principal_id','cortex-worker-1',
+                'kind','workload','audience','worker'),
+            'audience','control_api','command_type','claim_task',
+            'idempotency_key','tg-claim-idem-market',
+            'request_digest',repeat('b',64),
+            'causation_id','tg-probe-market',
+            'correlation_id','tg-probe-run',
+            'deadline',to_char(
+                clock_timestamp()+interval '2 minutes',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+        ),
+        'task_id','tg-probe-market',
+        'expected_task_state_generation',1,
+        'requested_lease_seconds',60
+    );
+    BEGIN
+        PERFORM agent_control.claim_task(command::TEXT);
+        RAISE EXCEPTION 'TaskGraph parallelism limit was not enforced';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN
+        NULL;
+    END;
+END
+$parallel_claims$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
+
+DO $slot_release$
+DECLARE active_count BIGINT;
+BEGIN
+    UPDATE agent_control.runtime_task
+    SET state='waiting',state_generation=state_generation+1,
+        updated_at=clock_timestamp()
+    WHERE task_id='tg-probe-fundamental';
+    SELECT active_tasks INTO active_count
+    FROM agent_control.cortex_task_graph_schedule
+    WHERE graph_id='tg-probe-graph';
+    IF active_count<>1 THEN
+        RAISE EXCEPTION 'TaskGraph slot was not released';
+    END IF;
+    UPDATE agent_control.runtime_task
+    SET state='running',state_generation=state_generation+1,
+        updated_at=clock_timestamp()
+    WHERE task_id='tg-probe-fundamental';
+    SELECT active_tasks INTO active_count
+    FROM agent_control.cortex_task_graph_schedule
+    WHERE graph_id='tg-probe-graph';
+    IF active_count<>2 THEN
+        RAISE EXCEPTION 'TaskGraph slot was not reacquired';
+    END IF;
+END
+$slot_release$;
 
 DO $assertions$
 DECLARE
     graph_count INTEGER;
     node_count INTEGER;
     ready_count INTEGER;
+    running_count INTEGER;
     blocked_count INTEGER;
     join_count INTEGER;
     admission_count INTEGER;
     session_count INTEGER;
     binding_count INTEGER;
     worker_acl_count INTEGER;
+    schedule_active INTEGER;
+    schedule_limit INTEGER;
     parent_state TEXT;
     attempt_state TEXT;
 BEGIN
     SELECT count(*) INTO graph_count FROM agent_control.cortex_task_graph
     WHERE graph_id='tg-probe-graph';
     SELECT count(*),count(*) FILTER(WHERE task.state='ready'),
+        count(*) FILTER(WHERE task.state='running'),
         count(*) FILTER(WHERE task.state='blocked')
-    INTO node_count,ready_count,blocked_count
+    INTO node_count,ready_count,running_count,blocked_count
     FROM agent_control.cortex_task_graph_node node
     JOIN agent_control.runtime_task task ON task.task_id=node.task_id
     WHERE node.graph_id='tg-probe-graph';
@@ -496,13 +607,19 @@ BEGIN
     WHERE node.graph_id='tg-probe-graph'
       AND acl.principal_id='cortex-worker-1'
       AND acl.state='active';
+    SELECT active_tasks,limit_parallelism
+    INTO schedule_active,schedule_limit
+    FROM agent_control.cortex_task_graph_schedule
+    WHERE graph_id='tg-probe-graph';
     SELECT state INTO parent_state FROM agent_control.runtime_task
     WHERE task_id='tg-probe-root';
     SELECT state INTO attempt_state FROM agent_control.runtime_attempt
     WHERE attempt_id='tg-probe-attempt';
-    IF graph_count<>1 OR node_count<>3 OR ready_count<>2 OR blocked_count<>1
+    IF graph_count<>1 OR node_count<>4 OR ready_count<>1
+       OR running_count<>2 OR blocked_count<>1
        OR join_count<>1 OR admission_count<>1
-       OR session_count<>3 OR binding_count<>12 OR worker_acl_count<>12
+       OR session_count<>4 OR binding_count<>16 OR worker_acl_count<>16
+       OR schedule_active<>2 OR schedule_limit<>2
        OR parent_state<>'waiting'
        OR attempt_state<>'superseded'
        OR EXISTS (
