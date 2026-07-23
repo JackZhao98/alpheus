@@ -133,5 +133,6 @@ run_sql agent-platform/migrations/0050_cortex_kernel_read_tools.sql 0050_cortex_
 run_sql agent-platform/migrations/0051_cortex_kernel_read_workflow_contract.sql 0051_cortex_kernel_read_workflow_contract
 run_sql agent-platform/migrations/0052_cortex_kernel_read_result_digest_fix.sql 0052_cortex_kernel_read_result_digest_fix
 run_sql agent-platform/migrations/0053_cortex_agent_role_registry.sql 0053_cortex_agent_role_registry
+run_sql agent-platform/migrations/0054_cortex_specialist_tool_grants.sql 0054_cortex_specialist_tool_grants
 
 echo "agent-platform migration bootstrap complete"
