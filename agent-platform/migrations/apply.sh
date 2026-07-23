@@ -139,5 +139,6 @@ run_sql agent-platform/migrations/0056_cortex_specialist_tool_enforcement.sql 00
 run_sql agent-platform/migrations/0057_cortex_specialist_trace.sql 0057_cortex_specialist_trace
 run_sql agent-platform/migrations/0058_cortex_specialist_workflow_contract.sql 0058_cortex_specialist_workflow_contract
 run_sql agent-platform/migrations/0059_cortex_specialist_trace_attempt_join.sql 0059_cortex_specialist_trace_attempt_join
+run_sql agent-platform/migrations/0060_cortex_gexbot_live_tool.sql 0060_cortex_gexbot_live_tool
 
 echo "agent-platform migration bootstrap complete"
