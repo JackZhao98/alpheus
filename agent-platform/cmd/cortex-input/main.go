@@ -179,6 +179,15 @@ func run() error {
 	}
 	specialistTargets := append([]string{"desk", "scout", "user"}, capability.AgentRoleIDs()...)
 	specialistWorkflowSchema["properties"].(map[string]any)["target"] = map[string]any{"type": "string", "enum": specialistTargets}
+	liveWorkflowSchemaRaw, err := json.Marshal(specialistWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("clone Cortex GEXBOT live workflow schema: %w", err)
+	}
+	var liveWorkflowSchema map[string]any
+	if json.Unmarshal(liveWorkflowSchemaRaw, &liveWorkflowSchema) != nil {
+		return fmt.Errorf("clone Cortex GEXBOT live workflow schema")
+	}
+	liveWorkflowSchema["properties"].(map[string]any)["gexbot_action"] = map[string]any{"type": "string", "enum": []string{"none", "as_of", "live"}}
 	scoutMemoSchema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
@@ -217,6 +226,10 @@ func run() error {
 	specialistWorkflowSchemaRaw, err = json.Marshal(specialistWorkflowSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex Specialist workflow schema: %w", err)
+	}
+	liveWorkflowSchemaRaw, err = json.Marshal(liveWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex GEXBOT live workflow schema: %w", err)
 	}
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
@@ -257,12 +270,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex Specialist workflow schema: %w", err)
 	}
+	liveWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v8",
+		"agent-platform.contract.output_contract_schema.v1", liveWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex GEXBOT live workflow schema: %w", err)
+	}
 	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, scoutMemoSchemaRef)
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, scoutMemoSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
@@ -274,6 +292,7 @@ func run() error {
 		runtimeDefinitions.EarningsWorkflowOutputContractDigest:   earningsWorkflowSchemaRaw,
 		runtimeDefinitions.KernelWorkflowOutputContractDigest:     kernelWorkflowSchemaRaw,
 		runtimeDefinitions.SpecialistWorkflowOutputContractDigest: specialistWorkflowSchemaRaw,
+		runtimeDefinitions.LiveWorkflowOutputContractDigest:       liveWorkflowSchemaRaw,
 		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)

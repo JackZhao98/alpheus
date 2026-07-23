@@ -41,7 +41,7 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 }
 
 func TestDeskDistinguishesGEXCutoffFromObservationTime(t *testing.T) {
-	request := deskRequest("model", "prompt", "objective", "rationale", "", "", nil, &capability.GEXBOTAsOfEvidence{}, nil, nil, true, false, false)
+	request := deskRequest("model", "prompt", "objective", "rationale", "", "", nil, &capability.GEXBOTAsOfEvidence{}, nil, nil, nil, true, false, false, false)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "as_of field is the requested cutoff fence, not the observation time") ||
 		!strings.Contains(instructions, "label observed_at as the actual observation time") {
@@ -73,15 +73,41 @@ func TestParseWorkflowOutputRoutesToolsToSpecialists(t *testing.T) {
 }
 
 func TestSpecialistRequestIsBoundedToRegisteredRole(t *testing.T) {
-	request := specialistRequest("model", "prompt", "market_scout", "inspect quote", "current price matters", nil, nil, nil,
-		&capability.KernelReadEvidence{ToolID: "kernel_equity_quotes"}, true, true, true)
+	request := specialistRequest("model", "prompt", "market_scout", "inspect quote", "current price matters", nil, nil, nil, nil,
+		&capability.KernelReadEvidence{ToolID: "kernel_equity_quotes"}, true, true, true, false)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "market_scout") || !strings.Contains(instructions, "kernel_equity_quotes") ||
 		!strings.Contains(instructions, "memo for Decision Desk") {
 		t.Fatalf("Specialist instructions are incomplete: %q", instructions)
 	}
-	if request := specialistRequest("model", "prompt", "invented_role", "x", "y", nil, nil, nil, nil, true, true, true); request != nil {
+	if request := specialistRequest("model", "prompt", "invented_role", "x", "y", nil, nil, nil, nil, nil, true, true, true, false); request != nil {
 		t.Fatal("unregistered Specialist acquired a prompt")
+	}
+}
+
+func TestParseWorkflowOutputGatesOfficialGEXLiveByImmutableContract(t *testing.T) {
+	live := []byte(`{"kind":"handoff","target":"options_scout","objective":"read latest official GEX","rationale":"latest provider response matters","text":"","gexbot_action":"live","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"","earnings_action":"none","earnings_symbol":"","kernel_action":"none","kernel_tool_id":"","kernel_arguments":""}`)
+	if _, err := parseWorkflowOutput(live, true, true, true, true, true); err == nil {
+		t.Fatal("GEXBOT live was accepted by a pre-live immutable contract")
+	}
+	output, err := parseWorkflowOutput(live, true, true, true, true, true, true)
+	if err != nil || output.GEXBOTAction != "live" || output.Target != "options_scout" {
+		t.Fatalf("GEXBOT live route rejected: %#v %v", output, err)
+	}
+	wrongTarget := []byte(strings.Replace(string(live), `"options_scout"`, `"market_scout"`, 1))
+	if _, err := parseWorkflowOutput(wrongTarget, true, true, true, true, true, true); err == nil {
+		t.Fatal("GEXBOT live was admitted to the wrong Specialist")
+	}
+	withAsOf := []byte(strings.Replace(string(live), `"gexbot_as_of":""`, `"gexbot_as_of":"current"`, 1))
+	if _, err := parseWorkflowOutput(withAsOf, true, true, true, true, true, true); err == nil {
+		t.Fatal("GEXBOT live accepted a historical as_of fence")
+	}
+	request, found, err := gexbotLiveRequest(output)
+	if err != nil || !found || request.Symbol != "SPX" || request.Category != "gex_full" {
+		t.Fatalf("GEXBOT live request rejected: %#v %v %v", request, found, err)
+	}
+	if _, found, err := gexbotAsOfRequest(output); err != nil || found {
+		t.Fatalf("GEXBOT live leaked into the as_of executor: found=%v err=%v", found, err)
 	}
 }
 
