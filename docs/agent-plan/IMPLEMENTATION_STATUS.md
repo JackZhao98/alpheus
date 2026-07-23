@@ -186,7 +186,7 @@ milestones and not independent authorization gates.
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
 | AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission and immutable Cortex output-validation evidence deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits an exact-current-policy Run/root Task, and validates each model output against the exact committed schema before binding its Blob to Worker. The fixed validator identity plus exact schema/output digests are immutable database evidence. Formal Result-linked validation receipts, cancellation reconciliation, child admission, and complete unknown-outcome recovery remain deferred. |
 | AP1-3 Control Plane and bounded Worker execution | Canonical read-only slice deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches Responses API calls to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual token usage, validates and publishes structured output through Control, then resolves and commits the Attempt and Artifact. Intent may answer directly, use open Scout child work, or hand off to one of six grant-bound Specialists; Specialist and Desk each produce separate persisted Turns. Invalid provider output and exhausted Control publication retries close the Turn/Attempt explicitly. The legacy Kernel query writer and static runtime deployment are retired. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
-| AP1-4 crash/concurrency acceptance and stage seal | Started; real expired-Scout recovery and terminal-child reconciliation now deployed | The complete race, duplicate-delivery, stale-lease, cancellation and stage-seal matrix remains open. The deployed probes now prove bounded reservation, actual token settlement, immutable validator evidence, fail-closed recovery of an expired dispatched Scout Turn, and deterministic parent/Run terminalization when a Scout exhausts its bounded retries. |
+| AP1-4 crash/concurrency acceptance and stage seal | Read-only Cortex + Research launch matrix complete; broader AP1 formal stage seal remains open | The deployed read-only slice passes race/vet, exact replay, stale/expired recovery, strict partial failure, bounded multi-round execution, terminal-state invariants and real end-to-end acceptance. Cancellation and any future effect-bearing path remain outside this launch claim and still require the formal AP1 stage seal. |
 
 AP1-1 freezes data shape and fail-closed validation only. It does not create
 tables, start a scheduler, claim work, call a model, publish a behavior event,
@@ -217,8 +217,9 @@ path succeeded.” from the canonical Run. Old queue rows remain only as
 read-only historical audit records; no production path can create or execute
 another one.
 
-The next highest-priority Cortex milestone is parallel multi-Agent TaskGraph
-execution. P1's independent frozen `alpheus.taskgraph` v1 pack is complete:
+The parallel multi-Agent TaskGraph launch milestone is complete for the
+read-only Cortex + Research slice. P1's independent frozen
+`alpheus.taskgraph` v1 pack is complete:
 `task_graph_plan` and the Control-only `admit_task_graph_command` bind exact
 role/Tool revisions, output contracts, per-node and aggregate budgets,
 deadlines, graph depth/fanout/parallelism/round ceilings, dependency edges and
@@ -262,7 +263,7 @@ parent Session and close the graph schedule. Worker discovery and prompts now
 consume the exact joined memo list and produce a strict `answer_v1` response.
 The rollback audit covers ready-gating, two-lane parallel accounting, failed
 Join closure, successful result promotion, result reads, terminal Session
-lifecycle and immediate deferred-constraint validation. The staged TODO is
+lifecycle and immediate deferred-constraint validation. The launch record is
 tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
 P5 is also complete at the execution boundary. A Tool-granted Specialist must
@@ -278,25 +279,40 @@ wrong-Tool denial. Research input already crosses Moody Blues'
 `gex_compact_v1` deterministic transform: it whitelists six reviewed metrics,
 normalizes finite numbers, caps output at 16 KiB and rejects raw payloads,
 unexpected fields and prompt-like data before Worker context construction.
-P6 now has a real first-round activation path. After the root Intent Turn, a
-strict authority-free model proposal selects two to four installed Specialist
-branches; Control reads the exact validated proposal Blob under the live
-Attempt lease, expands it into the immutable bounded graph, commits objectives,
-admits every Task and parks the parent. Four Worker lanes execute independent
-branches concurrently, the database Join releases Decision Desk only after its
-threshold is proven, and the exact Desk Artifact completes the Run. Empty Tool
-grants are encoded as arrays, a parked graph parent releases only its own
-active slot, and TaskGraph Desk output uses its frozen synthesis budget instead
-of the legacy 2k-token linear cap. Real Run
-`3d2bbe7e-85ce-48ae-9e74-f2a1002e19ee` completed four no-Tool Specialist
-branches, `all_required` Join and Decision Desk successfully. Agent Lab now
-renders the persisted graph as a collapsible four-lane DAG; Run
-`dbe27a81-68ee-48bc-af69-d333c6bdd703` was verified in the real browser from
-four simultaneous branch states through Join and final success. Durable Trace
-labels proposal, graph admission, each role/task, Join and final Artifact
-without mislabeling graph Turns as Intent. The remaining P6 item is a
-Control-owned bounded next-round decision; the remaining P7 work is the full
-crash/duplicate/slow/partial-failure acceptance matrix.
+P6 now has a real bounded multi-round activation path. After the root Intent
+Turn, a strict authority-free model proposal selects two to four installed
+Specialist branches; Control reads the exact validated proposal Blob under the
+live Attempt lease, expands it into the immutable bounded graph, commits
+objectives, admits every Task and parks the parent. Four Worker lanes execute
+independent branches concurrently, the database Join releases Decision Desk
+only after its threshold is proven, and the exact Desk Artifact completes the
+Run. Empty Tool grants are encoded as arrays, a parked graph parent releases
+only its own active slot, and TaskGraph Desk output uses its frozen synthesis
+budget instead of the legacy 2k-token linear cap.
+
+Decision Desk must choose the strict `answer` or `refine` result. A `refine`
+result contains only two to four authority-free branch proposals; Control
+independently revalidates remaining rounds, aggregate budgets, deadline, role
+and Tool ownership, and frozen output contracts before atomically admitting
+the next graph. Real Run `94a2760e-3914-4906-a639-a7680a225cc9` completed two
+rounds with four parallel Specialist branches and an `all_required` Join in
+each round, then committed the final Desk Artifact. Agent Lab can restore that
+persisted Run directly from
+`/agent-lab?run=94a2760e-3914-4906-a639-a7680a225cc9` and renders both DAGs
+plus the round-transition Trace.
+
+Strict partial-failure Run `1d418675-071e-44b1-9a21-11fc69035b90`,
+expired-tree recovery Run `0f55b29f-1bc8-4411-a096-49eb20be9e7d`, and
+exact-replay Run `d1d1b962-1b8c-4474-9757-c1ad11c93676` cover the required
+terminal failure, recovery and duplicate-submission paths. All terminal Tasks
+release their graph slots and no terminal Run retains an open Session.
+
+P7 is complete for the stated read-only launch scope: all three Go modules
+pass full race tests and vet, all 98 Agent migrations replay idempotently,
+Compose validates, the six required services run, Moody Blues `as_of` and
+generation-fenced replay pass live archive probes, and the database terminal
+invariants are clean. This is not the broader AP1 formal effect-bearing stage
+seal and does not authorize trading, order submission or money movement.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the

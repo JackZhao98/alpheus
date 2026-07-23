@@ -25,7 +25,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | GEXBOT 官方按需读数 | 已部署并实测 | `market_gexbot_live` 独立于历史 Tool；永久保存 raw Blob、Evidence、Receipt，并区分 `source_timestamp` 与 `fetched_at` |
 | Kernel / Robinhood 只读工具批次 | 34/34 已接入 Cortex | 1 条财报专用桥；33 条使用严格 Tool/source/参数白名单的通用只读桥 |
 | Agent Lab 验收界面 | 已部署并通过真实网页交互 | 用户可看见 Conversation、Trace、Tool receipt、Provider 数据时间边界；阶段 A 精准 Tool 与阶段 B 自主意图路线分开展示 |
-| 并行多 Agent TaskGraph | 首轮真实图已部署 | Intent 生成无权限提案，Control 准入 2–4 条独立分支；并行 Worker、Join 和 Decision Desk 均由数据库状态驱动 |
+| 并行多 Agent TaskGraph | 两轮自适应真实图已部署 | 每轮由模型提出无权限提案，Control 重新准入 2–4 条独立分支；并行 Worker、Join、Decision Desk 与下一轮均由数据库状态驱动 |
 | 旧 agent-runtime 退役 | 已完成 | Compose 无该服务；`POST /agent/query` 返回 410；旧 job 不再恢复或执行，14 条历史记录仍可读 |
 
 ## 已记录的部署验证（2026-07-23）
@@ -84,6 +84,29 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   四条完成、Join 放行、Decision Desk 完成和 Run `succeeded`。折叠面板显示
   轮次、节点数、最大并发、角色、Tool、Join 策略及最终状态；原始 Trace
   同时保留精确 graph/task/turn/artifact ID。
+- 两轮自适应 TaskGraph Run
+  `94a2760e-3914-4906-a639-a7680a225cc9` 已完成两次四路并行、两次
+  `all_required` Join 与最终合成。Decision Desk 的 `refine` 只能提交
+  2–4 条无权限分支提案；Control 会重新验证剩余轮次、deadline、预算、
+  角色、Tool 所有权和输出契约后再创建下一轮。
+- Agent Lab 已用真实浏览器从
+  `/agent-lab?run=94a2760e-3914-4906-a639-a7680a225cc9` 恢复持久化 Run，
+  同时显示第 1、2 轮的全部节点、Tool、Join 和“Decision Desk 发起第 2
+  轮核验”转换事件，不依赖页面内存。
+- 严格部分失败 Run `1d418675-071e-44b1-9a21-11fc69035b90` 已证明第二轮
+  必需 Tool 分支失败会让整个 Run `dead_lettered`；过期树
+  `0f55b29f-1bc8-4411-a096-49eb20be9e7d` 已由恢复器收敛为终态。
+- 精确重放 Run `d1d1b962-1b8c-4474-9757-c1ad11c93676` 已证明同一
+  UserRequest 的重复提交返回同一 Run、root Task 和 request digest，并最终
+  成功，不会重复创建执行树。
+- Moody Blues replay `bf41d3b3-33d7-590a-9c30-a0217903d4e1` 已从
+  generation 1 消费至 generation 2；旧 generation 重放返回 HTTP 409。
+- 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 98 条 Agent
+  migration 的幂等回放、Compose 配置检查均通过。终态 Task 占用并发槽为
+  0，终态 Run 持有开放 Session 为 0。
+- `cortex-input`、`cortex-worker`、`db`、`gexbot-provider`、`kernel`、
+  `research-gateway` 六个必需服务均运行；对外入口健康，内部 Worker 保持
+  无公开端口。
 
 ## 本次 Moody Blues 接口
 
@@ -98,7 +121,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 
 旧 `/internal/v1/gexbot/*` 路径会暂时保留为兼容别名，直到所有内部调用迁移。
 
-## 下一阶段 TODO：并行多 Agent TaskGraph
+## 上线清单：并行多 Agent TaskGraph
 
 > 受控单链仍保留用于简单问题；多角色请求已经可以进入首轮并行 TaskGraph。
 > 下面的进度不计入 37 Tool 上线完成度。
@@ -110,12 +133,10 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 已完成：4 条 Worker lane、逐节点 Session/Blob ACL、Graph 独立原子并发槽、效果为 none 的 Specialist 并行执行；带 Tool 节点继续冻结等待专用执行边界 |
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、部分失败和严格终态；Join 只读取已提交 Artifact | 已完成：Control-only Join 解析、下游 Blob/ACL、Desk fan-in、失败收敛、结果血缘及成功/失败数据库验收通过 |
 | P5 | Tool 并行节点与 Moody Blues 预处理上下文 | 每个带 Tool 节点只执行准入时冻结的一项只读 Tool；回放数据先经过统一 normalize/精简框架再交给 Agent | 已完成：双 Turn 参数/证据边界、精确 grant、全部现有只读 Tool 分派、错误 Tool 拒绝及 `gex_compact_v1` 已验证 |
-| P6 | 多阶段自适应研究与 DAG Trace | Desk 可在有界轮次内提出下一批子链路；网页显示真实分叉、等待、失败、汇合和下一轮 | 进行中：首轮 2–4 分支规划、真实并行、Join、持久化 DAG Trace 和折叠网页已完成；只剩受控下一轮 |
-| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 已开始：真实四路成功与严格分支失败已验证；完整恢复矩阵待完成 |
+| P6 | 多阶段自适应研究与 DAG Trace | Desk 可在有界轮次内提出下一批子链路；网页显示真实分叉、等待、失败、汇合和下一轮 | 已完成：最多两轮；每轮 Control 重新准入；持久化 DAG Trace 与 Agent Lab 全轮次恢复视图均通过真实 Run |
+| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 已完成（只读上线范围）：并发、精确重放、过期恢复、严格部分失败、预算/轮次围栏、两轮真实端到端、数据库终态不变量及全量 race/vet 均通过 |
 
-下一项实际开发任务是 **P6 剩余项：受控的下一轮自适应研究**。首轮 Intent
-图规划、Control 准入、四路并行、Join、Decision Desk、持久化 DAG Trace 与
-Agent Lab 折叠视图已经真实跑通。下一轮不能由模型直接追加 Task；Decision
-Desk 只能提交无权限 proposal，Control 必须重新检查剩余轮次、总预算、
-deadline、角色与只读 Tool 快照，再原子创建下一轮或确定结束。完成后进入
-P7 的崩溃恢复、重复投递、慢分支、部分失败和预算耗尽矩阵。
+P1–P7 已在本表定义的**只读 Cortex + Research** 范围内完成。此结论不包含
+交易下单、资金效果、Live 权限或完整 AP1 正式 stage seal；这些能力必须作为
+独立效果化项目重新做权限、确认、幂等、未知结果恢复和上线验收，不能由本次
+只读上线结论隐式开启。
