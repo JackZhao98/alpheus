@@ -173,21 +173,39 @@ const toolPrecisionTests = [
 
 const intentRouteTests = [
   {
-    id: "route_earnings_to_desk", symbol: "TSLA", label: "财报事实 → Decision Desk",
-    prompt: "TSLA 最近一次公布的季度 EPS 到底是超预期还是低于预期？只使用系统已有的可信数据，不确定的指标不要补。",
-    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
-    expectedToolID: "kernel_earnings_results",
+    id: "route_market_scout", symbol: "AAPL", label: "市场数据 → Market Scout → Decision Desk",
+    prompt: "读取 AAPL 当前可用的股票报价，告诉我买价、卖价和数据时间；不要凭常识补数字。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_market_scout", "tool_call_authorized", "tool_receipt_succeeded", "market_scout_completed", "decision_desk_completed"],
+    expectedToolID: "kernel_equity_quotes",
   },
   {
-    id: "route_gex_history_to_desk", symbol: "SPX", label: "历史 GEX → Research → Decision Desk",
-    prompt: "我想知道系统最近存下来的 SPX Full gamma 状态，告诉我实际采样时间、spot 和 zero gamma；不要冒充实时行情。",
-    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
+    id: "route_fundamental_scout", symbol: "AAPL", label: "基本面 → Fundamental Scout → Decision Desk",
+    prompt: "读取 AAPL 的基本面和估值字段，选出三个系统确实返回的指标并解释；缺失字段不要补。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_fundamental_scout", "tool_call_authorized", "tool_receipt_succeeded", "fundamental_scout_completed", "decision_desk_completed"],
+    expectedToolID: "kernel_equity_fundamentals",
+  },
+  {
+    id: "route_options_scout", symbol: "SPX", label: "历史 GEX → Options Scout → Decision Desk",
+    prompt: "系统最近存下来的 SPX Full gamma 状态是什么？告诉我实际采样时间、spot 和 zero gamma；不要冒充实时行情。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_options_scout", "tool_call_authorized", "tool_receipt_succeeded", "options_scout_completed", "decision_desk_completed"],
     expectedToolID: "research_gexbot_as_of",
   },
   {
-    id: "route_public_url_to_desk", symbol: "SPY", label: "明确 URL → Research → Decision Desk",
+    id: "route_position_manager", symbol: "SPY", label: "账户组合 → Position Manager → Decision Desk",
+    prompt: "读取我已绑定账户的投资组合摘要，只解释系统实际返回的权益、现金或回报字段，不要猜测账户号。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_position_manager", "tool_call_authorized", "tool_receipt_succeeded", "position_manager_completed", "decision_desk_completed"],
+    expectedToolID: "kernel_portfolio",
+  },
+  {
+    id: "route_catalyst_scout", symbol: "TSLA", label: "财报事实 → Catalyst Scout → Decision Desk",
+    prompt: "TSLA 最近一次公布的季度 EPS 到底是超预期还是低于预期？只使用系统已有的可信数据，不确定的指标不要补。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_catalyst_scout", "tool_call_authorized", "tool_receipt_succeeded", "catalyst_scout_completed", "decision_desk_completed"],
+    expectedToolID: "kernel_earnings_results",
+  },
+  {
+    id: "route_discovery_scout", symbol: "SPY", label: "明确 URL → Discovery Scout → Decision Desk",
     prompt: "这个页面主要说了什么？只按页面内容概括一条事实，并给出来源：https://example.com",
-    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
+    expectedStages: ["intent_interpreter_completed", "handoff_to_discovery_scout", "tool_call_authorized", "tool_receipt_succeeded", "discovery_scout_completed", "decision_desk_completed"],
     expectedToolID: "research_web_fetch",
   },
   {
@@ -674,7 +692,7 @@ function createRouteTestRow(test) {
 }
 
 function renderIntentRouteTests() {
-  byId("route-test-count").textContent = `${intentRouteTests.length} 条可运行`;
+  byId("route-test-count").textContent = `6 个专业角色 + 1 条协作路线`;
   byId("route-test-list").replaceChildren(...intentRouteTests.map(createRouteTestRow));
 }
 

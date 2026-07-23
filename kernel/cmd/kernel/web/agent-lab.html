@@ -19,7 +19,7 @@
         <div><p class="eyebrow">READ-ONLY MVP</p><h2>测试 Agent Team</h2></div>
         <span class="badge">NO ORDERS</span>
       </div>
-      <p class="muted">Cortex 先解释意图，再自行选择直接交给 Decision Desk、调用只读 Tool，或创建 Scout 子任务后回到 Desk。此页面不能创建 operation 或下单。</p>
+      <p class="muted">Cortex 先解释意图，再自行选择专业 Agent；专业 Agent 只读取自己获准的 Tool 收据并形成内部 memo，最后回到 Decision Desk。开放研究仍可创建 Scout 子任务。此页面不能创建 operation 或下单。</p>
       <details id="tool-precision-tests" class="tool-test-panel">
         <summary>
           <span>工具精准调用测试</span>
@@ -39,7 +39,7 @@
           <span>意图路线测试</span>
           <strong id="route-test-count">加载中…</strong>
         </summary>
-        <p class="muted">阶段 B：提示词不点名 Tool ID，也不指定 Agent。Cortex 必须自己解释意图，并走到预期的 Desk、Scout 或 Research 路线。</p>
+        <p class="muted">阶段 B：提示词不点名 Tool ID，也不指定 Agent。前六行分别验收 Market、Fundamental、Options、Position、Catalyst、Discovery 六个专业角色；最后一行验收开放研究子任务。</p>
         <p class="field-note">通过条件是 Run 成功，且数据库 Trace 按顺序出现该行要求的 handoff、工具授权、收据或 continuation。每次仍使用独立 Conversation。</p>
         <div id="route-test-list" class="tool-test-list" aria-live="polite"></div>
       </details>
