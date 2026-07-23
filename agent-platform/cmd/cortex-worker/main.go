@@ -37,6 +37,8 @@ type worker struct {
 	store                                              *blob.LocalStore
 	principal, apiKey, controlURL, controlToken, model string
 	http                                               *http.Client
+	inflightMu                                         sync.Mutex
+	inflight                                           map[string]struct{}
 }
 type workItem struct {
 	TaskID                     string               `json:"task_id"`
@@ -140,7 +142,8 @@ func run() error {
 	}
 	w := &worker{db: db, store: store, principal: env("CORTEX_WORKER_PRINCIPAL_ID", "cortex-worker-1"), apiKey: apiKey,
 		controlURL: strings.TrimRight(env("CORTEX_CONTROL_URL", "http://cortex-input:8400"), "/"), controlToken: controlToken,
-		model: env("CORTEX_MODEL", "gpt-5.6-sol"), http: &http.Client{Timeout: 85 * time.Second}}
+		model: env("CORTEX_MODEL", "gpt-5.6-sol"), http: &http.Client{Timeout: 85 * time.Second},
+		inflight: make(map[string]struct{})}
 	interval := 2 * time.Second
 	log.Printf("Cortex Worker listening for canonical Tasks as %s with %s across %d bounded lanes", w.principal, w.model, concurrency)
 	var lanes sync.WaitGroup
@@ -167,10 +170,41 @@ func (w *worker) serveLane(laneID int, interval time.Duration) {
 			time.Sleep(interval)
 			continue
 		}
-		if err := w.execute(context.Background(), *item); err != nil {
+		if !w.beginLocalTask(item.TaskID) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		err = w.execute(context.Background(), *item)
+		w.endLocalTask(item.TaskID)
+		if err != nil {
 			log.Printf("lane %d Task %s failed: %v", laneID, item.TaskID, err)
 		}
 	}
+}
+
+func (w *worker) beginLocalTask(taskID string) bool {
+	if w == nil || taskID == "" {
+		return false
+	}
+	w.inflightMu.Lock()
+	defer w.inflightMu.Unlock()
+	if w.inflight == nil {
+		w.inflight = make(map[string]struct{})
+	}
+	if _, exists := w.inflight[taskID]; exists {
+		return false
+	}
+	w.inflight[taskID] = struct{}{}
+	return true
+}
+
+func (w *worker) endLocalTask(taskID string) {
+	if w == nil || taskID == "" {
+		return
+	}
+	w.inflightMu.Lock()
+	delete(w.inflight, taskID)
+	w.inflightMu.Unlock()
 }
 
 func (w *worker) execute(ctx context.Context, item workItem) error {

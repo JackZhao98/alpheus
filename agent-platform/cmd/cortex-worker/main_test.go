@@ -22,6 +22,23 @@ func TestConfiguredWorkerConcurrencyIsBounded(t *testing.T) {
 	}
 }
 
+func TestWorkerLocallyFencesDuplicateTaskDelivery(t *testing.T) {
+	w := &worker{inflight: make(map[string]struct{})}
+	if !w.beginLocalTask("task-1") {
+		t.Fatal("first local Task delivery was denied")
+	}
+	if w.beginLocalTask("task-1") {
+		t.Fatal("duplicate local Task delivery passed")
+	}
+	if !w.beginLocalTask("task-2") {
+		t.Fatal("independent local Task was denied")
+	}
+	w.endLocalTask("task-1")
+	if !w.beginLocalTask("task-1") {
+		t.Fatal("completed local Task was not released")
+	}
+}
+
 func TestReservedInputTokensUsesBoundedConservativeEstimate(t *testing.T) {
 	if got := reservedInputTokens([]byte("small request")); got != 2074 {
 		t.Fatalf("reservedInputTokens=%d", got)
