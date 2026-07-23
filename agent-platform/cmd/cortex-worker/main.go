@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"alpheus/agentplatform/blob"
@@ -26,6 +28,8 @@ import (
 )
 
 const workerRole = "alpheus_agent_worker"
+const defaultWorkerConcurrency = 4
+const maxWorkerConcurrency = 16
 
 type worker struct {
 	db                                                 *sql.DB
@@ -97,8 +101,12 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(2)
+	concurrency, err := configuredWorkerConcurrency(os.Getenv("CORTEX_WORKER_CONCURRENCY"))
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(concurrency * 2)
+	db.SetMaxIdleConns(concurrency)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
@@ -108,11 +116,24 @@ func run() error {
 		controlURL: strings.TrimRight(env("CORTEX_CONTROL_URL", "http://cortex-input:8400"), "/"), controlToken: controlToken,
 		model: env("CORTEX_MODEL", "gpt-5.6-sol"), http: &http.Client{Timeout: 85 * time.Second}}
 	interval := 2 * time.Second
-	log.Printf("Cortex Worker listening for canonical Tasks as %s with %s", w.principal, w.model)
+	log.Printf("Cortex Worker listening for canonical Tasks as %s with %s across %d bounded lanes", w.principal, w.model, concurrency)
+	var lanes sync.WaitGroup
+	lanes.Add(concurrency)
+	for lane := 1; lane <= concurrency; lane++ {
+		go func(laneID int) {
+			defer lanes.Done()
+			w.serveLane(laneID, interval)
+		}(lane)
+	}
+	lanes.Wait()
+	return nil
+}
+
+func (w *worker) serveLane(laneID int, interval time.Duration) {
 	for {
 		item, err := w.next(context.Background())
 		if err != nil {
-			log.Printf("discover Task: %v", err)
+			log.Printf("lane %d discover Task: %v", laneID, err)
 			time.Sleep(interval)
 			continue
 		}
@@ -121,7 +142,7 @@ func run() error {
 			continue
 		}
 		if err := w.execute(context.Background(), *item); err != nil {
-			log.Printf("Task %s failed: %v", item.TaskID, err)
+			log.Printf("lane %d Task %s failed: %v", laneID, item.TaskID, err)
 		}
 	}
 }
@@ -1609,6 +1630,18 @@ func env(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func configuredWorkerConcurrency(raw string) (int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultWorkerConcurrency, nil
+	}
+	concurrency, err := strconv.Atoi(value)
+	if err != nil || concurrency < 1 || concurrency > maxWorkerConcurrency {
+		return 0, fmt.Errorf("CORTEX_WORKER_CONCURRENCY must be between 1 and %d", maxWorkerConcurrency)
+	}
+	return concurrency, nil
 }
 func digest(v []byte) string { s := sha256.Sum256(v); return hex.EncodeToString(s[:]) }
 func uuid() string {

@@ -7,6 +7,20 @@ import (
 	"alpheus/agentplatform/capability"
 )
 
+func TestConfiguredWorkerConcurrencyIsBounded(t *testing.T) {
+	for input, expected := range map[string]int{"": 4, "1": 1, "4": 4, "16": 16} {
+		got, err := configuredWorkerConcurrency(input)
+		if err != nil || got != expected {
+			t.Fatalf("configuredWorkerConcurrency(%q)=%d,%v", input, got, err)
+		}
+	}
+	for _, input := range []string{"0", "17", "-1", "many"} {
+		if _, err := configuredWorkerConcurrency(input); err == nil {
+			t.Fatalf("invalid concurrency %q was accepted", input)
+		}
+	}
+}
+
 func TestReservedInputTokensUsesBoundedConservativeEstimate(t *testing.T) {
 	if got := reservedInputTokens([]byte("small request")); got != 2074 {
 		t.Fatalf("reservedInputTokens=%d", got)

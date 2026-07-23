@@ -289,6 +289,7 @@ services:
       CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
       CORTEX_CONTROL_URL: http://cortex-input:8400
       CORTEX_MODEL: gpt-5.6-sol
+      CORTEX_WORKER_CONCURRENCY: "4"
     volumes:
       - cortex_blobdata:/var/lib/alpheus/cortex-blobs:ro
       - ./.secrets/cortex:/run/secrets/cortex:ro
