@@ -63,7 +63,9 @@ func (s *server) routes() http.Handler {
 	// and arguments. Kernel still injects the bound account and blocks all MCP
 	// mutation tools.
 	mux.HandleFunc("POST /internal/v1/cortex-tools/read", s.postCortexKernelRead)
-	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(s.postAgentQuery))
+	// Historical agent_query_job rows remain readable for audit/migration, but
+	// the legacy write path is retired. New requests enter Cortex directly.
+	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(legacyAgentQueryGone))
 	mux.HandleFunc("GET /agent/query-jobs/{id}", s.authorizeAgentWeb(s.getAgentQueryJob))
 	mux.HandleFunc("POST /agent/cortex-requests", s.authorizeAgentWeb(s.postCortexRequest))
 	mux.HandleFunc("GET /agent/cortex-runs/{id}", s.authorizeAgentWeb(s.getCortexRun))

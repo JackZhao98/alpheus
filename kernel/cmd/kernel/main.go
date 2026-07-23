@@ -219,7 +219,6 @@ func main() {
 		providerReplayWindowBoundVerified: brokerName == "fake" ||
 			(brokerName == "robinhood" && mode.TradingMode == config.ModeLive &&
 				config.Env("ROBINHOOD_EQUITY_AUTO_REPLAY", "false") == "true"),
-		runtimeURL:      config.Env("RUNTIME_URL", "http://agent-runtime:8200"),
 		cortexURL:       config.Env("CORTEX_URL", ""),
 		cortexTokenFile: config.Env("CORTEX_INPUT_TOKEN_FILE", ""),
 		researchURL:     config.Env("RESEARCH_URL", "http://research-gateway:8300"),
@@ -270,9 +269,6 @@ func main() {
 	}
 	if err := startRepricer(s); err != nil {
 		log.Fatalf("repricer startup: %v", err)
-	}
-	if err := startAgentQueryRecovery(s); err != nil {
-		log.Fatalf("agent query recovery startup: %v", err)
 	}
 	// GEXBOT collection moved to the credential-isolated Research Plane
 	// Provider. Kernel keeps the old dashboard's historical read model only;

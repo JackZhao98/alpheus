@@ -40,6 +40,10 @@ type cortexSubmission struct {
 	ConversationCreatedAt string `json:"conversation_created_at"`
 }
 
+func legacyAgentQueryGone(w http.ResponseWriter, _ *http.Request) {
+	writeAgentQueryError(w, http.StatusGone, "agent_query_retired", "use /agent/cortex-requests")
+}
+
 func (s *server) postCortexRequest(w http.ResponseWriter, r *http.Request) {
 	var input agentQueryRequest
 	if !decodeJSONBody(w, r, &input) {
