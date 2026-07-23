@@ -438,6 +438,63 @@ WHERE task_id='tg-probe-market';
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
+SAVEPOINT task_graph_desk_discovery;
+DO $desk_discovery_fixture$
+DECLARE
+    objective_ref JSONB;
+    artifact_ref JSONB:=jsonb_build_object(
+        'owner','agent_control','record_type','artifact',
+        'record_id','tg-probe-fundamental-artifact',
+        'schema_revision',1,'record_digest',repeat('d',64)
+    );
+BEGIN
+    SELECT objective INTO STRICT objective_ref
+    FROM agent_control.cortex_task_graph_node
+    WHERE graph_id='tg-probe-graph'
+      AND task_id='tg-probe-fundamental';
+    UPDATE agent_control.runtime_task
+    SET state='ready',state_generation=state_generation+1,
+        updated_at=clock_timestamp()
+    WHERE task_id='tg-probe-desk';
+    INSERT INTO agent_control.cortex_task_graph_join_resolution(
+        graph_id,join_id,downstream_task_id,outcome,
+        successful_upstream_task_ids,failed_upstream_task_ids,
+        inputs,record_digest,resolved_at
+    ) VALUES(
+        'tg-probe-graph','tg-probe-join','tg-probe-desk','ready',
+        '["tg-probe-fundamental"]'::JSONB,'[]'::JSONB,
+        jsonb_build_array(jsonb_build_object(
+            'task_id','tg-probe-fundamental',
+            'role_id','fundamental_scout',
+            'artifact',artifact_ref,
+            'content',jsonb_set(objective_ref,'{origin}',artifact_ref),
+            'binding_id','cortex-session:probe:join:fundamental'
+        )),
+        agent_control.runtime_sha256_json(
+            '{"probe":"decision-desk-discovery"}'::JSONB),
+        clock_timestamp()
+    );
+END
+$desk_discovery_fixture$;
+SET SESSION AUTHORIZATION "cortex-worker-1";
+SET ROLE alpheus_agent_worker;
+DO $desk_discovery$
+DECLARE item JSONB;
+BEGIN
+    item:=agent_control.next_cortex_task();
+    IF item->>'task_id'<>'tg-probe-desk'
+       OR item->>'role'<>'decision_desk'
+       OR item->>'task_graph_join_id'<>'tg-probe-join'
+       OR jsonb_array_length(item->'task_graph_join_inputs')<>1 THEN
+        RAISE EXCEPTION 'TaskGraph Desk discovery assertion failed: %',item;
+    END IF;
+END
+$desk_discovery$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO SAVEPOINT task_graph_desk_discovery;
+RELEASE SAVEPOINT task_graph_desk_discovery;
+
 SET SESSION AUTHORIZATION "cortex-worker-1";
 SET ROLE alpheus_agent_worker;
 DO $discovery$

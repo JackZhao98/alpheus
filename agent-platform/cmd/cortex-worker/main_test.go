@@ -58,6 +58,11 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 	}); got != 1000 {
 		t.Fatalf("TaskGraph output token limit=%d", got)
 	}
+	if got := modelOutputTokenLimit(workItem{
+		Role: "decision_desk", TaskGraphID: "graph-1",
+	}); got != 2000 {
+		t.Fatalf("TaskGraph Decision Desk output token limit=%d", got)
+	}
 }
 
 func TestTaskGraphSpecialistPromptHasOneBoundedRole(t *testing.T) {
@@ -76,6 +81,63 @@ func TestTaskGraphSpecialistPromptHasOneBoundedRole(t *testing.T) {
 		"model", "prompt", "invented_role", "{}", 1000,
 	); request != nil {
 		t.Fatal("unregistered TaskGraph role acquired a prompt")
+	}
+}
+
+func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
+	request := taskGraphDecisionDeskRequest(
+		"model", "prompt", "synthesize evidence",
+		[]taskGraphDeskMemo{
+			{
+				TaskID: "task-market", RoleID: "market_scout",
+				Memo: scoutMemoOutput{
+					Summary:     "market summary",
+					Evidence:    []string{"market evidence"},
+					Limitations: "market limitation",
+				},
+			},
+			{
+				TaskID: "task-options", RoleID: "options_scout",
+				Memo: scoutMemoOutput{
+					Summary:     "options summary",
+					Evidence:    []string{"options evidence"},
+					Limitations: "options limitation",
+				},
+			},
+		},
+		1200,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "immutable TaskGraph Join") ||
+		!strings.Contains(instructions, `"task_id":"task-market"`) ||
+		!strings.Contains(instructions, `"role_id":"options_scout"`) ||
+		!strings.Contains(instructions, "surface conflicts") ||
+		request["max_output_tokens"] != int64(1200) {
+		t.Fatalf("TaskGraph Decision Desk request is incomplete: %#v", request)
+	}
+	if request := taskGraphDecisionDeskRequest(
+		"model", "prompt", "objective", nil, 1000,
+	); request != nil {
+		t.Fatal("Decision Desk prompt accepted no Join inputs")
+	}
+}
+
+func TestParseTaskGraphAnswerOutputIsStrict(t *testing.T) {
+	answer, err := parseTaskGraphAnswerOutput(
+		[]byte(`{"text":"bounded synthesis"}`),
+	)
+	if err != nil || answer.Kind != "answer" ||
+		answer.Target != "user" || answer.Text != "bounded synthesis" {
+		t.Fatalf("TaskGraph answer=%+v err=%v", answer, err)
+	}
+	for _, raw := range [][]byte{
+		[]byte(`{"text":""}`),
+		[]byte(`{"text":"ok","extra":true}`),
+		[]byte(`{"wrong":"answer"}`),
+	} {
+		if _, err := parseTaskGraphAnswerOutput(raw); err == nil {
+			t.Fatalf("invalid TaskGraph answer was accepted: %s", raw)
+		}
 	}
 }
 
