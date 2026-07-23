@@ -872,6 +872,7 @@ DECLARE
     run_state TEXT;
     result_count BIGINT;
     active_count BIGINT;
+    parent_session_state TEXT;
 BEGIN
     SELECT state INTO parent_state FROM agent_control.runtime_task
     WHERE task_id='tg-probe-root';
@@ -884,8 +885,12 @@ BEGIN
     SELECT active_tasks INTO active_count
     FROM agent_control.cortex_task_graph_schedule
     WHERE graph_id='tg-probe-graph' AND state='closed';
+    SELECT state INTO parent_session_state
+    FROM agent_control.runtime_session
+    WHERE task_id='tg-probe-root';
     IF parent_state<>'superseded' OR run_state<>'succeeded'
-       OR result_count<>1 OR active_count<>0 THEN
+       OR result_count<>1 OR active_count<>0
+       OR parent_session_state<>'closed' THEN
         RAISE EXCEPTION 'TaskGraph result promotion assertion failed';
     END IF;
 END
@@ -996,6 +1001,7 @@ DECLARE
     parent_state TEXT;
     attempt_state TEXT;
     run_state TEXT;
+    parent_session_state TEXT;
 BEGIN
     SELECT count(*) INTO graph_count FROM agent_control.cortex_task_graph
     WHERE graph_id='tg-probe-graph';
@@ -1052,6 +1058,9 @@ BEGIN
     WHERE attempt_id='tg-probe-attempt';
     SELECT state INTO run_state FROM agent_control.runtime_run
     WHERE run_id='tg-probe-run';
+    SELECT state INTO parent_session_state
+    FROM agent_control.runtime_session
+    WHERE task_id='tg-probe-root';
     SELECT outcome,jsonb_array_length(inputs)
     INTO resolution_outcome,resolution_inputs
     FROM agent_control.cortex_task_graph_join_resolution
@@ -1068,6 +1077,7 @@ BEGIN
        OR parent_state<>'dead_lettered'
        OR attempt_state<>'superseded'
        OR run_state<>'dead_lettered'
+       OR parent_session_state<>'closed'
        OR EXISTS (
            SELECT 1 FROM agent_control.cortex_task_graph
            WHERE graph_id='tg-invalid-graph'
