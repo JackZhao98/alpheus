@@ -453,6 +453,7 @@ type CortexTraceEvent struct {
 	JoinID            string            `json:"join_id,omitempty"`
 	JoinPolicy        string            `json:"join_policy,omitempty"`
 	Outcome           string            `json:"outcome,omitempty"`
+	ReasonCode        string            `json:"reason_code,omitempty"`
 	ArtifactID        string            `json:"artifact_id,omitempty"`
 	Round             int64             `json:"round,omitempty"`
 	MaxRounds         int64             `json:"max_rounds,omitempty"`
