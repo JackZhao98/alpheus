@@ -440,6 +440,35 @@ type CortexGEXBOTAsOfResult struct {
 	Evidence capability.GEXBOTAsOfEvidence `json:"evidence"`
 }
 
+// KernelEarningsAuthorization is the Control-owned permission to obtain one
+// published Kernel fact. It cannot carry a generic MCP tool name or account.
+type KernelEarningsAuthorization struct {
+	Status        string `json:"status"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolID        string `json:"tool_id"`
+	RequestDigest string `json:"request_digest"`
+	Symbol        string `json:"symbol"`
+}
+
+type CortexKernelEarningsResult struct {
+	Receipt  capability.KernelEarningsToolReceipt     `json:"receipt"`
+	Evidence capability.KernelEarningsResultsEvidence `json:"evidence"`
+}
+
+type KernelReadAuthorization struct {
+	Status        string            `json:"status"`
+	ToolCallID    string            `json:"tool_call_id"`
+	ToolID        capability.ToolID `json:"tool_id"`
+	SourceTool    string            `json:"source_tool"`
+	RequestDigest string            `json:"request_digest"`
+	Arguments     map[string]any    `json:"arguments"`
+}
+
+type CortexKernelReadResult struct {
+	Receipt  capability.KernelReadToolReceipt `json:"receipt"`
+	Evidence capability.KernelReadEvidence    `json:"evidence"`
+}
+
 // WebFetchRecoveryClaim is a short-lived Control-owned lease over an already
 // immutable Tool intent.  It is intentionally not a Worker lease: recovery
 // must never impersonate or revive the Worker that originally authorized it.
@@ -627,6 +656,122 @@ func (adapter *PostgresAdapter) RecordGEXBOTAsOfReceipt(ctx context.Context, res
 		}
 		return nil
 	})
+}
+
+func (adapter *PostgresAdapter) AuthorizeKernelEarningsResults(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken string, request capability.KernelEarningsResultsRequest) (KernelEarningsAuthorization, error) {
+	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 || leaseToken == "" || request.Validate() != nil {
+		return KernelEarningsAuthorization{}, fmt.Errorf("invalid Cortex Kernel earnings authorization")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.authorize_cortex_kernel_earnings_results($1,$2,$3,$4::UUID,$5)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken, request.Symbol).Scan(&raw)
+	})
+	if err != nil {
+		return KernelEarningsAuthorization{}, fmt.Errorf("authorize Cortex Kernel earnings: %w", err)
+	}
+	var result KernelEarningsAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Status != "authorized" || result.ToolCallID == "" ||
+		result.ToolID != string(capability.ToolKernelEarningsResults) || len(result.RequestDigest) != 64 || result.Symbol != request.Symbol {
+		return KernelEarningsAuthorization{}, fmt.Errorf("Cortex Kernel earnings authorization was denied or mismatched")
+	}
+	return result, nil
+}
+
+// RecordKernelEarningsResults persists only a response that is structurally
+// identical to the narrow Kernel fact bridge response. PostgreSQL derives the
+// evidence and receipt IDs/digests; neither is supplied by the Worker.
+func (adapter *PostgresAdapter) RecordKernelEarningsResults(ctx context.Context, observation capability.KernelEarningsObservation) (CortexKernelEarningsResult, error) {
+	if adapter == nil || adapter.db == nil || observation.Validate() != nil {
+		return CortexKernelEarningsResult{}, fmt.Errorf("invalid Cortex Kernel earnings observation")
+	}
+	observationRaw, err := json.Marshal(observation)
+	if err != nil {
+		return CortexKernelEarningsResult{}, err
+	}
+	var raw []byte
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_kernel_earnings_results($1,$2::JSONB)::TEXT`,
+			observation.ToolCallID, string(observationRaw)).Scan(&raw)
+	})
+	if err != nil {
+		return CortexKernelEarningsResult{}, fmt.Errorf("record Cortex Kernel earnings: %w", err)
+	}
+	var result CortexKernelEarningsResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != observation.ToolCallID || result.Receipt.RequestDigest != observation.RequestDigest ||
+		result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID || result.Evidence.ToolCallID != observation.ToolCallID ||
+		result.Evidence.Symbol != observation.Symbol || result.Evidence.Found != observation.Found {
+		return CortexKernelEarningsResult{}, fmt.Errorf("Cortex Kernel earnings receipt acknowledgement mismatch")
+	}
+	return result, nil
+}
+
+func (adapter *PostgresAdapter) AuthorizeKernelRead(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken string, request capability.KernelReadRequest) (KernelReadAuthorization, error) {
+	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 || leaseToken == "" || request.Validate() != nil {
+		return KernelReadAuthorization{}, fmt.Errorf("invalid Cortex Kernel read authorization")
+	}
+	argumentsRaw, err := json.Marshal(request.Arguments)
+	if err != nil {
+		return KernelReadAuthorization{}, err
+	}
+	var raw []byte
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.authorize_cortex_kernel_read($1,$2,$3,$4::UUID,$5,$6,$7::JSONB)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken, string(request.ToolID), request.SourceTool, string(argumentsRaw)).Scan(&raw)
+	})
+	if err != nil {
+		return KernelReadAuthorization{}, fmt.Errorf("authorize Cortex Kernel read: %w", err)
+	}
+	var result KernelReadAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Status != "authorized" ||
+		result.ToolCallID == "" || result.ToolID != request.ToolID || result.SourceTool != request.SourceTool ||
+		len(result.RequestDigest) != 64 {
+		return KernelReadAuthorization{}, fmt.Errorf("Cortex Kernel read authorization was denied or mismatched")
+	}
+	authorized := capability.KernelReadRequest{ToolID: result.ToolID, SourceTool: result.SourceTool, Arguments: result.Arguments}
+	if authorized.Validate() != nil {
+		return KernelReadAuthorization{}, fmt.Errorf("Cortex Kernel read authorization arguments were invalid")
+	}
+	return result, nil
+}
+
+func (adapter *PostgresAdapter) RecordKernelRead(ctx context.Context, observation capability.KernelReadObservation) (CortexKernelReadResult, error) {
+	if adapter == nil || adapter.db == nil || observation.Validate() != nil {
+		return CortexKernelReadResult{}, fmt.Errorf("invalid Cortex Kernel read observation")
+	}
+	observationRaw, err := json.Marshal(observation)
+	if err != nil {
+		return CortexKernelReadResult{}, err
+	}
+	var raw []byte
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_kernel_read($1,$2::JSONB)::TEXT`,
+			observation.ToolCallID, string(observationRaw)).Scan(&raw)
+	})
+	if err != nil {
+		return CortexKernelReadResult{}, fmt.Errorf("record Cortex Kernel read: %w", err)
+	}
+	var result CortexKernelReadResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != observation.ToolCallID || result.Receipt.ToolID != observation.ToolID ||
+		result.Receipt.RequestDigest != observation.RequestDigest ||
+		result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID ||
+		result.Evidence.ToolCallID != observation.ToolCallID || result.Evidence.ToolID != observation.ToolID ||
+		result.Evidence.SourceTool != observation.SourceTool || result.Evidence.ResultJSON != observation.ResultJSON {
+		return CortexKernelReadResult{}, fmt.Errorf("Cortex Kernel read receipt acknowledgement mismatch")
+	}
+	return result, nil
 }
 
 func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {
@@ -981,17 +1126,19 @@ func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request b
 }
 
 type RuntimeDefinitions struct {
-	AnswerOutputContractDigest         string
-	WorkflowOutputContractDigest       string
-	ScoutWorkflowOutputContractDigest  string
-	GEXBOTWorkflowOutputContractDigest string
-	ScoutMemoOutputContractDigest      string
+	AnswerOutputContractDigest           string
+	WorkflowOutputContractDigest         string
+	ScoutWorkflowOutputContractDigest    string
+	GEXBOTWorkflowOutputContractDigest   string
+	EarningsWorkflowOutputContractDigest string
+	KernelWorkflowOutputContractDigest   string
+	ScoutMemoOutputContractDigest        string
 }
 
-func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, gexbotWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
-	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || gexbotWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
-		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || gexbotWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
-		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || gexbotWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
+func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, gexbotWorkflowSchema, earningsWorkflowSchema, kernelWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
+	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || gexbotWorkflowSchema.Validate() != nil || earningsWorkflowSchema.Validate() != nil || kernelWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
+		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || gexbotWorkflowSchema.Origin.RecordType != "output_contract_schema" || earningsWorkflowSchema.Origin.RecordType != "output_contract_schema" || kernelWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
+		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || gexbotWorkflowSchema.MediaType != controlJSONMediaType || earningsWorkflowSchema.MediaType != controlJSONMediaType || kernelWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
 		return RuntimeDefinitions{}, fmt.Errorf("invalid Cortex output schema BlobRef")
 	}
 	answerRaw, err := json.Marshal(answerSchema)
@@ -1011,6 +1158,14 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 		return RuntimeDefinitions{}, err
 	}
 	gexbotWorkflowRaw, err := json.Marshal(gexbotWorkflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	earningsWorkflowRaw, err := json.Marshal(earningsWorkflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	kernelWorkflowRaw, err := json.Marshal(kernelWorkflowSchema)
 	if err != nil {
 		return RuntimeDefinitions{}, err
 	}
@@ -1049,6 +1204,20 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 			return fmt.Errorf("Cortex GEXBOT workflow output contract was not selected")
 		}
 		definitions.GEXBOTWorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v5($1::JSONB)::TEXT`, string(earningsWorkflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex Kernel earnings workflow output contract was not selected")
+		}
+		definitions.EarningsWorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v6($1::JSONB)::TEXT`, string(kernelWorkflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex Kernel read workflow output contract was not selected")
+		}
+		definitions.KernelWorkflowOutputContractDigest = response.OutputContractDigest
 		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_scout_memo_output_contract($1::JSONB)::TEXT`, string(scoutMemoRaw)).Scan(&responseRaw); err != nil {
 			return err
 		}
@@ -1094,7 +1263,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v5($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v7($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)

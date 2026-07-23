@@ -71,8 +71,61 @@
   submit an order. Live proof: Run
   `e13d25aa-595c-4d92-ab2f-02dcc96e879e` recorded both
   `tool_call_authorized` and `tool_receipt_succeeded` before Decision Desk
-  completed. General AP3 registration/discovery, a Scout grant, and an
-  Agent-facing replay/stream Tool remain later work.
+  completed. A Scout grant and Agent-facing replay/stream Tool remain later
+  work; the code-owned Tool registry is now deployed.
+- Moody Blues is now the deployed, canonical temporal-data control surface in
+  Research Gateway. Its first declaration is `gexbot_classic`: it explicitly
+  reports **no live capability**, `as_of` and replay capability, microsecond
+  query fences, 30-second observation cadence, and
+  `latest_available_at_lte_as_of` semantics. Migration `0048` provides a
+  Provider-only collection-status projection with no raw payload exposure.
+  The directory, three-series collection status, an archived `as_of` result,
+  and a generation-fenced replay step were verified after the migration and
+  service recreation on 2026-07-23. The three SPX categories are
+  `gex_full`, `gex_zero`, and `gex_one`; their latest verified archive
+  observation is `2026-07-22T19:59:30Z`. This must not be presented as an
+  official GEXBOT live quote. Legacy `/internal/v1/gexbot/*` routes remain
+  narrow compatibility aliases while callers migrate to `/moody-blues/*`.
+- The first narrow Kernel fact bridge, `kernel_earnings_results`, is deployed
+  and Cortex-enabled. It can request only one uppercase ticker through the
+  bound Robinhood MCP `get_earnings_results` read call and returns only
+  normalized EPS/report-date facts to Cortex. It deliberately exposes neither
+  a generic MCP method nor a brokerage account/credential. Migration `0049`
+  corrected JSONB key-whitelist precedence without mutating the applied
+  migration history. Real Run `e025fff6-706e-48f9-abc7-da0655ca2e33`
+  completed Intent → Desk, authorized `kernel_earnings_results`, persisted
+  receipt `9a64ad74-ec04-497d-a8ec-f4ccb10fd279`, and answered only from the
+  normalized TSLA evidence. Its Agent Lab precision-test row is now unlocked.
+- All remaining 33 reviewed Robinhood MCP read/preflight capabilities are now
+  Cortex-enabled through a versioned Kernel-read protocol. Every Tool ID is
+  paired with exactly one upstream function and an argument allowlist; model
+  input cannot contain `account_number`, and Kernel injects only the permanently
+  bound account. Control migration `0050` persists immutable authorization,
+  sanitized evidence, receipt and Trace records; `0051` gives only new Runs the
+  v6 workflow contract; `0052` fixes the result-digest helper without rewriting
+  migration history. Upstream MCP framing and guide text are discarded before
+  evidence reaches Desk. The two review tools are simulations and have no order
+  placement path. Real Provider runs passed for `kernel_portfolio`
+  (`b4557073-4bd6-4b95-85a2-f50d3bf94c73`), `kernel_equity_quotes`
+  (`8819eb56-b071-43af-8cc1-cbae5869f692`), `kernel_search`
+  (`e02b29f0-527a-404b-ab3c-2db7f7c9f5ce`) and `kernel_accounts`
+  (`581e5e0b-a928-489e-9009-8e43e7d37602`).
+- Research reserves, but does not implement, a pure deterministic analytics
+  slot after Moody Blues point-in-time selection and before Cortex evidence.
+  A future GEX preprocessing transform must bind its version, parameters,
+  input observation IDs/digests, output digest and time fence; it will not be
+  an LLM, Provider credential holder, routing owner, or new container by
+  default.
+- Agent Lab now separates two operator tests. Stage A gives each enabled Tool
+  a precision prompt and requires the exact authorization plus matching
+  receipt. Stage B does not name a Tool ID or Agent and instead validates an
+  ordered persisted route. The deployed page now reports 36 enabled Tools and
+  0 locked candidates. Five Provider-UUID-dependent rows require an exact ID
+  from their displayed prerequisite Tool instead of asking the model to invent
+  one. Browser-run earnings route
+  `168a9741-6668-4d4f-bb53-5b1e56b84526` and full Scout collaboration route
+  `47557a5a-fa86-43b6-b8ec-e114ed671981` both passed their expected database
+  trace; the page emitted no browser-console errors.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record

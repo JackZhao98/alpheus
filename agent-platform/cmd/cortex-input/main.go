@@ -50,6 +50,8 @@ func run() error {
 	}
 	researchURL := strings.TrimRight(env("CORTEX_RESEARCH_URL", "http://research-gateway:8300"), "/")
 	researchHTTP := &http.Client{Timeout: 25 * time.Second}
+	kernelURL := strings.TrimRight(env("CORTEX_KERNEL_URL", "http://kernel:8100"), "/")
+	kernelHTTP := &http.Client{Timeout: 25 * time.Second}
 	store, err := blob.NewLocalStore(env("CORTEX_BLOB_ROOT", "/var/lib/alpheus/cortex-blobs"))
 	if err != nil {
 		return fmt.Errorf("open Cortex BlobStore: %w", err)
@@ -125,6 +127,48 @@ func run() error {
 			"gexbot_as_of":    map[string]any{"type": "string", "maxLength": 64},
 		},
 	}
+	earningsWorkflowSchema := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"kind", "target", "objective", "rationale", "text", "gexbot_action", "gexbot_symbol", "gexbot_category", "gexbot_as_of", "earnings_action", "earnings_symbol"},
+		"properties": map[string]any{
+			"kind":            map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":          map[string]any{"type": "string", "enum": []string{"desk", "scout", "user"}},
+			"objective":       map[string]any{"type": "string", "maxLength": 4000},
+			"rationale":       map[string]any{"type": "string", "maxLength": 4000},
+			"text":            map[string]any{"type": "string", "maxLength": 16000},
+			"gexbot_action":   map[string]any{"type": "string", "enum": []string{"none", "as_of"}},
+			"gexbot_symbol":   map[string]any{"type": "string", "maxLength": 16},
+			"gexbot_category": map[string]any{"type": "string", "enum": []string{"", "gex_full", "gex_zero", "gex_one"}},
+			"gexbot_as_of":    map[string]any{"type": "string", "maxLength": 64},
+			"earnings_action": map[string]any{"type": "string", "enum": []string{"none", "results"}},
+			"earnings_symbol": map[string]any{"type": "string", "maxLength": 16},
+		},
+	}
+	kernelToolIDs := append([]string{""}, capability.KernelReadToolIDs()...)
+	kernelWorkflowSchema := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"kind", "target", "objective", "rationale", "text", "gexbot_action", "gexbot_symbol", "gexbot_category", "gexbot_as_of", "earnings_action", "earnings_symbol", "kernel_action", "kernel_tool_id", "kernel_arguments"},
+		"properties": map[string]any{
+			"kind":             map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":           map[string]any{"type": "string", "enum": []string{"desk", "scout", "user"}},
+			"objective":        map[string]any{"type": "string", "maxLength": 4000},
+			"rationale":        map[string]any{"type": "string", "maxLength": 4000},
+			"text":             map[string]any{"type": "string", "maxLength": 16000},
+			"gexbot_action":    map[string]any{"type": "string", "enum": []string{"none", "as_of"}},
+			"gexbot_symbol":    map[string]any{"type": "string", "maxLength": 16},
+			"gexbot_category":  map[string]any{"type": "string", "enum": []string{"", "gex_full", "gex_zero", "gex_one"}},
+			"gexbot_as_of":     map[string]any{"type": "string", "maxLength": 64},
+			"earnings_action":  map[string]any{"type": "string", "enum": []string{"none", "results"}},
+			"earnings_symbol":  map[string]any{"type": "string", "maxLength": 16},
+			"kernel_action":    map[string]any{"type": "string", "enum": []string{"none", "read"}},
+			"kernel_tool_id":   map[string]any{"type": "string", "enum": kernelToolIDs},
+			"kernel_arguments": map[string]any{"type": "string", "maxLength": 12288},
+		},
+	}
 	scoutMemoSchema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
@@ -152,6 +196,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("encode Cortex GEXBOT workflow schema: %w", err)
 	}
+	earningsWorkflowSchemaRaw, err := json.Marshal(earningsWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex Kernel earnings workflow schema: %w", err)
+	}
+	kernelWorkflowSchemaRaw, err := json.Marshal(kernelWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex Kernel read workflow schema: %w", err)
+	}
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex Scout memo schema: %w", err)
@@ -176,21 +228,33 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex GEXBOT workflow schema: %w", err)
 	}
+	earningsWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v5",
+		"agent-platform.contract.output_contract_schema.v1", earningsWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex Kernel earnings workflow schema: %w", err)
+	}
+	kernelWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v6",
+		"agent-platform.contract.output_contract_schema.v1", kernelWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex Kernel read workflow schema: %w", err)
+	}
 	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, scoutMemoSchemaRef)
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, scoutMemoSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
 	outputSchemas := map[string][]byte{
-		runtimeDefinitions.AnswerOutputContractDigest:         answerSchemaRaw,
-		runtimeDefinitions.WorkflowOutputContractDigest:       workflowSchemaRaw,
-		runtimeDefinitions.ScoutWorkflowOutputContractDigest:  scoutWorkflowSchemaRaw,
-		runtimeDefinitions.GEXBOTWorkflowOutputContractDigest: gexbotWorkflowSchemaRaw,
-		runtimeDefinitions.ScoutMemoOutputContractDigest:      scoutMemoSchemaRaw,
+		runtimeDefinitions.AnswerOutputContractDigest:           answerSchemaRaw,
+		runtimeDefinitions.WorkflowOutputContractDigest:         workflowSchemaRaw,
+		runtimeDefinitions.ScoutWorkflowOutputContractDigest:    scoutWorkflowSchemaRaw,
+		runtimeDefinitions.GEXBOTWorkflowOutputContractDigest:   gexbotWorkflowSchemaRaw,
+		runtimeDefinitions.EarningsWorkflowOutputContractDigest: earningsWorkflowSchemaRaw,
+		runtimeDefinitions.KernelWorkflowOutputContractDigest:   kernelWorkflowSchemaRaw,
+		runtimeDefinitions.ScoutMemoOutputContractDigest:        scoutMemoSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
@@ -395,6 +459,105 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+	mux.HandleFunc("POST /internal/v1/tool-calls/kernel-earnings-results", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string `json:"source_call_id"`
+			AttemptID       string `json:"attempt_id"`
+			LeaseGeneration int64  `json:"lease_generation"`
+			LeaseToken      string `json:"lease_token"`
+			Symbol          string `json:"symbol"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid tool call", http.StatusBadRequest)
+			return
+		}
+		toolRequest := capability.KernelEarningsResultsRequest{Symbol: strings.ToUpper(strings.TrimSpace(body.Symbol))}
+		authorization, err := adapter.AuthorizeKernelEarningsResults(request.Context(), strings.TrimSpace(body.SourceCallID), strings.TrimSpace(body.AttemptID),
+			body.LeaseGeneration, strings.TrimSpace(body.LeaseToken), toolRequest)
+		if err != nil {
+			log.Printf("Cortex Kernel earnings authorization failed: %v", err)
+			http.Error(w, "tool authorization denied", http.StatusForbidden)
+			return
+		}
+		observation, err := invokeKernelEarningsResults(request.Context(), kernelHTTP, kernelURL, serviceToken, authorization)
+		if err != nil {
+			log.Printf("Kernel earnings Tool failed for %s: %v", authorization.ToolCallID, err)
+			http.Error(w, "Kernel tool unavailable", http.StatusBadGateway)
+			return
+		}
+		if observation.ToolCallID != authorization.ToolCallID || observation.ToolID != capability.ToolKernelEarningsResults ||
+			observation.RequestDigest != authorization.RequestDigest || observation.Symbol != authorization.Symbol {
+			http.Error(w, "Kernel tool response invalid", http.StatusBadGateway)
+			return
+		}
+		result, err := adapter.RecordKernelEarningsResults(request.Context(), observation)
+		if err != nil {
+			log.Printf("Cortex Kernel earnings receipt recording failed: %v", err)
+			http.Error(w, "Kernel receipt unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("POST /internal/v1/tool-calls/kernel-read", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string            `json:"source_call_id"`
+			AttemptID       string            `json:"attempt_id"`
+			LeaseGeneration int64             `json:"lease_generation"`
+			LeaseToken      string            `json:"lease_token"`
+			ToolID          capability.ToolID `json:"tool_id"`
+			SourceTool      string            `json:"source_tool"`
+			Arguments       map[string]any    `json:"arguments"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 20<<10))
+		decoder.UseNumber()
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid tool call", http.StatusBadRequest)
+			return
+		}
+		toolRequest := capability.KernelReadRequest{
+			ToolID: body.ToolID, SourceTool: strings.TrimSpace(body.SourceTool), Arguments: body.Arguments,
+		}
+		authorization, err := adapter.AuthorizeKernelRead(request.Context(), strings.TrimSpace(body.SourceCallID), strings.TrimSpace(body.AttemptID),
+			body.LeaseGeneration, strings.TrimSpace(body.LeaseToken), toolRequest)
+		if err != nil {
+			log.Printf("Cortex Kernel read authorization failed: %v", err)
+			http.Error(w, "tool authorization denied", http.StatusForbidden)
+			return
+		}
+		observation, err := invokeKernelRead(request.Context(), kernelHTTP, kernelURL, serviceToken, authorization)
+		if err != nil {
+			log.Printf("Kernel read Tool failed for %s: %v", authorization.ToolCallID, err)
+			http.Error(w, "Kernel tool unavailable", http.StatusBadGateway)
+			return
+		}
+		if observation.ToolCallID != authorization.ToolCallID || observation.ToolID != authorization.ToolID ||
+			observation.RequestDigest != authorization.RequestDigest || observation.SourceTool != authorization.SourceTool {
+			http.Error(w, "Kernel tool response invalid", http.StatusBadGateway)
+			return
+		}
+		result, err := adapter.RecordKernelRead(request.Context(), observation)
+		if err != nil {
+			log.Printf("Cortex Kernel read receipt recording failed: %v", err)
+			http.Error(w, "Kernel receipt unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
 		Handler:           mux,
@@ -477,6 +640,71 @@ func invokeResearchGEXBOTAsOf(ctx context.Context, client *http.Client, baseURL,
 		return inputgateway.CortexGEXBOTAsOfResult{}, fmt.Errorf("Research GEXBOT Tool returned an invalid receipt")
 	}
 	return result, nil
+}
+
+func invokeKernelEarningsResults(ctx context.Context, client *http.Client, baseURL, token string, authorization inputgateway.KernelEarningsAuthorization) (capability.KernelEarningsObservation, error) {
+	if client == nil || baseURL == "" || token == "" || authorization.ToolCallID == "" || authorization.ToolID != string(capability.ToolKernelEarningsResults) ||
+		len(authorization.RequestDigest) != 64 || (capability.KernelEarningsResultsRequest{Symbol: authorization.Symbol}).Validate() != nil {
+		return capability.KernelEarningsObservation{}, fmt.Errorf("Kernel earnings Tool is unavailable")
+	}
+	body, _ := json.Marshal(map[string]string{"tool_call_id": authorization.ToolCallID, "request_digest": authorization.RequestDigest, "symbol": authorization.Symbol})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/v1/cortex-tools/earnings-results", bytes.NewReader(body))
+	if err != nil {
+		return capability.KernelEarningsObservation{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return capability.KernelEarningsObservation{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil || len(raw) == 0 || len(raw) >= 64<<10 || response.StatusCode != http.StatusOK {
+		return capability.KernelEarningsObservation{}, fmt.Errorf("Kernel earnings Tool HTTP %d", response.StatusCode)
+	}
+	var observation capability.KernelEarningsObservation
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&observation) != nil || decoder.Decode(&struct{}{}) != io.EOF || observation.Validate() != nil {
+		return capability.KernelEarningsObservation{}, fmt.Errorf("Kernel earnings Tool returned invalid facts")
+	}
+	return observation, nil
+}
+
+func invokeKernelRead(ctx context.Context, client *http.Client, baseURL, token string, authorization inputgateway.KernelReadAuthorization) (capability.KernelReadObservation, error) {
+	requestValue := capability.KernelReadRequest{ToolID: authorization.ToolID, SourceTool: authorization.SourceTool, Arguments: authorization.Arguments}
+	if client == nil || baseURL == "" || token == "" || authorization.ToolCallID == "" ||
+		len(authorization.RequestDigest) != 64 || requestValue.Validate() != nil {
+		return capability.KernelReadObservation{}, fmt.Errorf("Kernel read Tool is unavailable")
+	}
+	body, _ := json.Marshal(map[string]any{
+		"tool_call_id": authorization.ToolCallID, "tool_id": authorization.ToolID,
+		"source_tool": authorization.SourceTool, "request_digest": authorization.RequestDigest,
+		"arguments": authorization.Arguments,
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/v1/cortex-tools/read", bytes.NewReader(body))
+	if err != nil {
+		return capability.KernelReadObservation{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return capability.KernelReadObservation{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 80<<10))
+	if err != nil || len(raw) == 0 || len(raw) >= 80<<10 || response.StatusCode != http.StatusOK {
+		return capability.KernelReadObservation{}, fmt.Errorf("Kernel read Tool HTTP %d", response.StatusCode)
+	}
+	var observation capability.KernelReadObservation
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&observation) != nil || decoder.Decode(&struct{}{}) != io.EOF || observation.Validate() != nil {
+		return capability.KernelReadObservation{}, fmt.Errorf("Kernel read Tool returned invalid facts")
+	}
+	return observation, nil
 }
 
 func validBearer(request *http.Request, token string) bool {

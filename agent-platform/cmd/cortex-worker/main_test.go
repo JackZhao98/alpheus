@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"alpheus/agentplatform/capability"
+)
 
 func TestReservedInputTokensUsesBoundedConservativeEstimate(t *testing.T) {
 	if got := reservedInputTokens([]byte("small request")); got != 2074 {
@@ -35,6 +40,15 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 	}
 }
 
+func TestDeskDistinguishesGEXCutoffFromObservationTime(t *testing.T) {
+	request := deskRequest("model", "prompt", "objective", "rationale", nil, &capability.GEXBOTAsOfEvidence{}, nil, nil, true, false, false)
+	instructions, ok := request["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "as_of field is the requested cutoff fence, not the observation time") ||
+		!strings.Contains(instructions, "label observed_at as the actual observation time") {
+		t.Fatalf("GEX time semantics missing from Desk instructions: %q", instructions)
+	}
+}
+
 func TestParseWorkflowOutputEnforcesSemanticRoute(t *testing.T) {
 	answer, err := parseWorkflowOutput([]byte(`{"kind":"answer","target":"user","objective":"answer directly","rationale":"simple request","text":"hello"}`), false, false)
 	if err != nil || answer.Kind != "answer" {
@@ -59,6 +73,23 @@ func TestParseWorkflowOutputEnforcesSemanticRoute(t *testing.T) {
 	}
 	if _, err := parseWorkflowOutput([]byte(`{"kind":"answer","target":"user","objective":"bad","rationale":"bad","text":"bad","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current"}`), true, true); err == nil {
 		t.Fatal("GEXBOT Tool was accepted outside an Intent -> Desk handoff")
+	}
+	earnings, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"review earnings","rationale":"reported results matter","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"results","earnings_symbol":"TSLA"}`), true, true, true)
+	if err != nil || earnings.EarningsAction != "results" || earnings.EarningsSymbol != "TSLA" {
+		t.Fatalf("earnings=%+v err=%v", earnings, err)
+	}
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"review earnings","rationale":"reported results matter","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"results","earnings_symbol":"tsla"}`), true, true, true); err == nil {
+		t.Fatal("lowercase Kernel earnings symbol was accepted")
+	}
+	kernelRead, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"read quotes","rationale":"current quotes matter","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_equity_quotes","kernel_arguments":"{\"symbols\":[\"AAPL\"]}"}`), true, true, true, true)
+	if err != nil || kernelRead.KernelToolID != "kernel_equity_quotes" {
+		t.Fatalf("valid Kernel read proposal rejected: %#v %v", kernelRead, err)
+	}
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"read portfolio","rationale":"portfolio facts matter","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_portfolio","kernel_arguments":"{\"account_number\":\"invented\"}"}`), true, true, true, true); err == nil {
+		t.Fatal("model-selected account_number was accepted")
+	}
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"read quotes","rationale":"current quotes matter","text":"","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_equity_quotes","kernel_arguments":"{\"symbols\":[\"AAPL\"]}"}`), true, true, true, true); err == nil {
+		t.Fatal("multiple Tool proposals were accepted")
 	}
 }
 

@@ -29,7 +29,7 @@ services:
       KERNEL_TOKEN: ${KERNEL_TOKEN:-}
       AGENT_WEB_PASSWORD: ${AGENT_WEB_PASSWORD:-}
       AGENT_WEB_SESSION_KEY: ${AGENT_WEB_SESSION_KEY:-}
-      # Local-only Agent Lab: no browser password, but only private/local clients.
+      # Password-free Agent Lab access. Keep this port on a trusted network.
       AGENT_WEB_AUTH_MODE: ${AGENT_WEB_AUTH_MODE:-local}
       RUNTIME_URL: ${RUNTIME_URL:-http://agent-runtime:8200}
       CORTEX_URL: http://cortex-input:8400
@@ -266,6 +266,7 @@ services:
       CORTEX_WORKER_CONTROL_TOKEN_FILE: /run/secrets/cortex/worker-control-token
       CORTEX_RESEARCH_TOKEN_FILE: /run/secrets/cortex/research-tool-token
       CORTEX_RESEARCH_URL: http://research-gateway:8300
+      CORTEX_KERNEL_URL: http://kernel:8100
       CORTEX_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
       CORTEX_INPUT_ADDR: :8400
     ports: ["127.0.0.1:8400:8400"]

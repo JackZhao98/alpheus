@@ -1,10 +1,8 @@
-// Package capability defines the narrow AP3 cross-plane Tool boundary.
-//
-// It intentionally contains only two external-read slices: a public web page
-// fetch and a bounded GEXBOT archived as_of observation. Tool selection and
-// authorization live in Cortex Control; connector execution and the evidence
-// record live in Research Gateway. No connector credential, generic request
-// primitive, or external mutation is part of this package.
+// Package capability defines the narrow AP3 cross-plane Tool boundary and its
+// non-authoritative catalog. Tool selection and authorization live in Cortex
+// Control; connector execution and the evidence record live in the owning
+// plane. No connector credential, generic request primitive, or external
+// mutation is part of this package.
 package capability
 
 import (
@@ -31,6 +29,11 @@ type ToolID string
 const (
 	ToolResearchWebFetch   ToolID = "research_web_fetch"
 	ToolResearchGEXBOTAsOf ToolID = "research_gexbot_as_of"
+
+	// ToolKernelEarningsResults is intentionally only a catalog candidate until
+	// R2 installs its authorization, Kernel bridge, receipt, and role-grant
+	// path. Naming a ToolID must never make a capability callable.
+	ToolKernelEarningsResults ToolID = "kernel_earnings_results"
 )
 
 type ReceiptState string
@@ -51,6 +54,12 @@ type GEXBOTAsOfRequest struct {
 	Symbol   string    `json:"symbol"`
 	Category string    `json:"category"`
 	AsOf     time.Time `json:"as_of"`
+}
+
+// KernelEarningsResultsRequest is one explicit equity symbol. It is not a
+// generic Kernel/MCP request envelope and cannot carry an account or method.
+type KernelEarningsResultsRequest struct {
+	Symbol string `json:"symbol"`
 }
 
 type ToolCallIntent struct {
@@ -106,6 +115,13 @@ func (value WebFetchRequest) Validate() error {
 
 func (value GEXBOTAsOfRequest) Validate() error {
 	if !gexbotSymbol(value.Symbol) || !gexbotCategory(value.Category) || !validUTC(value.AsOf) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
+func (value KernelEarningsResultsRequest) Validate() error {
+	if !gexbotSymbol(value.Symbol) {
 		return ErrInvalidCapability
 	}
 	return nil
@@ -198,6 +214,67 @@ type GEXBOTToolReceipt struct {
 	CompletedAt    time.Time            `json:"completed_at"`
 }
 
+// KernelEarningsObservation is the bounded fact returned by Kernel's narrow
+// bridge. It excludes the upstream MCP guide and raw response envelope.
+type KernelEarningsObservation struct {
+	SchemaRevision uint16               `json:"schema_revision"`
+	ToolCallID     string               `json:"tool_call_id"`
+	ToolID         ToolID               `json:"tool_id"`
+	RequestDigest  string               `json:"request_digest"`
+	Provider       string               `json:"provider"`
+	Symbol         string               `json:"symbol"`
+	Found          bool                 `json:"found"`
+	Results        []KernelEarningsItem `json:"results"`
+	ObservedAt     time.Time            `json:"observed_at"`
+	AvailableAt    time.Time            `json:"available_at"`
+}
+
+type KernelEarningsItem struct {
+	Symbol  string                    `json:"symbol"`
+	Year    int                       `json:"year"`
+	Quarter int                       `json:"quarter"`
+	EPS     KernelEarningsEPS         `json:"eps"`
+	Report  *KernelEarningsReportTime `json:"report"`
+}
+
+type KernelEarningsEPS struct {
+	Estimate *string `json:"estimate"`
+	Actual   *string `json:"actual"`
+}
+
+type KernelEarningsReportTime struct {
+	Date     *string `json:"date"`
+	Timing   *string `json:"timing"`
+	Verified bool    `json:"verified"`
+}
+
+// KernelEarningsResultsEvidence is durable evidence Cortex may present to a
+// Desk. Its source record is Kernel-owned; Control stores only the immutable
+// acknowledgement necessary for the Run trace.
+type KernelEarningsResultsEvidence struct {
+	SchemaRevision uint16               `json:"schema_revision"`
+	EvidenceID     string               `json:"evidence_id"`
+	ToolCallID     string               `json:"tool_call_id"`
+	Provider       string               `json:"provider"`
+	Symbol         string               `json:"symbol"`
+	Found          bool                 `json:"found"`
+	Results        []KernelEarningsItem `json:"results"`
+	ObservedAt     time.Time            `json:"observed_at"`
+	AvailableAt    time.Time            `json:"available_at"`
+}
+
+type KernelEarningsToolReceipt struct {
+	SchemaRevision uint16               `json:"schema_revision"`
+	ReceiptID      string               `json:"receipt_id"`
+	ToolCallID     string               `json:"tool_call_id"`
+	ToolID         ToolID               `json:"tool_id"`
+	RequestDigest  string               `json:"request_digest"`
+	State          ReceiptState         `json:"state"`
+	Evidence       contracts.RecordRef  `json:"evidence"`
+	Executor       contracts.AuditActor `json:"executor"`
+	CompletedAt    time.Time            `json:"completed_at"`
+}
+
 func (value GEXBOTAsOfEvidence) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.EvidenceID) || !validID(value.ToolCallID) ||
 		value.Provider != "gexbot_classic" || !gexbotSymbol(value.Symbol) || !gexbotCategory(value.Category) || !validUTC(value.AsOf) {
@@ -230,6 +307,51 @@ func (value GEXBOTToolReceipt) Validate() error {
 	return nil
 }
 
+func (value KernelEarningsObservation) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ToolCallID) || value.ToolID != ToolKernelEarningsResults ||
+		!validDigest(value.RequestDigest) || value.Provider != "kernel_robinhood_mcp" || !gexbotSymbol(value.Symbol) ||
+		len(value.Results) > 8 || !validUTC(value.ObservedAt) || !validUTC(value.AvailableAt) || value.AvailableAt.Before(value.ObservedAt) {
+		return ErrInvalidCapability
+	}
+	if !value.Found && len(value.Results) != 0 {
+		return ErrInvalidCapability
+	}
+	for _, result := range value.Results {
+		if !validKernelEarningsItem(result, value.Symbol) {
+			return ErrInvalidCapability
+		}
+	}
+	return nil
+}
+
+func (value KernelEarningsResultsEvidence) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.EvidenceID) || !validID(value.ToolCallID) ||
+		value.Provider != "kernel_robinhood_mcp" || !gexbotSymbol(value.Symbol) || len(value.Results) > 8 ||
+		!validUTC(value.ObservedAt) || !validUTC(value.AvailableAt) || value.AvailableAt.Before(value.ObservedAt) {
+		return ErrInvalidCapability
+	}
+	if !value.Found && len(value.Results) != 0 {
+		return ErrInvalidCapability
+	}
+	for _, result := range value.Results {
+		if !validKernelEarningsItem(result, value.Symbol) {
+			return ErrInvalidCapability
+		}
+	}
+	return nil
+}
+
+func (value KernelEarningsToolReceipt) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ReceiptID) || !validID(value.ToolCallID) ||
+		value.ToolID != ToolKernelEarningsResults || !validDigest(value.RequestDigest) || value.State != ReceiptSucceeded ||
+		value.Evidence.Validate() != nil || value.Evidence.Owner != contracts.OwnerKernel || value.Evidence.RecordType != "kernel_earnings_results_evidence" ||
+		value.Executor.Validate() != nil || value.Executor.Kind != contracts.PrincipalKernel || value.Executor.Audience != contracts.AudienceKernel ||
+		!validUTC(value.CompletedAt) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
 func validID(value string) bool     { return identifierPattern.MatchString(value) }
 func validDigest(value string) bool { return digestPattern.MatchString(value) }
 func validUTC(value time.Time) bool { return !value.IsZero() && value.Location() == time.UTC }
@@ -257,6 +379,29 @@ func (value GEXBOTMetrics) valid() bool {
 		}
 	}
 	return true
+}
+
+func validKernelEarningsItem(item KernelEarningsItem, expectedSymbol string) bool {
+	if item.Symbol != expectedSymbol || item.Year < 1900 || item.Year > 2200 || item.Quarter < 1 || item.Quarter > 4 ||
+		!validNullableEarningsString(item.EPS.Estimate) || !validNullableEarningsString(item.EPS.Actual) {
+		return false
+	}
+	if item.Report == nil {
+		return true
+	}
+	if item.Report.Date != nil {
+		if len(*item.Report.Date) != len("2006-01-02") || strings.TrimSpace(*item.Report.Date) != *item.Report.Date {
+			return false
+		}
+		if _, err := time.Parse("2006-01-02", *item.Report.Date); err != nil {
+			return false
+		}
+	}
+	return item.Report.Timing == nil || *item.Report.Timing == "am" || *item.Report.Timing == "pm"
+}
+
+func validNullableEarningsString(value *string) bool {
+	return value == nil || (len(*value) > 0 && len(*value) <= 64 && strings.TrimSpace(*value) == *value)
 }
 
 func allowedContentType(value string) bool {
