@@ -241,7 +241,7 @@ WITH fixture AS (
         'parent_task_id','tg-probe-root','source_result',source_result,
         'runtime_policy',runtime_policy,'round',1,'max_rounds',2,
         'authorized_limit',jsonb_build_object(
-            'max_model_calls',4,'max_input_tokens',8000,'max_output_tokens',4000,
+            'max_model_calls',5,'max_input_tokens',8000,'max_output_tokens',4000,
             'max_tool_calls',1,'max_external_cost_micro_usd',0,
             'max_wall_time_ms',120000,'max_idle_time_ms',20000,'max_tasks',4,
             'max_depth',2,'max_fanout',1,'max_parallelism',2,
@@ -255,7 +255,7 @@ WITH fixture AS (
                 'tool_grants',jsonb_build_array(jsonb_build_object(
                     'tool_id','kernel_equity_quotes','tool_revision',1,'effect','read_only')),
                 'limit',jsonb_build_object(
-                    'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
+                    'max_model_calls',2,'max_input_tokens',2000,'max_output_tokens',1000,
                     'max_tool_calls',1,'max_external_cost_micro_usd',0,
                     'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
                     'max_depth',0,'max_fanout',0,'max_parallelism',1,
