@@ -443,6 +443,73 @@ UPDATE agent_control.runtime_session
 SET state='closed',generation=generation+1,
     closed_at=clock_timestamp()
 WHERE task_id IN ('tg-probe-fundamental','tg-probe-options');
+DO $tool_grant_fixture$
+DECLARE
+    task_row agent_control.runtime_task%ROWTYPE;
+    session_row agent_control.runtime_session%ROWTYPE;
+    at_time TIMESTAMPTZ:=clock_timestamp();
+BEGIN
+    SELECT * INTO STRICT task_row FROM agent_control.runtime_task
+    WHERE task_id='tg-probe-market';
+    SELECT * INTO STRICT session_row FROM agent_control.runtime_session
+    WHERE session_id=task_row.session_id;
+    INSERT INTO agent_control.runtime_attempt(
+        attempt_id,schema_revision,run_id,task_id,session_id,ordinal,
+        state,state_generation,lease_generation,lease_token,lease_worker,
+        lease_claimed_at,lease_heartbeat_at,lease_expires_at,
+        created_at,updated_at
+    ) VALUES(
+        'tg-tool-grant-attempt',1,task_row.run_id,task_row.task_id,
+        session_row.session_id,1,'leased',1,1,
+        '00000000-0000-4000-8000-000000000188',
+        '{"principal_id":"cortex-worker-1","kind":"workload","audience":"worker"}',
+        at_time,at_time,at_time+interval '60 seconds',at_time,at_time
+    );
+    INSERT INTO agent_control.runtime_turn(
+        turn_id,schema_revision,run_id,task_id,session_id,attempt_id,
+        ordinal,kind,state,state_generation,request_digest,
+        reservation_held,created_at,updated_at
+    ) VALUES(
+        'tg-tool-grant-turn',1,task_row.run_id,task_row.task_id,
+        session_row.session_id,'tg-tool-grant-attempt',1,
+        'model_call','planned',1,repeat('8',64),false,at_time,at_time
+    );
+    INSERT INTO agent_control.runtime_model_call_manifest(
+        call_id,schema_revision,record_digest,turn_id,attempt_id,
+        idempotency_key,provider,model,prompt_digest,context_manifest,
+        output_contract_digest,request_digest,max_output_tokens,
+        reserved_input_tokens,reserved_external_cost_micro_usd,
+        timeout_ms,temperature_micros,created_at
+    ) VALUES(
+        'tg-tool-grant-call',1,repeat('9',64),
+        'tg-tool-grant-turn','tg-tool-grant-attempt',
+        'tg-tool-grant-model-idem','openai','gpt-5-6-sol',
+        repeat('7',64),session_row.context_manifest,
+        task_row.output_contract_digest,repeat('8',64),
+        500,500,0,30000,0,at_time
+    );
+END
+$tool_grant_fixture$;
+GRANT EXECUTE ON FUNCTION
+agent_control.enforce_cortex_specialist_tool_grant(TEXT,TEXT)
+TO alpheus_agent_control_api;
+SET SESSION AUTHORIZATION "cortex-control-1";
+SET ROLE alpheus_agent_control_api;
+DO $tool_grant_enforcement$
+BEGIN
+    PERFORM agent_control.enforce_cortex_specialist_tool_grant(
+        'tg-tool-grant-call','kernel_equity_quotes');
+    BEGIN
+        PERFORM agent_control.enforce_cortex_specialist_tool_grant(
+            'tg-tool-grant-call','kernel_financials');
+        RAISE EXCEPTION 'TaskGraph Tool substitution was authorized';
+    EXCEPTION WHEN insufficient_privilege THEN
+        NULL;
+    END;
+END
+$tool_grant_enforcement$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SET SESSION AUTHORIZATION "cortex-worker-1";
 SET ROLE alpheus_agent_worker;
 DO $tool_discovery$
