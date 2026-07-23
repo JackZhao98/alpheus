@@ -182,6 +182,64 @@ opportunities. Broad discovery does not require permanent ingestion of the
 entire market. Selected candidates enter tracked state through a durable,
 versioned decision.
 
+## Moody Blues: collection and replay control
+
+**Moody Blues** is the Research Gateway subsystem that declares and supervises
+the temporal behavior of Research Providers. The name refers to the replay
+ability: it reconstructs what data Alpheus could actually have observed; it
+does not create a fact, reinterpret evidence, or make an investment decision.
+
+Every registered Provider must declare independently:
+
+- `live`: a current upstream read, which is not historical evidence unless its
+  result is subsequently archived;
+- `as_of`: a point-in-time read that may return only records with
+  `available_at <= requested_as_of`; and
+- `replay`: an ordered, generation-fenced sequence of archived observations.
+
+Moody Blues publishes the collection owner/policy, coverage, categories, query
+precision, actual observation resolution, and replay order. A precise cutoff
+does not fabricate a precise observation: with a 30-second collector, an
+`as_of` at `10:05:17Z` returns the most recent record available by that instant,
+not an invented `10:05:17Z` sample. PostgreSQL-backed temporal requests are
+canonicalized to UTC microsecond precision.
+
+The first registered Provider is `gexbot_classic`. It currently declares
+`as_of` and `replay`, but **not** `live`: the collector may read the official
+API to build the archive, yet no general current-read Tool has been activated.
+Future Providers must register their own truthful capability declaration; they
+may not inherit GEXBOT's historical guarantees merely by being reachable
+through Research Gateway.
+
+The canonical internal management paths are intentionally Provider-specific:
+`GET /internal/v1/moody-blues/providers`, then the declared GEXBOT
+status/`as_of`/replay routes below that Provider. Status reports only bounded
+coverage and the latest observed/available timestamps, never raw payloads or
+credentials. Existing `/internal/v1/gexbot/*` routes are bounded compatibility
+aliases; they do not add a generic Provider proxy or expose raw payloads,
+credentials, or collection controls to Cortex.
+
+### Future deterministic analytics slot (reserved, not implemented)
+
+A future pure-math preprocessing module may derive filtered GEX features before
+evidence reaches an Agent. Its reserved position is:
+
+```text
+Provider raw archive
+  -> Moody Blues point-in-time selection / replay
+  -> deterministic Research transform (future)
+  -> versioned derived evidence and receipt
+  -> Cortex Agent
+```
+
+Moody Blues remains the authority for collection time, `as_of`, availability,
+and replay order. The future transform is a pure deterministic function: it
+must have no LLM, credentials, routing decision, user prompt, or external side
+effect. Every derived result must bind the transform ID/version, parameters,
+input observation IDs and digests, output digest, and the original
+`observed_at` / `available_at` fence so the exact result is replayable. This
+reservation creates no service or container today.
+
 ## GEXBot options-data Plugin reservation
 
 GEXBot Classic is a **read-only market-data Plugin** direction, initially for a

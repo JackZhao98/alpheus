@@ -82,7 +82,7 @@ type cortexGEXActor struct {
 }
 
 func (g *gateway) cortexGEXBOTAsOfTool(w http.ResponseWriter, r *http.Request) {
-	if g == nil || g.db == nil || g.gexbotURL == "" || g.gexbotToken == "" || !tokenMatches(bearerToken(r), g.cortexToken) {
+	if g == nil || g.db == nil || g.gexbotURL == "" || g.gexbotToken == "" || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "as_of") || !g.validCortexToken(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}

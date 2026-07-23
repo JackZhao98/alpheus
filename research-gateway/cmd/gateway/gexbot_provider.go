@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const maxGEXBOTProviderResponseBytes = 64 << 10
@@ -30,11 +31,17 @@ func (g *gateway) configureGEXBOTProvider() error {
 		return fmt.Errorf("load GEXBOT Provider read token: %w", err)
 	}
 	g.gexbotURL, g.gexbotToken = url, token
+	if g.moodyBlues == nil {
+		g.moodyBlues = newMoodyBluesRegistry()
+	}
+	if err := g.moodyBlues.register(gexbotMoodyBluesProvider()); err != nil {
+		return fmt.Errorf("register GEXBOT with Moody Blues: %w", err)
+	}
 	return nil
 }
 
 func (g *gateway) cortexGEXBOTAsOf(w http.ResponseWriter, r *http.Request) {
-	if !g.validCortexToolToken(r) {
+	if !g.validCortexToolToken(r) || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "as_of") {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -46,15 +53,19 @@ func (g *gateway) cortexGEXBOTAsOf(w http.ResponseWriter, r *http.Request) {
 	if !decodeGatewayJSON(w, r, &input) {
 		return
 	}
-	if !safeSymbol(strings.ToUpper(strings.TrimSpace(input.Symbol))) || !validGEXBOTCategory(strings.TrimSpace(input.Category)) || strings.TrimSpace(input.AsOf) == "" {
+	asOf, ok := canonicalMoodyBluesTime(input.AsOf, time.Now())
+	if !safeSymbol(strings.ToUpper(strings.TrimSpace(input.Symbol))) || !validGEXBOTCategory(strings.TrimSpace(input.Category)) || !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBOT as_of query"})
 		return
 	}
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Category = strings.TrimSpace(input.Category)
+	input.AsOf = asOf.Format(time.RFC3339Nano)
 	g.proxyGEXBOT(w, r, "/v1/as-of", input)
 }
 
 func (g *gateway) cortexGEXBOTReplay(w http.ResponseWriter, r *http.Request) {
-	if !g.validCortexToolToken(r) {
+	if !g.validCortexToolToken(r) || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "replay") {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -69,16 +80,24 @@ func (g *gateway) cortexGEXBOTReplay(w http.ResponseWriter, r *http.Request) {
 	if !decodeGatewayJSON(w, r, &input) {
 		return
 	}
+	start, startOK := canonicalMoodyBluesTime(input.Start, time.Now())
+	end, endOK := canonicalMoodyBluesTime(input.End, time.Now())
+	asOf, asOfOK := canonicalMoodyBluesTime(input.AsOf, time.Now())
 	if strings.TrimSpace(input.RequestID) == "" || !safeSymbol(strings.ToUpper(strings.TrimSpace(input.Symbol))) || !validGEXBOTCategory(strings.TrimSpace(input.Category)) ||
-		strings.TrimSpace(input.Start) == "" || strings.TrimSpace(input.End) == "" || strings.TrimSpace(input.AsOf) == "" {
+		!startOK || !endOK || !asOfOK || end.Before(start) || asOf.Before(end) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBOT replay request"})
 		return
 	}
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Category = strings.TrimSpace(input.Category)
+	input.Start = start.Format(time.RFC3339Nano)
+	input.End = end.Format(time.RFC3339Nano)
+	input.AsOf = asOf.Format(time.RFC3339Nano)
 	g.proxyGEXBOT(w, r, "/v1/replays", input)
 }
 
 func (g *gateway) cortexGEXBOTReplayNext(w http.ResponseWriter, r *http.Request) {
-	if !g.validCortexToolToken(r) || !gatewayIdentifier(strings.TrimSpace(r.PathValue("id"))) {
+	if !g.validCortexToolToken(r) || g.moodyBlues == nil || !g.moodyBlues.supports("gexbot_classic", "replay") || !gatewayIdentifier(strings.TrimSpace(r.PathValue("id"))) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -92,7 +111,7 @@ func (g *gateway) cortexGEXBOTReplayNext(w http.ResponseWriter, r *http.Request)
 }
 
 func (g *gateway) validCortexToolToken(r *http.Request) bool {
-	return g != nil && g.gexbotURL != "" && g.gexbotToken != "" && g.cortexToken != "" && tokenMatches(bearerToken(r), g.cortexToken)
+	return g != nil && g.gexbotURL != "" && g.gexbotToken != "" && g.validCortexToken(r)
 }
 
 func (g *gateway) proxyGEXBOT(w http.ResponseWriter, r *http.Request, path string, input any) {

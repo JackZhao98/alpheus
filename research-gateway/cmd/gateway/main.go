@@ -67,6 +67,7 @@ type gateway struct {
 	principal   string
 	gexbotURL   string
 	gexbotToken string
+	moodyBlues  *moodyBluesRegistry
 }
 
 func main() {
@@ -87,6 +88,11 @@ func run() error {
 	if err := g.configureGEXBOTProvider(); err != nil {
 		return err
 	}
+	log.Printf("research-gateway listening on :8300")
+	return http.ListenAndServe(":8300", g.handler())
+}
+
+func (g *gateway) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -96,11 +102,17 @@ func run() error {
 	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/web-fetch", g.cortexWebFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/gexbot-as-of", g.cortexGEXBOTAsOfTool)
+	mux.HandleFunc("GET /internal/v1/moody-blues/providers", g.moodyBluesProviders)
+	// Moody Blues is the canonical temporal-data surface. The older /gexbot
+	// paths remain narrow compatibility aliases while callers migrate.
+	mux.HandleFunc("GET /internal/v1/moody-blues/providers/gexbot-classic/status", g.moodyBluesGEXBOTStatus)
+	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/as-of", g.cortexGEXBOTAsOf)
+	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/replays", g.cortexGEXBOTReplay)
+	mux.HandleFunc("POST /internal/v1/moody-blues/providers/gexbot-classic/replays/{id}/next", g.cortexGEXBOTReplayNext)
 	mux.HandleFunc("POST /internal/v1/gexbot/as-of", g.cortexGEXBOTAsOf)
 	mux.HandleFunc("POST /internal/v1/gexbot/replays", g.cortexGEXBOTReplay)
 	mux.HandleFunc("POST /internal/v1/gexbot/replays/{id}/next", g.cortexGEXBOTReplayNext)
-	log.Printf("research-gateway listening on :8300")
-	return http.ListenAndServe(":8300", mux)
+	return mux
 }
 
 func (g *gateway) news(w http.ResponseWriter, r *http.Request) {

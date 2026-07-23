@@ -60,6 +60,7 @@ func newGateway(token string) *gateway {
 	return &gateway{
 		token: token, http: &http.Client{Timeout: 15 * time.Second}, base: robinhoodAPIBase,
 		braveBase: braveAPIBase, lookupIP: net.DefaultResolver.LookupIPAddr, dialContext: dialer.DialContext,
+		moodyBlues: newMoodyBluesRegistry(),
 	}
 }
 

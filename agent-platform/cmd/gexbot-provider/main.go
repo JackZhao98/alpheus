@@ -137,8 +137,35 @@ func (p *provider) assertIdentity(ctx context.Context) error {
 	})
 }
 
-func (p *provider) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": "gexbot_classic", "collector_configured": p.apiKey != ""})
+func (p *provider) health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	status, err := p.collectionStatus(ctx)
+	if err != nil {
+		log.Printf("GEXBOT collection status unavailable: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "collection status unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                   true,
+		"provider":             "gexbot_classic",
+		"collector_configured": p.apiKey != "",
+		"collection":           status,
+	})
+}
+
+func (p *provider) collectionStatus(ctx context.Context) (json.RawMessage, error) {
+	var raw []byte
+	err := p.withRole(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT research.gexbot_collection_status()::TEXT`).Scan(&raw)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collection status unavailable: %w", err)
+	}
+	if len(raw) == 0 || len(raw) > 16<<10 || !json.Valid(raw) {
+		return nil, errors.New("collection status invalid")
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (p *provider) ingestObservation(w http.ResponseWriter, r *http.Request) {
