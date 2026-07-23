@@ -14,12 +14,19 @@ func TestAgentRoleCatalogIsBoundedAndCoversReadTools(t *testing.T) {
 			continue
 		}
 		roles := AgentRolesForTool(tool.ID)
-		if len(roles) == 0 {
-			t.Fatalf("active read Tool %s has no Specialist role", tool.ID)
+		if len(roles) != 1 {
+			t.Fatalf("active read Tool %s has %d Specialist roles", tool.ID, len(roles))
+		}
+		role, found := SpecialistRoleForTool(tool.ID)
+		if !found || role != roles[0] {
+			t.Fatalf("active read Tool %s has ambiguous Specialist owner", tool.ID)
 		}
 	}
 	if roles := AgentRolesForTool("kernel_review_equity_order"); len(roles) != 0 {
 		t.Fatalf("preflight Tool leaked to Specialist roles: %v", roles)
+	}
+	if _, found := SpecialistRoleForTool("kernel_review_option_order"); found {
+		t.Fatal("preflight Tool acquired a Specialist owner")
 	}
 }
 

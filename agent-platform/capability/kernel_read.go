@@ -161,7 +161,11 @@ func KernelReadPromptCatalog() string {
 		if !ok {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s: %s Args: %s.", id, descriptor.Description, spec.ArgumentGuide))
+		route := "decision_desk"
+		if role, found := SpecialistRoleForTool(id); found {
+			route = string(role)
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s Route: %s. Args: %s.", id, descriptor.Description, route, spec.ArgumentGuide))
 	}
 	return strings.Join(lines, " ")
 }

@@ -86,6 +86,17 @@ func AgentRolesForTool(toolID ToolID) []AgentRoleID {
 	return result
 }
 
+// SpecialistRoleForTool returns the one bounded Specialist responsible for an
+// active read Tool. Preflight Tools deliberately have no Specialist owner and
+// remain Decision Desk-only.
+func SpecialistRoleForTool(toolID ToolID) (AgentRoleID, bool) {
+	roles := AgentRolesForTool(toolID)
+	if len(roles) != 1 {
+		return "", false
+	}
+	return roles[0], true
+}
+
 func ValidateAgentRoleCatalog() error {
 	seen := make(map[AgentRoleID]struct{}, len(agentRoleCatalog))
 	for _, role := range agentRoleCatalog {
