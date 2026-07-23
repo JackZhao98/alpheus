@@ -41,6 +41,16 @@ type moodyBluesCollectionPolicy struct {
 	Categories []string `json:"categories"`
 }
 
+type moodyBluesTransform struct {
+	ID                 string   `json:"id"`
+	Revision           uint16   `json:"revision"`
+	InputDataClass     string   `json:"input_data_class"`
+	OutputDataClass    string   `json:"output_data_class"`
+	Deterministic      bool     `json:"deterministic"`
+	MaxOutputBytes     int      `json:"max_output_bytes"`
+	SelectedMetricKeys []string `json:"selected_metric_keys"`
+}
+
 // moodyBluesProvider is a safe, operator-facing declaration. It contains no
 // credential, URL, raw bytes, or provider-specific request primitive.
 type moodyBluesProvider struct {
@@ -51,6 +61,7 @@ type moodyBluesProvider struct {
 	Capabilities   moodyBluesCapabilities     `json:"capabilities"`
 	Temporal       moodyBluesTemporalContract `json:"temporal"`
 	Collection     moodyBluesCollectionPolicy `json:"collection"`
+	Transforms     []moodyBluesTransform      `json:"transforms"`
 }
 
 type moodyBluesRegistry struct {
@@ -213,6 +224,7 @@ func gexbotMoodyBluesProvider() moodyBluesProvider {
 			Coverage:   []string{"SPX"},
 			Categories: []string{"gex_full", "gex_zero", "gex_one"},
 		},
+		Transforms: []moodyBluesTransform{gexCompactTransformDescriptor()},
 	}
 }
 
@@ -224,8 +236,15 @@ func validateMoodyBluesProvider(provider moodyBluesProvider) error {
 		!gatewayIdentifier(provider.Collection.Revision) || strings.TrimSpace(provider.Collection.Cadence) == "" ||
 		strings.TrimSpace(provider.Collection.Timezone) == "" || len(provider.Collection.Coverage) == 0 || len(provider.Collection.Categories) == 0 ||
 		(!provider.Capabilities.Live && !provider.Capabilities.AsOf && !provider.Capabilities.Replay) ||
-		(provider.Capabilities.Replay && !provider.Capabilities.AsOf) {
+		(provider.Capabilities.Replay && !provider.Capabilities.AsOf) || len(provider.Transforms) == 0 {
 		return fmt.Errorf("invalid Moody Blues Provider %q", provider.ID)
+	}
+	for _, transform := range provider.Transforms {
+		if !gatewayIdentifier(transform.ID) || transform.Revision != 1 || !gatewayIdentifier(transform.InputDataClass) ||
+			!gatewayIdentifier(transform.OutputDataClass) || !transform.Deterministic || transform.MaxOutputBytes < 1 ||
+			len(transform.SelectedMetricKeys) == 0 {
+			return fmt.Errorf("invalid Moody Blues Transform %q", transform.ID)
+		}
 	}
 	return nil
 }
@@ -233,6 +252,10 @@ func validateMoodyBluesProvider(provider moodyBluesProvider) error {
 func copyMoodyBluesProvider(provider moodyBluesProvider) moodyBluesProvider {
 	provider.Collection.Coverage = append([]string(nil), provider.Collection.Coverage...)
 	provider.Collection.Categories = append([]string(nil), provider.Collection.Categories...)
+	provider.Transforms = append([]moodyBluesTransform(nil), provider.Transforms...)
+	for index := range provider.Transforms {
+		provider.Transforms[index].SelectedMetricKeys = append([]string(nil), provider.Transforms[index].SelectedMetricKeys...)
+	}
 	return provider
 }
 
@@ -240,7 +263,8 @@ func sameMoodyBluesProvider(left, right moodyBluesProvider) bool {
 	if left.SchemaRevision != right.SchemaRevision || left.ID != right.ID || left.DisplayName != right.DisplayName || left.DataClass != right.DataClass ||
 		left.Capabilities != right.Capabilities || left.Temporal != right.Temporal || left.Collection.Owner != right.Collection.Owner ||
 		left.Collection.Revision != right.Collection.Revision || left.Collection.Cadence != right.Collection.Cadence || left.Collection.Timezone != right.Collection.Timezone ||
-		len(left.Collection.Coverage) != len(right.Collection.Coverage) || len(left.Collection.Categories) != len(right.Collection.Categories) {
+		len(left.Collection.Coverage) != len(right.Collection.Coverage) || len(left.Collection.Categories) != len(right.Collection.Categories) ||
+		len(left.Transforms) != len(right.Transforms) {
 		return false
 	}
 	for index := range left.Collection.Coverage {
@@ -251,6 +275,20 @@ func sameMoodyBluesProvider(left, right moodyBluesProvider) bool {
 	for index := range left.Collection.Categories {
 		if left.Collection.Categories[index] != right.Collection.Categories[index] {
 			return false
+		}
+	}
+	for index := range left.Transforms {
+		leftTransform, rightTransform := left.Transforms[index], right.Transforms[index]
+		if leftTransform.ID != rightTransform.ID || leftTransform.Revision != rightTransform.Revision ||
+			leftTransform.InputDataClass != rightTransform.InputDataClass || leftTransform.OutputDataClass != rightTransform.OutputDataClass ||
+			leftTransform.Deterministic != rightTransform.Deterministic || leftTransform.MaxOutputBytes != rightTransform.MaxOutputBytes ||
+			len(leftTransform.SelectedMetricKeys) != len(rightTransform.SelectedMetricKeys) {
+			return false
+		}
+		for keyIndex := range leftTransform.SelectedMetricKeys {
+			if leftTransform.SelectedMetricKeys[keyIndex] != rightTransform.SelectedMetricKeys[keyIndex] {
+				return false
+			}
 		}
 	}
 	return true

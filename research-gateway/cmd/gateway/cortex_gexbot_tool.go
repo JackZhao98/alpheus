@@ -195,7 +195,11 @@ func (g *gateway) fetchGEXBOTAsOf(ctx context.Context, auth cortexGEXBOTAsOfAuth
 	if err != nil || len(normalized) == 0 || len(normalized) > maxGEXBOTProviderResponseBytes {
 		return nil, fmt.Errorf("provider response invalid")
 	}
-	return normalized, nil
+	compacted, err := compactGEXBOTObservation(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("provider response transform failed: %w", err)
+	}
+	return compacted, nil
 }
 
 func (g *gateway) recordCortexGEXBOTAsOfReceipt(ctx context.Context, toolCallID string, observation json.RawMessage) (cortexGEXBOTToolResult, error) {
