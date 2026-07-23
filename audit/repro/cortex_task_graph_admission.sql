@@ -380,6 +380,51 @@ $negative$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
+CREATE TEMP TABLE task_graph_session_probe AS
+SELECT
+    node.task_id,
+    jsonb_set(
+        source_session.execution_binding,
+        '{origin,record_id}',
+        to_jsonb(node.task_id)
+    ) AS execution_binding,
+    jsonb_set(
+        source_session.context_manifest,
+        '{origin,record_id}',
+        to_jsonb(node.task_id)
+    ) AS context_manifest,
+    request.raw_input,
+    node.objective
+FROM agent_control.cortex_task_graph_node AS node
+JOIN agent_control.cortex_task_graph AS graph
+  ON graph.graph_id=node.graph_id
+JOIN agent_control.runtime_run AS run
+  ON run.run_id=graph.run_id
+JOIN agent_input.user_request AS request
+  ON request.request_id=run.origin_source_record_id
+ AND request.record_digest=run.origin_source_record_digest
+JOIN agent_control.runtime_session AS source_session
+  ON source_session.session_id='tg-probe-session'
+WHERE node.graph_id='tg-probe-graph';
+GRANT SELECT ON task_graph_session_probe TO alpheus_agent_control_api;
+
+SET SESSION AUTHORIZATION "cortex-control-1";
+SET ROLE alpheus_agent_control_api;
+SELECT agent_control.prepare_cortex_task_graph_node_session(
+    task_id,execution_binding,context_manifest,raw_input,objective,
+    'cortex-worker-1'
+) AS prepared
+FROM task_graph_session_probe
+ORDER BY task_id;
+SELECT agent_control.prepare_cortex_task_graph_node_session(
+    task_id,execution_binding,context_manifest,raw_input,objective,
+    'cortex-worker-1'
+) AS replayed
+FROM task_graph_session_probe
+WHERE task_id='tg-probe-market';
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
 DO $assertions$
 DECLARE
     graph_count INTEGER;
@@ -388,6 +433,9 @@ DECLARE
     blocked_count INTEGER;
     join_count INTEGER;
     admission_count INTEGER;
+    session_count INTEGER;
+    binding_count INTEGER;
+    worker_acl_count INTEGER;
     parent_state TEXT;
     attempt_state TEXT;
 BEGIN
@@ -404,12 +452,41 @@ BEGIN
     SELECT count(*) INTO admission_count
     FROM agent_control.cortex_task_graph_admission
     WHERE graph_id='tg-probe-graph';
+    SELECT count(*) INTO session_count
+    FROM agent_control.cortex_task_graph_node AS node
+    JOIN agent_control.runtime_task AS task ON task.task_id=node.task_id
+    JOIN agent_control.runtime_session AS session
+      ON session.session_id=task.session_id
+     AND session.task_id=task.task_id
+     AND session.state='open'
+    WHERE node.graph_id='tg-probe-graph';
+    SELECT count(*) INTO binding_count
+    FROM blob.blob_reference AS binding
+    JOIN agent_control.runtime_session AS session
+      ON binding.binding_id LIKE
+         'cortex-session:'||session.session_id||':%'
+    JOIN agent_control.cortex_task_graph_node AS node
+      ON node.task_id=session.task_id
+    WHERE node.graph_id='tg-probe-graph'
+      AND binding.state='active';
+    SELECT count(*) INTO worker_acl_count
+    FROM blob.blob_acl AS acl
+    JOIN agent_control.runtime_session AS session
+      ON acl.binding_id LIKE
+         'cortex-session:'||session.session_id||':%'
+    JOIN agent_control.cortex_task_graph_node AS node
+      ON node.task_id=session.task_id
+    WHERE node.graph_id='tg-probe-graph'
+      AND acl.principal_id='cortex-worker-1'
+      AND acl.state='active';
     SELECT state INTO parent_state FROM agent_control.runtime_task
     WHERE task_id='tg-probe-root';
     SELECT state INTO attempt_state FROM agent_control.runtime_attempt
     WHERE attempt_id='tg-probe-attempt';
     IF graph_count<>1 OR node_count<>3 OR ready_count<>2 OR blocked_count<>1
-       OR join_count<>1 OR admission_count<>1 OR parent_state<>'waiting'
+       OR join_count<>1 OR admission_count<>1
+       OR session_count<>3 OR binding_count<>12 OR worker_acl_count<>12
+       OR parent_state<>'waiting'
        OR attempt_state<>'superseded'
        OR EXISTS (
            SELECT 1 FROM agent_control.cortex_task_graph
