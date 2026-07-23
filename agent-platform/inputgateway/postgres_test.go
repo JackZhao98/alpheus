@@ -100,3 +100,36 @@ func TestTaskGraphSessionDocumentsAreNodeScoped(t *testing.T) {
 		t.Fatal("non-input raw Blob acquired a TaskGraph Session")
 	}
 }
+
+func TestValidateOperationsHealthEnforcesBoundedConsistentProjection(t *testing.T) {
+	now := time.Date(2026, 7, 23, 23, 0, 0, 0, time.UTC)
+	value := CortexOperationsHealth{
+		GeneratedAt: now.Format(time.RFC3339Nano),
+		Status:      "healthy",
+		WindowHours: 24,
+		ActiveRuns: []CortexOperationsActiveRun{{
+			RunID:      "run-1",
+			State:      "running",
+			UpdatedAt:  now.Add(-time.Second).Format(time.RFC3339Nano),
+			DeadlineAt: now.Add(time.Minute).Format(time.RFC3339Nano),
+		}},
+		RecentFailures: []CortexOperationsFailure{{
+			RunID:      "run-0",
+			State:      "dead_lettered",
+			TerminalAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+			ReasonCode: "runtime_deadline_expired",
+		}},
+	}
+	if err := validateOperationsHealth(value); err != nil {
+		t.Fatal(err)
+	}
+	value.Tools.OverdueUnacknowledged = 1
+	if err := validateOperationsHealth(value); err == nil {
+		t.Fatal("mismatched Tool risk count was accepted")
+	}
+	value.Risks.UnacknowledgedToolCalls = 1
+	value.ActiveRuns[0].State = "succeeded"
+	if err := validateOperationsHealth(value); err == nil {
+		t.Fatal("terminal Run was accepted in the active projection")
+	}
+}

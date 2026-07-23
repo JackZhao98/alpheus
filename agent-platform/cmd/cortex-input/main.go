@@ -373,6 +373,21 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{"conversation_id": strings.TrimSpace(request.PathValue("id")), "entries": entries})
 	})
+	mux.HandleFunc("GET /v1/operations/health", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		result, err := adapter.GetOperationsHealth(request.Context())
+		if err != nil {
+			log.Printf("Cortex operations health read failed: %v", err)
+			http.Error(w, "operations health unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("POST /internal/v1/model-outputs", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

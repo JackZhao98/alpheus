@@ -510,6 +510,57 @@ type CortexTraceNode struct {
 	ToolID string `json:"tool_id,omitempty"`
 }
 
+// CortexOperationsHealth is a bounded Control-owned read model. It contains
+// aggregate state and stable record identities only; raw failures, prompts,
+// Tool arguments, credentials, and provider payloads remain private.
+type CortexOperationsHealth struct {
+	GeneratedAt string `json:"generated_at"`
+	Status      string `json:"status"`
+	WindowHours int64  `json:"window_hours"`
+	Runs        struct {
+		Active       int64 `json:"active"`
+		Succeeded    int64 `json:"succeeded"`
+		Failed       int64 `json:"failed"`
+		Canceled     int64 `json:"canceled"`
+		DeadLettered int64 `json:"dead_lettered"`
+	} `json:"runs"`
+	Tasks struct {
+		Active       int64 `json:"active"`
+		Failed       int64 `json:"failed"`
+		DeadLettered int64 `json:"dead_lettered"`
+	} `json:"tasks"`
+	Risks struct {
+		StalledRuns             int64 `json:"stalled_runs"`
+		ExpiredRuns             int64 `json:"expired_runs"`
+		ExpiredAttemptLeases    int64 `json:"expired_attempt_leases"`
+		UnacknowledgedToolCalls int64 `json:"unacknowledged_tool_calls"`
+		TerminalOpenSessions    int64 `json:"terminal_open_sessions"`
+		TerminalSlotLeaks       int64 `json:"terminal_slot_leaks"`
+	} `json:"risks"`
+	Tools struct {
+		Authorized            int64 `json:"authorized"`
+		Acknowledged          int64 `json:"acknowledged"`
+		OverdueUnacknowledged int64 `json:"overdue_unacknowledged"`
+	} `json:"tools"`
+	ActiveRuns     []CortexOperationsActiveRun `json:"active_runs"`
+	RecentFailures []CortexOperationsFailure   `json:"recent_failures"`
+}
+
+type CortexOperationsActiveRun struct {
+	RunID      string `json:"run_id"`
+	State      string `json:"state"`
+	UpdatedAt  string `json:"updated_at"`
+	DeadlineAt string `json:"deadline_at"`
+	Stale      bool   `json:"stale"`
+}
+
+type CortexOperationsFailure struct {
+	RunID      string `json:"run_id"`
+	State      string `json:"state"`
+	TerminalAt string `json:"terminal_at"`
+	ReasonCode string `json:"reason_code"`
+}
+
 // WebFetchAuthorization is the only external-read Tool authorization enabled
 // in this slice.  Its URL came from immutable user input; callers cannot send
 // a free-form connector request to Research Gateway.
@@ -944,6 +995,82 @@ func (adapter *PostgresAdapter) RecordKernelRead(ctx context.Context, observatio
 		return CortexKernelReadResult{}, fmt.Errorf("Cortex Kernel read receipt acknowledgement mismatch")
 	}
 	return result, nil
+}
+
+func (adapter *PostgresAdapter) GetOperationsHealth(ctx context.Context) (CortexOperationsHealth, error) {
+	if adapter == nil || adapter.db == nil {
+		return CortexOperationsHealth{}, fmt.Errorf("invalid Cortex operations health request")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.get_cortex_operations_health_v2()::TEXT`,
+		).Scan(&raw)
+	}); err != nil {
+		return CortexOperationsHealth{}, fmt.Errorf("read Cortex operations health: %w", err)
+	}
+	var result CortexOperationsHealth
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		validateOperationsHealth(result) != nil {
+		return CortexOperationsHealth{}, fmt.Errorf("invalid Cortex operations health response")
+	}
+	return result, nil
+}
+
+func validateOperationsHealth(value CortexOperationsHealth) error {
+	if value.Status != "healthy" && value.Status != "degraded" {
+		return fmt.Errorf("invalid Cortex operations status")
+	}
+	if value.WindowHours != 24 || len(value.ActiveRuns) > 20 ||
+		len(value.RecentFailures) > 10 {
+		return fmt.Errorf("invalid Cortex operations bounds")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value.GeneratedAt); err != nil ||
+		parsed.Location() != time.UTC {
+		return fmt.Errorf("invalid Cortex operations timestamp")
+	}
+	counts := []int64{
+		value.Runs.Active, value.Runs.Succeeded, value.Runs.Failed,
+		value.Runs.Canceled, value.Runs.DeadLettered, value.Tasks.Active,
+		value.Tasks.Failed, value.Tasks.DeadLettered,
+		value.Risks.StalledRuns, value.Risks.ExpiredRuns,
+		value.Risks.ExpiredAttemptLeases,
+		value.Risks.UnacknowledgedToolCalls,
+		value.Risks.TerminalOpenSessions, value.Risks.TerminalSlotLeaks,
+		value.Tools.Authorized, value.Tools.Acknowledged,
+		value.Tools.OverdueUnacknowledged,
+	}
+	for _, count := range counts {
+		if count < 0 {
+			return fmt.Errorf("negative Cortex operations count")
+		}
+	}
+	if value.Risks.UnacknowledgedToolCalls !=
+		value.Tools.OverdueUnacknowledged {
+		return fmt.Errorf("Cortex Tool risk count mismatch")
+	}
+	for _, run := range value.ActiveRuns {
+		updated, updatedErr := time.Parse(time.RFC3339Nano, run.UpdatedAt)
+		deadline, deadlineErr := time.Parse(time.RFC3339Nano, run.DeadlineAt)
+		if run.RunID == "" ||
+			(run.State != "queued" && run.State != "running" &&
+				run.State != "waiting" && run.State != "canceling") ||
+			updatedErr != nil || deadlineErr != nil ||
+			updated.Location() != time.UTC || deadline.Location() != time.UTC {
+			return fmt.Errorf("invalid Cortex active Run")
+		}
+	}
+	for _, failure := range value.RecentFailures {
+		at, err := time.Parse(time.RFC3339Nano, failure.TerminalAt)
+		if failure.RunID == "" ||
+			(failure.State != "failed" && failure.State != "dead_lettered") ||
+			failure.ReasonCode == "" || err != nil || at.Location() != time.UTC {
+			return fmt.Errorf("invalid Cortex recent failure")
+		}
+	}
+	return nil
 }
 
 func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {
