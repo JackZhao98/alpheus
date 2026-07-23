@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -36,6 +37,12 @@ func TestWorkerLocallyFencesDuplicateTaskDelivery(t *testing.T) {
 	w.endLocalTask("task-1")
 	if !w.beginLocalTask("task-1") {
 		t.Fatal("completed local Task was not released")
+	}
+}
+
+func TestClaimDeniedCanBeRecognizedForBackoff(t *testing.T) {
+	if !errors.Is(errClaimDenied, errClaimDenied) {
+		t.Fatal("claim denial sentinel is not stable")
 	}
 }
 

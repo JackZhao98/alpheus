@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,8 @@ import (
 const workerRole = "alpheus_agent_worker"
 const defaultWorkerConcurrency = 4
 const maxWorkerConcurrency = 16
+
+var errClaimDenied = fmt.Errorf("claim denied")
 
 type worker struct {
 	db                                                 *sql.DB
@@ -178,6 +181,9 @@ func (w *worker) serveLane(laneID int, interval time.Duration) {
 		w.endLocalTask(item.TaskID)
 		if err != nil {
 			log.Printf("lane %d Task %s failed: %v", laneID, item.TaskID, err)
+			if errors.Is(err, errClaimDenied) {
+				time.Sleep(interval)
+			}
 		}
 	}
 }
@@ -276,14 +282,19 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 		return fmt.Errorf("unsupported Cortex Task role")
 	}
 	modelPrompt := conversationPrompt(string(prompt), history)
-	claimKey := fmt.Sprintf("%s-claim-%d", item.TaskID, item.TaskGeneration)
+	// A committed denial is an immutable response to one command identity.
+	// Use a fresh identity after rediscovery so a transient budget/parallelism
+	// denial can be retried against the same still-ready Task generation.
+	claimKey := fmt.Sprintf(
+		"%s-claim-%d-%s", item.TaskID, item.TaskGeneration, uuid(),
+	)
 	claimCmd := runtimecontract.ClaimTaskCommand{SchemaRevision: 1, Envelope: w.envelope("claim_task", claimKey, item.Deadline), TaskID: item.TaskID, ExpectedTaskStateGeneration: item.TaskGeneration, RequestedLeaseSeconds: 120}
 	var claim claimResult
 	if err := w.command(ctx, "claim_task", claimCmd, &claim); err != nil {
 		return err
 	}
 	if claim.Status != "committed" {
-		return fmt.Errorf("claim denied")
+		return errClaimDenied
 	}
 	if claim.Reclaimed {
 		return w.recoverAmbiguousModelTurn(ctx, item, claim)
@@ -1786,9 +1797,12 @@ type handoffAdmission struct {
 }
 
 type taskGraphAdmission struct {
-	GraphID   string `json:"graph_id"`
-	RunID     string `json:"run_id"`
-	TaskCount int64  `json:"task_count"`
+	GraphID         string   `json:"graph_id"`
+	RunID           string   `json:"run_id"`
+	ParentTaskID    string   `json:"parent_task_id"`
+	TaskIDs         []string `json:"task_ids"`
+	TaskCount       int64    `json:"task_count"`
+	ParentTaskState string   `json:"parent_task_state"`
 }
 
 func (w *worker) admitTaskGraph(
@@ -1828,7 +1842,10 @@ func (w *worker) admitTaskGraph(
 	if decoder.Decode(&admission) != nil ||
 		decoder.Decode(&struct{}{}) != io.EOF ||
 		admission.GraphID == "" || admission.RunID == "" ||
-		admission.TaskCount < 3 || admission.TaskCount > 5 {
+		admission.ParentTaskID == "" ||
+		admission.TaskCount < 3 || admission.TaskCount > 5 ||
+		int64(len(admission.TaskIDs)) != admission.TaskCount ||
+		admission.ParentTaskState != "waiting" {
 		return taskGraphAdmission{},
 			fmt.Errorf("invalid Control TaskGraph admission response")
 	}
