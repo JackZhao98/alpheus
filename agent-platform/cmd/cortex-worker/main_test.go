@@ -52,6 +52,31 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 	if got := modelOutputTokenLimit(workItem{Role: "desk"}); got != 2000 {
 		t.Fatalf("Desk output token limit=%d", got)
 	}
+	if got := modelOutputTokenLimit(workItem{
+		Role: "fundamental_scout", TaskGraphID: "graph-1",
+		MaxOutputTokens: 1000,
+	}); got != 1000 {
+		t.Fatalf("TaskGraph output token limit=%d", got)
+	}
+}
+
+func TestTaskGraphSpecialistPromptHasOneBoundedRole(t *testing.T) {
+	request := taskGraphSpecialistMemoRequest(
+		"model", "prompt", "fundamental_scout",
+		`{"schema_revision":1,"objective":"review durable facts"}`, 1000,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "fundamental_scout") ||
+		!strings.Contains(instructions, "independently scheduled") ||
+		!strings.Contains(instructions, "No Tool receipt is available") ||
+		request["max_output_tokens"] != int64(1000) {
+		t.Fatalf("TaskGraph Specialist request is incomplete: %#v", request)
+	}
+	if request := taskGraphSpecialistMemoRequest(
+		"model", "prompt", "invented_role", "{}", 1000,
+	); request != nil {
+		t.Fatal("unregistered TaskGraph role acquired a prompt")
+	}
 }
 
 func TestDeskDistinguishesGEXCutoffFromObservationTime(t *testing.T) {

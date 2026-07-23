@@ -265,11 +265,10 @@ WITH fixture AS (
                 'task_id','tg-probe-fundamental','role_id','fundamental_scout',
                 'role_revision',1,'depth',1,'objective',objective,'input_refs','[]'::JSONB,
                 'output_contract_name','specialist_memo_v1','output_contract',memo_contract,
-                'tool_grants',jsonb_build_array(jsonb_build_object(
-                    'tool_id','kernel_financials','tool_revision',1,'effect','read_only')),
+                'tool_grants','[]'::JSONB,
                 'limit',jsonb_build_object(
                     'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
-                    'max_tool_calls',1,'max_external_cost_micro_usd',0,
+                    'max_tool_calls',0,'max_external_cost_micro_usd',0,
                     'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
                     'max_depth',0,'max_fanout',0,'max_parallelism',1,
                     'max_invalid_output_retries',0,'max_infrastructure_retries',0),
@@ -422,6 +421,24 @@ SELECT agent_control.prepare_cortex_task_graph_node_session(
 ) AS replayed
 FROM task_graph_session_probe
 WHERE task_id='tg-probe-market';
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+SET SESSION AUTHORIZATION "cortex-worker-1";
+SET ROLE alpheus_agent_worker;
+DO $discovery$
+DECLARE item JSONB;
+BEGIN
+    item:=agent_control.next_cortex_task();
+    IF item->>'task_id'<>'tg-probe-fundamental'
+       OR item->>'task_graph_id'<>'tg-probe-graph'
+       OR item->>'role'<>'fundamental_scout'
+       OR item->>'task_graph_tool_id' IS NOT NULL
+       OR item->>'task_graph_objective_binding_id' IS NULL THEN
+        RAISE EXCEPTION 'TaskGraph Worker discovery assertion failed: %',item;
+    END IF;
+END
+$discovery$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
