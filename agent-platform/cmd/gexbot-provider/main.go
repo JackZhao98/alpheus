@@ -39,7 +39,7 @@ type provider struct {
 	db                         *sql.DB
 	store                      *blob.LocalStore
 	principal, ingest, readKey string
-	apiKey                     string
+	apiKey, apiBaseURL         string
 	http                       *http.Client
 }
 
@@ -109,7 +109,7 @@ func run() error {
 	}
 	apiKey, _ := readOptionalSecret("GEXBOT_API_KEY_FILE")
 	p := &provider{db: db, store: store, principal: env("GEXBOT_PROVIDER_PRINCIPAL_ID", "gexbot-provider-1"), ingest: ingest, readKey: readKey,
-		apiKey: apiKey, http: &http.Client{Timeout: providerAPITimeout}}
+		apiKey: apiKey, apiBaseURL: strings.TrimRight(env("GEXBOT_API_BASE_URL", "https://api.gex.bot"), "/"), http: &http.Client{Timeout: providerAPITimeout}}
 	if err := p.assertIdentity(ctx); err != nil {
 		_ = db.Close()
 		return err
@@ -122,12 +122,53 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", p.health)
 	mux.HandleFunc("POST /v1/observations", p.ingestObservation)
+	mux.HandleFunc("POST /v1/live", p.live)
 	mux.HandleFunc("POST /v1/as-of", p.asOf)
 	mux.HandleFunc("POST /v1/replays", p.createReplay)
 	mux.HandleFunc("POST /v1/replays/{id}/next", p.nextReplay)
 	server := &http.Server{Addr: env("GEXBOT_PROVIDER_ADDR", ":8500"), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	log.Printf("GEXBOT Research Provider listening on %s as %s", server.Addr, p.principal)
 	return server.ListenAndServe()
+}
+
+// live performs one credential-isolated official API read and then appends the
+// same observation to the archive. The response is still a normalized Provider
+// record with a raw Blob reference; raw source bytes never cross this boundary.
+func (p *provider) live(w http.ResponseWriter, r *http.Request) {
+	if !matchesBearer(r, p.readKey) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if p.apiKey == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GEXBOT live source is not configured"})
+		return
+	}
+	var input struct {
+		Symbol   string `json:"symbol"`
+		Category string `json:"category"`
+	}
+	if !decodeJSON(w, r, 4<<10, &input) {
+		return
+	}
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Category = strings.TrimSpace(input.Category)
+	if input.Symbol != "SPX" || !validCategory(input.Category) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid GEXBOT live query"})
+		return
+	}
+	observation, err := p.fetchClassic(r.Context(), input.Symbol, input.Category, time.Now().UTC().Truncate(time.Microsecond))
+	if err != nil {
+		log.Printf("GEXBOT live fetch failed: %v", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "GEXBOT live source unavailable"})
+		return
+	}
+	result, err := p.record(r.Context(), observation)
+	if err != nil {
+		log.Printf("GEXBOT live archive failed: %v", err)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "GEXBOT live observation rejected"})
+		return
+	}
+	writeRawJSON(w, result)
 }
 
 func (p *provider) assertIdentity(ctx context.Context) error {
@@ -462,7 +503,11 @@ func (p *provider) startCollector(ctx context.Context) {
 func (p *provider) fetchClassic(ctx context.Context, symbol, category string, observed time.Time) (observationInput, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, providerAPITimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, "https://api.gex.bot/v2/"+symbol+"/classic/"+category, nil)
+	baseURL := strings.TrimRight(p.apiBaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://api.gex.bot"
+	}
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, baseURL+"/v2/"+symbol+"/classic/"+category, nil)
 	if err != nil {
 		return observationInput{}, err
 	}
