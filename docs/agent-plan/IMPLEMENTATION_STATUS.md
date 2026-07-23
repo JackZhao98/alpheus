@@ -265,9 +265,21 @@ Join closure, successful result promotion, result reads, terminal Session
 lifecycle and immediate deferred-constraint validation. The staged TODO is
 tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
-P5 next enables separately authorized read-only Tool nodes and the Moody Blues
-normalization context, followed by bounded iterative research, DAG Trace/UI,
-and concurrency/failure acceptance.
+P5 is also complete at the execution boundary. A Tool-granted Specialist must
+reserve two model calls: the first is validated against the existing closed v8
+workflow contract and may only formulate arguments for the exact admitted
+Tool; the second receives the durable receipt plus normalized evidence and
+must emit `specialist_memo_v1`. Discovery returns the exact Tool revision,
+effect, remaining model budget and planner contract digest. Control
+authorization accepts either a legacy immutable handoff or an exact graph-node
+grant, and rejects Tool substitution, multi-action proposals and Decision Desk
+Tool escalation. The database audit proves both the allowed graph grant and a
+wrong-Tool denial. Research input already crosses Moody Blues'
+`gex_compact_v1` deterministic transform: it whitelists six reviewed metrics,
+normalizes finite numbers, caps output at 16 KiB and rejects raw payloads,
+unexpected fields and prompt-like data before Worker context construction.
+P6 next activates bounded graph planning/rounds and surfaces the real DAG in
+Agent Lab, followed by concurrency/failure acceptance.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the
