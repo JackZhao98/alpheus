@@ -34,16 +34,18 @@ collaboration logs, and Agent-facing read models. Cortex Workers execute one
 bounded Attempt and return untrusted typed output; they do not write Kernel or
 Research-owned records directly.
 
-The deployed `agent-runtime` is a temporary implementation name. It will be
-renamed or reorganized into Cortex Control and Cortex Workers only as part of
-the canonical AP1 integration; a cosmetic directory rename alone is forbidden.
+The static `agent-runtime` prototype is no longer deployed. Its Compose service,
+Kernel `/wake` dependency and legacy query writer are retired. The source
+directory remains historical reference only; production Agent work runs through
+the separately deployed Cortex Control and Cortex Worker.
 
 An Agent Lab request is a Cortex UserRequest. Its visible progress must be
 derived from canonical Cortex Run/Task/Attempt/Turn/Artifact records, not from
 a fabricated UI timeline. A normal research flow is expected to be explicit:
 
 ```text
-Task: Intent Interpreter  -> handoff_to: Scout | Desk | User
+Task: Intent Interpreter  -> handoff_to: Specialist | Scout | Desk | User
+Turn: bounded Specialist  -> memo_to: Desk
 Task: Scout               -> handoff_to: Desk | User
 Task: Desk                -> handoff_to: User
 ```
@@ -52,11 +54,11 @@ Each completed/failed step records its real input manifest, output Artifact,
 handoff target, and actual Tool-call receipts. A Worker must not claim a Tool
 was used merely because a context field was present.
 
-`agent_query_job` and `agent_query_job_trace` in the Kernel schema are a
-read-only MVP compatibility path only. They must not grow new Cortex workflow,
-conversation, handoff, or Tool-log semantics. Canonical AP1 Control ownership
-supersedes them; retirement requires a separately tested migration and
-read-only historical access plan.
+`agent_query_job` and `agent_query_job_trace` in the Kernel schema are now
+historical audit data only. `POST /agent/query` returns 410, Kernel starts no
+recovery loop, and the authenticated GET projection is retained for old rows.
+They must never grow new Cortex workflow, conversation, handoff, or Tool-log
+semantics.
 
 ### Research Plane
 

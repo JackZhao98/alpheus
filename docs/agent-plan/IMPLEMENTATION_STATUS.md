@@ -40,12 +40,11 @@
   limit without creating a runnable Task or Session. Control/Scheduler
   admission remains a separate later command. This canonical AP1 path cannot
   call a model or produce an external effect.
-- The Agent Lab MVP query queue gained crash recovery at `fde5fc2`. Kernel-owned
-  Jobs now use database-time leases, per-attempt fencing tokens and bounded
-  recovery scans. A Kernel restart can reclaim a queued or expired-running Job;
-  the stale process cannot overwrite the winner. Recovery reloads the current
-  encrypted OpenAI credential rather than persisting it with the Job. This is
-  stability for the existing read-only MVP path, not the canonical AP1 Worker.
+- The former Agent Lab MVP query queue is retired. Kernel no longer creates,
+  recovers, dispatches, or extends `agent_query_job`; `POST /agent/query`
+  returns `410 agent_query_retired`, and Compose no longer defines
+  `agent-runtime`. Existing rows and Trace remain immutable/readable through
+  the authenticated historical GET endpoint. New work enters Cortex directly.
 - Architecture clarification adopted 2026-07-21: the Agent product is named
   **Cortex**. Canonical Agent Lab, collaboration and Tool history belong to
   Cortex Control; Research collection, normalized evidence and point-in-time
@@ -74,8 +73,8 @@
   completed. A Scout grant and Agent-facing replay/stream Tool remain later
   work; the code-owned Tool registry is now deployed.
 - Moody Blues is now the deployed, canonical temporal-data control surface in
-  Research Gateway. Its first declaration is `gexbot_classic`: it explicitly
-  reports **no live capability**, `as_of` and replay capability, microsecond
+  Research Gateway. Its first declaration is `gexbot_classic`: it reports a
+  distinct official on-demand `live` read plus `as_of` and replay capability, microsecond
   query fences, 30-second observation cadence, and
   `latest_available_at_lte_as_of` semantics. Migration `0048` provides a
   Provider-only collection-status projection with no raw payload exposure.
@@ -84,7 +83,12 @@
   service recreation on 2026-07-23. The three SPX categories are
   `gex_full`, `gex_zero`, and `gex_one`; their latest verified archive
   observation is `2026-07-22T19:59:30Z`. This must not be presented as an
-  official GEXBOT live quote. Legacy `/internal/v1/gexbot/*` routes remain
+  historical GEXBOT live quote. `market_gexbot_live` now performs a separate
+  official API fetch, archives the raw Blob and records normalized Evidence
+  and Receipt while preserving both provider `source_timestamp` and request
+  `fetched_at`. Real Run `edf5bb71-51c2-4df6-8ded-17b890f13d51` completed
+  Options Scout and Decision Desk with that receipt and refused to call the
+  older source timestamp real-time. Legacy `/internal/v1/gexbot/*` routes remain
   narrow compatibility aliases while callers migrate to `/moody-blues/*`.
 - The first narrow Kernel fact bridge, `kernel_earnings_results`, is deployed
   and Cortex-enabled. It can request only one uppercase ticker through the
@@ -110,22 +114,26 @@
   (`8819eb56-b071-43af-8cc1-cbae5869f692`), `kernel_search`
   (`e02b29f0-527a-404b-ab3c-2db7f7c9f5ce`) and `kernel_accounts`
   (`581e5e0b-a928-489e-9009-8e43e7d37602`).
-- Research reserves, but does not implement, a pure deterministic analytics
-  slot after Moody Blues point-in-time selection and before Cortex evidence.
-  A future GEX preprocessing transform must bind its version, parameters,
-  input observation IDs/digests, output digest and time fence; it will not be
-  an LLM, Provider credential holder, routing owner, or new container by
-  default.
+- Moody Blues now includes deterministic transform `gex_compact_v1` after
+  point-in-time selection and before Cortex evidence. It keeps reviewed timing,
+  provenance, raw Blob reference and six normalized GEX metrics, rejects
+  prompt-shaped/unreviewed fields, caps output at 16 KiB, and performs no
+  market interpretation. This is the requested mathematical preprocessing
+  frame; future calculations must add a new version rather than mutate v1.
 - Agent Lab now separates two operator tests. Stage A gives each enabled Tool
   a precision prompt and requires the exact authorization plus matching
   receipt. Stage B does not name a Tool ID or Agent and instead validates an
-  ordered persisted route. The deployed page now reports 36 enabled Tools and
+  ordered persisted route. The deployed page now reports 37 enabled Tools and
   0 locked candidates. Five Provider-UUID-dependent rows require an exact ID
   from their displayed prerequisite Tool instead of asking the model to invent
   one. Browser-run earnings route
   `168a9741-6668-4d4f-bb53-5b1e56b84526` and full Scout collaboration route
   `47557a5a-fa86-43b6-b8ec-e114ed671981` both passed their expected database
-  trace; the page emitted no browser-console errors.
+  trace; the page emitted no browser-console errors. Six registered Specialist
+  roles are active: `market_scout`, `fundamental_scout`, `options_scout`,
+  `position_manager`, `catalyst_scout`, and `discovery_scout`. Control enforces
+  the unique Tool grant before authorization; every Specialist memo is a
+  separate persisted model Turn before Decision Desk.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record
@@ -177,7 +185,7 @@ milestones and not independent authorization gates.
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
 | AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission and immutable Cortex output-validation evidence deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits an exact-current-policy Run/root Task, and validates each model output against the exact committed schema before binding its Blob to Worker. The fixed validator identity plus exact schema/output digests are immutable database evidence. Formal Result-linked validation receipts, cancellation reconciliation, child admission, and complete unknown-outcome recovery remain deferred. |
-| AP1-3 Control Plane and bounded Worker execution | Canonical MVP deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches a Responses API call to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual input/output token usage, validates and publishes the structured output through Control, then resolves and commits the Attempt and Artifact. The first bounded AI-selected route is also deployed: Intent Interpreter may answer directly or record an immutable `handoff_to_desk`, then a separate persisted Desk Turn returns the answer. This is an in-Attempt handoff, not child-Task admission. Invalid provider output and exhausted Control publication retries now close the Turn/Attempt through explicit failure commands instead of leaving dispatched work behind. The legacy Kernel query queue remains compatibility-only and is not used by Agent Lab. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
+| AP1-3 Control Plane and bounded Worker execution | Canonical read-only slice deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches Responses API calls to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual token usage, validates and publishes structured output through Control, then resolves and commits the Attempt and Artifact. Intent may answer directly, use open Scout child work, or hand off to one of six grant-bound Specialists; Specialist and Desk each produce separate persisted Turns. Invalid provider output and exhausted Control publication retries close the Turn/Attempt explicitly. The legacy Kernel query writer and static runtime deployment are retired. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
 | AP1-4 crash/concurrency acceptance and stage seal | Started; real expired-Scout recovery and terminal-child reconciliation now deployed | The complete race, duplicate-delivery, stale-lease, cancellation and stage-seal matrix remains open. The deployed probes now prove bounded reservation, actual token settlement, immutable validator evidence, fail-closed recovery of an expired dispatched Scout Turn, and deterministic parent/Run terminalization when a Scout exhausts its bounded retries. |
 
 AP1-1 freezes data shape and fail-closed validation only. It does not create
@@ -199,14 +207,15 @@ This ledger counts only accepted completion, not code written or unit-tested.
 | 7 | Dedicated Cortex LOGIN, container, and localhost port | Complete at `126057f`; healthy on `127.0.0.1:8400` |
 | 8 | Canonical Run / root Task admission; Attempt on Worker claim | Complete locally; deployed, exact-replay smoke passed, Run `queued` / Task `ready` persisted |
 | 9 | Verified OpenAI Worker with durable Turn / Artifact | Complete; deployed smoke persisted succeeded Run/Task, result-committed Attempt/Turn, `assistant_response` Artifact, and exact output-validation evidence |
-| 10 | Agent Lab cutover and Kernel queue retirement | Complete; page uses direct Cortex request/Run polling; manual workflow selection is removed and the legacy Kernel queue endpoints are deprecated and unused by the UI |
+| 10 | Agent Lab cutover and Kernel queue retirement | Complete; page uses direct Cortex request/Run polling; `POST /agent/query` is terminal 410, recovery is disabled, `agent-runtime` is absent from Compose, and historical GET remains read-only |
 
 Accepted cutover completion is now **10 / 10**. The deployed path is Agent Lab
 → Cortex UserRequest → canonical Run/Task → Worker claim/Attempt → durable
 model dispatch → OpenAI `gpt-5.6-sol` → Control-owned output Blob → resolved
 Turn → effect-none Artifact. A real Agent Lab smoke returned “Direct Cortex UI
-path succeeded.” from the canonical Run. The old Kernel queue remains only as
-a deprecated compatibility API and is not called by the page.
+path succeeded.” from the canonical Run. Old queue rows remain only as
+read-only historical audit records; no production path can create or execute
+another one.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the
@@ -220,10 +229,10 @@ is granted. Run `265b8742-d11e-4cef-94d5-57de94ecdcf3` completed with all
 canonical states terminal, 2,918 reserved input tokens, 52 actual input tokens,
 68 actual output tokens, and validator `v6.0.2` evidence.
 
-The next post-cutover slice adds a bounded real collaboration edge without
-pretending that every role or Tool is installed. The Intent Interpreter's
-typed model output chooses either a direct answer or the only currently
-installed specialist, Decision Desk. A handoff writes immutable
+The first post-cutover collaboration slice established the Desk edge. The
+current system extends that contract with six bounded Specialists. The Intent
+Interpreter's typed model output chooses a direct answer, open Scout work,
+Decision Desk, or the unique Specialist that owns the selected Tool. A handoff writes immutable
 `agent_control.cortex_handoff` evidence tied to the source ModelCall result,
 then the Desk executes as its own canonical Turn before the root Attempt can
 commit. `get_cortex_run_trace` derives the UI trace from these records rather
@@ -237,8 +246,8 @@ handoff for requests that do not need a separate research memo. The UI never
 asks the user to select it; its compatibility field is forced to `auto` and
 never enters the immutable UserRequest.
 
-The first AP3 cross-plane Tool slice is now deployed locally. It enables only
-one bounded external read: `research_web_fetch`, and only when a normal Desk
+The first AP3 cross-plane Tool slice began with
+`research_web_fetch`, only when a normal routed request
 handoff sees exactly one explicit public HTTP(S) URL in the immutable user
 text. Cortex Control owns the Tool-call intent, policy/budget charge and final
 receipt acknowledgement; Research Gateway owns connector execution, normalized
@@ -272,7 +281,7 @@ historical interrupted calls (one missing only the Control acknowledgement and
 one missing its Research receipt); the permanent queue is now fully
 acknowledged and has an append-only claim/receipt audit trail.
 
-The first bounded persistent collaboration slice is now deployed locally. An
+The open Scout persistent collaboration slice is deployed locally. An
 Intent Interpreter may itself choose the fixed `scout` route only when its
 immutable Run has the Scout workflow contract. Control persists the handoff,
 an immutable child-work request, `cortex_scout_child_admission`, exactly one
@@ -281,8 +290,9 @@ one `cortex_parent_continuation` before the parent Desk Task resumes. The
 parent cannot re-run Intent or create another Scout child, and the Desk reads
 the memo through an Artifact-owned Blob binding rather than a fabricated
 prompt reference. The Worker uses the same credential-free role pool with
-fixed `intent`, `scout`, and `desk` execution modes; this slice does not add a
-generic role registry, arbitrary fan-out, or a new Scout Tool surface.
+fixed `intent`, `scout`, and `desk` child execution modes. Separately, six
+registered Specialist roles now execute bounded in-Attempt memo Turns with
+exactly one Control-enforced Tool grant and return only to Decision Desk.
 
 On 2026-07-22, real Agent Lab Run
 `af7eb22e-0f60-498e-adc4-98d53a818c59` completed

@@ -18,6 +18,13 @@
 > ceremony described below. AP0-AP15 remain rollout/acceptance gates, not a
 > required service count.
 
+> Implementation note (2026-07-23): section 2 is the historical landed
+> baseline from which this roadmap began. The static `agent-runtime:8200`,
+> Kernel `/wake`, and legacy agent-query writer are now retired. Current
+> deployment status and ports are tracked in
+> [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and
+> [`TOOL_REGISTRY_TRACKER.md`](TOOL_REGISTRY_TRACKER.md).
+
 ## 1. Decision
 
 Alpheus will be built from the durable, non-money substrate outward:
