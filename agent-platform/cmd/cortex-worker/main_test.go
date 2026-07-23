@@ -41,11 +41,47 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 }
 
 func TestDeskDistinguishesGEXCutoffFromObservationTime(t *testing.T) {
-	request := deskRequest("model", "prompt", "objective", "rationale", nil, &capability.GEXBOTAsOfEvidence{}, nil, nil, true, false, false)
+	request := deskRequest("model", "prompt", "objective", "rationale", "", "", nil, &capability.GEXBOTAsOfEvidence{}, nil, nil, true, false, false)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "as_of field is the requested cutoff fence, not the observation time") ||
 		!strings.Contains(instructions, "label observed_at as the actual observation time") {
 		t.Fatalf("GEX time semantics missing from Desk instructions: %q", instructions)
+	}
+}
+
+func TestParseWorkflowOutputRoutesToolsToSpecialists(t *testing.T) {
+	gex := []byte(`{"kind":"handoff","target":"options_scout","objective":"inspect GEX","rationale":"positioning matters","text":"","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current","earnings_action":"none","earnings_symbol":"","kernel_action":"none","kernel_tool_id":"","kernel_arguments":""}`)
+	if output, err := parseWorkflowOutput(gex, true, true, true, true, true); err != nil || output.Target != "options_scout" {
+		t.Fatalf("options Specialist route rejected: %#v %v", output, err)
+	}
+	wrongGEX := []byte(strings.Replace(string(gex), `"options_scout"`, `"market_scout"`, 1))
+	if _, err := parseWorkflowOutput(wrongGEX, true, true, true, true, true); err == nil {
+		t.Fatal("GEX Tool was admitted to the wrong Specialist")
+	}
+	quote := []byte(`{"kind":"handoff","target":"market_scout","objective":"read quote","rationale":"current price matters","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_equity_quotes","kernel_arguments":"{\"symbols\":[\"AAPL\"]}"}`)
+	if output, err := parseWorkflowOutput(quote, true, true, true, true, true); err != nil || output.Target != "market_scout" {
+		t.Fatalf("market Specialist route rejected: %#v %v", output, err)
+	}
+	wrongQuote := []byte(strings.Replace(string(quote), `"market_scout"`, `"position_manager"`, 1))
+	if _, err := parseWorkflowOutput(wrongQuote, true, true, true, true, true); err == nil {
+		t.Fatal("market Tool was admitted to Position Manager")
+	}
+	preflight := []byte(`{"kind":"handoff","target":"desk","objective":"simulate order","rationale":"validate explicit ticket","text":"","gexbot_action":"none","gexbot_symbol":"","gexbot_category":"","gexbot_as_of":"","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_review_equity_order","kernel_arguments":"{\"symbol\":\"AAPL\",\"side\":\"buy\",\"type\":\"market\",\"quantity\":\"1\"}"}`)
+	if _, err := parseWorkflowOutput(preflight, true, true, true, true, true); err != nil {
+		t.Fatalf("Desk preflight rejected: %v", err)
+	}
+}
+
+func TestSpecialistRequestIsBoundedToRegisteredRole(t *testing.T) {
+	request := specialistRequest("model", "prompt", "market_scout", "inspect quote", "current price matters", nil, nil, nil,
+		&capability.KernelReadEvidence{ToolID: "kernel_equity_quotes"})
+	instructions, ok := request["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "market_scout") || !strings.Contains(instructions, "kernel_equity_quotes") ||
+		!strings.Contains(instructions, "memo for Decision Desk") {
+		t.Fatalf("Specialist instructions are incomplete: %q", instructions)
+	}
+	if request := specialistRequest("model", "prompt", "invented_role", "x", "y", nil, nil, nil, nil); request != nil {
+		t.Fatal("unregistered Specialist acquired a prompt")
 	}
 }
 
