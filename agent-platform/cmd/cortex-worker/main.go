@@ -72,6 +72,7 @@ type workItem struct {
 	TaskGraphToolRev           int64                `json:"task_graph_tool_revision"`
 	TaskGraphToolEffect        string               `json:"task_graph_tool_effect"`
 	TaskGraphToolPlannerDigest string               `json:"task_graph_tool_planner_output_contract_digest"`
+	TaskGraphProposalDigest    string               `json:"task_graph_proposal_output_contract_digest"`
 	TaskGraphJoinID            string               `json:"task_graph_join_id"`
 	TaskGraphJoinInput         []taskGraphJoinInput `json:"task_graph_join_inputs"`
 }

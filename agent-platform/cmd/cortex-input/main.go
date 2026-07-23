@@ -20,6 +20,7 @@ import (
 	"alpheus/agentplatform/inputgateway"
 	"alpheus/agentplatform/outputcontract"
 	"alpheus/agentplatform/security"
+	"alpheus/agentplatform/taskgraphproposal"
 	_ "github.com/lib/pq"
 )
 
@@ -200,6 +201,7 @@ func run() error {
 			"limitations": map[string]any{"type": "string", "maxLength": 4000},
 		},
 	}
+	taskGraphProposalSchema := taskgraphproposal.OutputSchema()
 	answerSchemaRaw, err := json.Marshal(answerSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex answer schema: %w", err)
@@ -235,6 +237,10 @@ func run() error {
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex Scout memo schema: %w", err)
+	}
+	taskGraphProposalSchemaRaw, err := json.Marshal(taskGraphProposalSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex TaskGraph proposal schema: %w", err)
 	}
 	answerSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", answerSchema)
@@ -281,7 +287,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, scoutMemoSchemaRef)
+	taskGraphProposalSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-task-graph-proposal-schema-v1",
+		"agent-platform.contract.output_contract_schema.v1", taskGraphProposalSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex TaskGraph proposal schema: %w", err)
+	}
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, scoutMemoSchemaRef, taskGraphProposalSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
@@ -295,6 +306,7 @@ func run() error {
 		runtimeDefinitions.SpecialistWorkflowOutputContractDigest: specialistWorkflowSchemaRaw,
 		runtimeDefinitions.LiveWorkflowOutputContractDigest:       liveWorkflowSchemaRaw,
 		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
+		runtimeDefinitions.TaskGraphProposalOutputContractDigest:  taskGraphProposalSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
