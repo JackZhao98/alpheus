@@ -278,8 +278,25 @@ wrong-Tool denial. Research input already crosses Moody Blues'
 `gex_compact_v1` deterministic transform: it whitelists six reviewed metrics,
 normalizes finite numbers, caps output at 16 KiB and rejects raw payloads,
 unexpected fields and prompt-like data before Worker context construction.
-P6 next activates bounded graph planning/rounds and surfaces the real DAG in
-Agent Lab, followed by concurrency/failure acceptance.
+P6 now has a real first-round activation path. After the root Intent Turn, a
+strict authority-free model proposal selects two to four installed Specialist
+branches; Control reads the exact validated proposal Blob under the live
+Attempt lease, expands it into the immutable bounded graph, commits objectives,
+admits every Task and parks the parent. Four Worker lanes execute independent
+branches concurrently, the database Join releases Decision Desk only after its
+threshold is proven, and the exact Desk Artifact completes the Run. Empty Tool
+grants are encoded as arrays, a parked graph parent releases only its own
+active slot, and TaskGraph Desk output uses its frozen synthesis budget instead
+of the legacy 2k-token linear cap. Real Run
+`3d2bbe7e-85ce-48ae-9e74-f2a1002e19ee` completed four no-Tool Specialist
+branches, `all_required` Join and Decision Desk successfully. Agent Lab now
+renders the persisted graph as a collapsible four-lane DAG; Run
+`dbe27a81-68ee-48bc-af69-d333c6bdd703` was verified in the real browser from
+four simultaneous branch states through Join and final success. Durable Trace
+labels proposal, graph admission, each role/task, Join and final Artifact
+without mislabeling graph Turns as Intent. The remaining P6 item is a
+Control-owned bounded next-round decision; the remaining P7 work is the full
+crash/duplicate/slow/partial-failure acceptance matrix.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the

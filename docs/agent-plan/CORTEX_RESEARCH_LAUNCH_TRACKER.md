@@ -25,6 +25,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | GEXBOT 官方按需读数 | 已部署并实测 | `market_gexbot_live` 独立于历史 Tool；永久保存 raw Blob、Evidence、Receipt，并区分 `source_timestamp` 与 `fetched_at` |
 | Kernel / Robinhood 只读工具批次 | 34/34 已接入 Cortex | 1 条财报专用桥；33 条使用严格 Tool/source/参数白名单的通用只读桥 |
 | Agent Lab 验收界面 | 已部署并通过真实网页交互 | 用户可看见 Conversation、Trace、Tool receipt、Provider 数据时间边界；阶段 A 精准 Tool 与阶段 B 自主意图路线分开展示 |
+| 并行多 Agent TaskGraph | 首轮真实图已部署 | Intent 生成无权限提案，Control 准入 2–4 条独立分支；并行 Worker、Join 和 Decision Desk 均由数据库状态驱动 |
 | 旧 agent-runtime 退役 | 已完成 | Compose 无该服务；`POST /agent/query` 返回 410；旧 job 不再恢复或执行，14 条历史记录仍可读 |
 
 ## 已记录的部署验证（2026-07-23）
@@ -73,6 +74,16 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 - Agent Lab 当前为 37/37 已启用；`market_gexbot_live` 有独立精准测试行。
 - 4,215 条旧 GEX 观察值已完成一次性导入，`gexbot-legacy-import` 已从
   Compose 删除；导入源码仅作为灾难恢复工具保留，不再生成容器。
+- 无 Tool 的四角色真实 TaskGraph Run
+  `3d2bbe7e-85ce-48ae-9e74-f2a1002e19ee` 已完成 Market /
+  Fundamental / Options / Catalyst 四路并行、`all_required` Join、
+  Decision Desk 和最终 Artifact。四个分支在数据库中同时运行，不是线性
+  handoff。
+- Agent Lab 浏览器验收 Run
+  `dbe27a81-68ee-48bc-af69-d333c6bdd703` 已从四条 `running` 分支观察到
+  四条完成、Join 放行、Decision Desk 完成和 Run `succeeded`。折叠面板显示
+  轮次、节点数、最大并发、角色、Tool、Join 策略及最终状态；原始 Trace
+  同时保留精确 graph/task/turn/artifact ID。
 
 ## 本次 Moody Blues 接口
 
@@ -89,9 +100,8 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 
 ## 下一阶段 TODO：并行多 Agent TaskGraph
 
-> 当前已上线流程仍是受控单链：一次 Intent 最多选择一个 Tool / Specialist，
-> 或创建一个开放 Scout 子 Task。下面是下一阶段最高优先级，不计入上面的
-> 37 Tool 上线完成度。
+> 受控单链仍保留用于简单问题；多角色请求已经可以进入首轮并行 TaskGraph。
+> 下面的进度不计入 37 Tool 上线完成度。
 
 | 顺序 | 工作项 | 完成条件 | 状态 |
 |---:|---|---|---|
@@ -100,15 +110,12 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 已完成：4 条 Worker lane、逐节点 Session/Blob ACL、Graph 独立原子并发槽、效果为 none 的 Specialist 并行执行；带 Tool 节点继续冻结等待专用执行边界 |
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、部分失败和严格终态；Join 只读取已提交 Artifact | 已完成：Control-only Join 解析、下游 Blob/ACL、Desk fan-in、失败收敛、结果血缘及成功/失败数据库验收通过 |
 | P5 | Tool 并行节点与 Moody Blues 预处理上下文 | 每个带 Tool 节点只执行准入时冻结的一项只读 Tool；回放数据先经过统一 normalize/精简框架再交给 Agent | 已完成：双 Turn 参数/证据边界、精确 grant、全部现有只读 Tool 分派、错误 Tool 拒绝及 `gex_compact_v1` 已验证 |
-| P6 | 多阶段自适应研究与 DAG Trace | Desk 可在有界轮次内提出下一批子链路；网页显示真实分叉、等待、失败、汇合和下一轮 | 进行中 |
-| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 待开始 |
+| P6 | 多阶段自适应研究与 DAG Trace | Desk 可在有界轮次内提出下一批子链路；网页显示真实分叉、等待、失败、汇合和下一轮 | 进行中：首轮 2–4 分支规划、真实并行、Join、持久化 DAG Trace 和折叠网页已完成；只剩受控下一轮 |
+| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 已开始：真实四路成功与严格分支失败已验证；完整恢复矩阵待完成 |
 
-下一项实际开发任务是 **P6：激活有界 TaskGraph 规划、下一轮与 DAG Trace**。
-P5 已开放带精确 Tool grant 的 Specialist：参数规划 Turn 只能命中准入快照中
-的一项只读 Tool，执行后第二个 Turn 只接收持久化 receipt 和规范化 evidence，
-再提交 `specialist_memo_v1`。Control 同时验证角色矩阵、graph grant、revision、
-effect、Attempt lease 和 Tool 预算；错误 Tool 的数据库授权探针已确认拒绝。
-GEX live、as_of 与 replay 数据在进入 Cortex 前均经过现有
-`gex_compact_v1`：只保留六个审阅指标、有限数值和时间/来源外壳，输出上限
-16 KiB，raw payload、未知字段和提示词式字段会失败关闭。下一步把这套已验证
-的执行底座接到真实 Intent 图规划，并在 Agent Lab 展示并行和 Join。
+下一项实际开发任务是 **P6 剩余项：受控的下一轮自适应研究**。首轮 Intent
+图规划、Control 准入、四路并行、Join、Decision Desk、持久化 DAG Trace 与
+Agent Lab 折叠视图已经真实跑通。下一轮不能由模型直接追加 Task；Decision
+Desk 只能提交无权限 proposal，Control 必须重新检查剩余轮次、总预算、
+deadline、角色与只读 Tool 快照，再原子创建下一轮或确定结束。完成后进入
+P7 的崩溃恢复、重复投递、慢分支、部分失败和预算耗尽矩阵。
