@@ -1355,7 +1355,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v9($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v10($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)

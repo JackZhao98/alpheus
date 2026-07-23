@@ -144,5 +144,6 @@ run_sql agent-platform/migrations/0061_cortex_gexbot_live_workflow_contract.sql 
 run_sql agent-platform/migrations/0062_cortex_gexbot_live_json_parentheses_fix.sql 0062_cortex_gexbot_live_json_parentheses_fix
 run_sql agent-platform/migrations/0063_cortex_gexbot_live_decimal_metrics.sql 0063_cortex_gexbot_live_decimal_metrics
 run_sql agent-platform/migrations/0064_cortex_task_graph_storage.sql 0064_cortex_task_graph_storage
+run_sql agent-platform/migrations/0065_cortex_task_graph_admission.sql 0065_cortex_task_graph_admission
 
 echo "agent-platform migration bootstrap complete"

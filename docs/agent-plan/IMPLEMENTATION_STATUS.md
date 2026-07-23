@@ -231,8 +231,19 @@ unchanged. P2's first storage slice is deployed: six default-deny immutable
 tables persist Graph, Node, dependency Edge, Join, Join upstream and exact
 per-node Specialist Tool-grant snapshots. Their foreign keys bind existing
 Run/Task/model Result/RuntimePolicy/OutputContract/role-grant identities;
-neither Control nor Worker LOGIN has direct table access. The sole atomic
-admission command is the next unfinished P2 slice. The staged TODO is tracked in
+neither Control nor Worker LOGIN has direct table access. P2's Control-only
+atomic admission command is also complete and migrated. It independently
+revalidates the canonical Plan digest, exact current Run/parent generations,
+source Result, RuntimePolicy, committed objective Blobs, output contracts,
+role/Tool grants, aggregate and per-node budgets, DAG depth/fanout/cycles and
+Join edge sets before creating every ledger, Task, dependency and immutable
+snapshot in one transaction. A rollback-only database probe admits two ready
+Specialists plus one blocked Desk, parks the parent Attempt/Session, returns
+the exact same response on replay, rejects a cycle and changed-body replay,
+and leaves no fixture rows. Future root Tasks now receive the RuntimePolicy's
+bounded descendant Task allowance instead of the old single-Scout value 2;
+historical Runs remain immutable. P3 must prepare per-node Sessions and add
+bounded parallel scheduling before these admitted Tasks can execute. The staged TODO is tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
 P2 now adds atomic fan-out, followed by parallel scheduling, explicit fan-in
 policies, bounded iterative research, DAG Trace/UI, and concurrency/failure

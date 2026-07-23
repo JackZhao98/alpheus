@@ -1,0 +1,424 @@
+\set ON_ERROR_STOP on
+BEGIN;
+SET CONSTRAINTS ALL DEFERRED;
+
+-- Build one complete but rollback-only parent Run/Task/Session/Attempt/Turn/
+-- Result. It reuses immutable policy, schema and Blob references but creates
+-- no external call and commits no fixture data.
+DO $fixture$
+DECLARE
+    at_time TIMESTAMPTZ:=clock_timestamp();
+    deadline_value TIMESTAMPTZ:=at_time+interval '30 minutes';
+    source_run agent_control.runtime_run%ROWTYPE;
+    source_task agent_control.runtime_task%ROWTYPE;
+    source_session agent_control.runtime_session%ROWTYPE;
+    policy agent_control.runtime_policy_revision%ROWTYPE;
+    root_contract agent_control.output_contract_revision%ROWTYPE;
+    request_digest TEXT:=agent_control.runtime_sha256_json('{"probe":"task-graph-request"}'::JSONB);
+    manifest_digest TEXT:=agent_control.runtime_sha256_json('{"probe":"task-graph-manifest"}'::JSONB);
+    result_digest_value TEXT:=agent_control.runtime_sha256_json('{"probe":"task-graph-result"}'::JSONB);
+    output_ref JSONB;
+BEGIN
+    SELECT run.* INTO STRICT source_run
+    FROM agent_control.runtime_run run
+    WHERE run.origin_kind='user_request'
+      AND agent_control.runtime_run_admission_current(run.run_id)
+    ORDER BY run.created_at DESC LIMIT 1;
+    SELECT task.* INTO STRICT source_task
+    FROM agent_control.runtime_task task
+    WHERE task.run_id=source_run.run_id AND task.depth=0;
+    SELECT session.* INTO STRICT source_session
+    FROM agent_control.runtime_session session
+    WHERE session.task_id=source_task.task_id
+    ORDER BY session.created_at DESC LIMIT 1;
+    SELECT * INTO STRICT policy
+    FROM agent_control.runtime_policy_revision
+    WHERE policy_id=source_run.runtime_policy_id
+      AND generation=source_run.runtime_policy_generation
+      AND record_digest=source_run.runtime_policy_digest;
+    SELECT * INTO STRICT root_contract
+    FROM agent_control.output_contract_revision
+    WHERE revision_id=source_task.output_contract_revision_id
+      AND generation=source_task.output_contract_generation
+      AND record_digest=source_task.output_contract_digest;
+
+    INSERT INTO agent_control.runtime_run(
+        run_id,schema_revision,occurrence_owner,occurrence_record_type,occurrence_id,
+        occurrence_schema_revision,occurrence_digest,origin_kind,origin_source_owner,
+        origin_source_record_type,origin_source_record_id,origin_source_schema_revision,
+        origin_source_record_digest,origin_conversation_owner,origin_conversation_record_type,
+        origin_conversation_record_id,origin_conversation_schema_revision,
+        origin_conversation_record_digest,origin_initiating_principal_id,
+        origin_initiating_kind,origin_initiating_audience,origin_owner_policy_owner,
+        origin_owner_policy_record_type,origin_owner_policy_record_id,
+        origin_owner_policy_schema_revision,origin_owner_policy_record_digest,
+        origin_owner_policy_generation,origin_occurred_at,origin_observed_at,
+        origin_committed_at,runtime_policy_owner,runtime_policy_record_type,
+        runtime_policy_id,runtime_policy_schema_revision,runtime_policy_generation,
+        runtime_policy_digest,budget_ledger_id,root_task_id,state,state_generation,
+        created_at,updated_at,deadline_at
+    ) VALUES(
+        'tg-probe-run',1,source_run.occurrence_owner,source_run.occurrence_record_type,
+        source_run.occurrence_id,source_run.occurrence_schema_revision,
+        source_run.occurrence_digest,source_run.origin_kind,source_run.origin_source_owner,
+        source_run.origin_source_record_type,source_run.origin_source_record_id,
+        source_run.origin_source_schema_revision,source_run.origin_source_record_digest,
+        source_run.origin_conversation_owner,source_run.origin_conversation_record_type,
+        source_run.origin_conversation_record_id,source_run.origin_conversation_schema_revision,
+        source_run.origin_conversation_record_digest,source_run.origin_initiating_principal_id,
+        source_run.origin_initiating_kind,source_run.origin_initiating_audience,
+        source_run.origin_owner_policy_owner,source_run.origin_owner_policy_record_type,
+        source_run.origin_owner_policy_record_id,source_run.origin_owner_policy_schema_revision,
+        source_run.origin_owner_policy_record_digest,source_run.origin_owner_policy_generation,
+        source_run.origin_occurred_at,source_run.origin_observed_at,
+        source_run.origin_committed_at,source_run.runtime_policy_owner,
+        source_run.runtime_policy_record_type,source_run.runtime_policy_id,
+        source_run.runtime_policy_schema_revision,source_run.runtime_policy_generation,
+        source_run.runtime_policy_digest,'tg-probe-run-ledger','tg-probe-root',
+        'queued',1,at_time,at_time,deadline_value
+    );
+    INSERT INTO agent_control.runtime_budget_ledger(
+        ledger_id,schema_revision,scope,scope_id,parent_ledger_id,
+        runtime_policy_owner,runtime_policy_record_type,runtime_policy_id,
+        runtime_policy_schema_revision,runtime_policy_generation,runtime_policy_digest,
+        limit_model_calls,limit_input_tokens,limit_output_tokens,limit_tool_calls,
+        limit_external_cost_micro_usd,limit_wall_time_ms,limit_idle_time_ms,
+        limit_tasks,limit_depth,limit_fanout,limit_parallelism,
+        limit_invalid_output_retries,limit_infrastructure_retries,
+        consumed_tasks,generation,state,updated_at
+    ) VALUES
+    ('tg-probe-run-ledger',1,'run','tg-probe-run',NULL,'agent_control',
+        'runtime_policy',policy.policy_id,1,policy.generation,policy.record_digest,
+        policy.max_model_calls,policy.max_input_tokens,policy.max_output_tokens,
+        policy.max_tool_calls,policy.max_external_cost_micro_usd,policy.max_wall_time_ms,
+        policy.max_idle_time_ms,policy.max_tasks,policy.max_depth,policy.max_fanout,
+        policy.max_parallelism,policy.max_invalid_output_retries,
+        policy.max_infrastructure_retries,1,1,'open',at_time),
+    ('tg-probe-root-ledger',1,'task','tg-probe-root','tg-probe-run-ledger',
+        'agent_control','runtime_policy',policy.policy_id,1,policy.generation,
+        policy.record_digest,policy.max_model_calls,policy.max_input_tokens,
+        policy.max_output_tokens,policy.max_tool_calls,
+        policy.max_external_cost_micro_usd,policy.max_wall_time_ms,
+        policy.max_idle_time_ms,policy.max_tasks,policy.max_depth,
+        policy.max_fanout,policy.max_parallelism,policy.max_invalid_output_retries,
+        policy.max_infrastructure_retries,1,1,'open',at_time);
+    INSERT INTO agent_control.runtime_task(
+        task_id,schema_revision,run_id,depth,objective,output_contract_owner,
+        output_contract_record_type,output_contract_revision_id,
+        output_contract_schema_revision,output_contract_generation,
+        output_contract_digest,budget_ledger_id,state,state_generation,
+        budget_slot_held,created_at,updated_at,deadline_at
+    ) VALUES(
+        'tg-probe-root',1,'tg-probe-run',0,source_task.objective,'agent_control',
+        'output_contract_revision',root_contract.revision_id,1,
+        root_contract.generation,root_contract.record_digest,'tg-probe-root-ledger',
+        'ready',1,false,at_time,at_time,deadline_value
+    );
+    INSERT INTO agent_control.runtime_session(
+        session_id,schema_revision,run_id,task_id,generation,execution_binding,
+        context_manifest,state,created_at
+    ) VALUES(
+        'tg-probe-session',1,'tg-probe-run','tg-probe-root',1,
+        source_session.execution_binding,source_session.context_manifest,'open',at_time
+    );
+    UPDATE agent_control.runtime_task SET session_id='tg-probe-session'
+    WHERE task_id='tg-probe-root';
+    UPDATE agent_control.runtime_run SET state='running',state_generation=2,
+        updated_at=at_time WHERE run_id='tg-probe-run';
+    UPDATE agent_control.runtime_task SET state='running',state_generation=2,
+        budget_slot_held=true,updated_at=at_time WHERE task_id='tg-probe-root';
+    UPDATE agent_control.runtime_budget_ledger SET consumed_active_tasks=1,
+        generation=2,updated_at=at_time WHERE ledger_id='tg-probe-run-ledger';
+
+    INSERT INTO agent_control.runtime_attempt(
+        attempt_id,schema_revision,run_id,task_id,session_id,ordinal,state,
+        state_generation,lease_generation,lease_token,lease_worker,
+        lease_claimed_at,lease_heartbeat_at,lease_expires_at,created_at,updated_at
+    ) VALUES(
+        'tg-probe-attempt',1,'tg-probe-run','tg-probe-root','tg-probe-session',
+        1,'leased',1,1,'00000000-0000-4000-8000-000000000099',
+        '{"principal_id":"cortex-worker-1","kind":"workload","audience":"worker"}',
+        at_time,at_time,deadline_value,at_time,at_time
+    );
+    UPDATE agent_control.runtime_attempt SET state='executing',
+        state_generation=2,updated_at=at_time WHERE attempt_id='tg-probe-attempt';
+    INSERT INTO agent_control.runtime_turn(
+        turn_id,schema_revision,run_id,task_id,session_id,attempt_id,ordinal,
+        kind,state,state_generation,request_digest,reservation_held,created_at,updated_at
+    ) VALUES(
+        'tg-probe-turn',1,'tg-probe-run','tg-probe-root','tg-probe-session',
+        'tg-probe-attempt',1,'model_call','planned',1,request_digest,false,at_time,at_time
+    );
+    UPDATE agent_control.runtime_turn SET state='dispatched',state_generation=2,
+        reservation_held=true,dispatched_at=at_time,updated_at=at_time
+    WHERE turn_id='tg-probe-turn';
+    INSERT INTO agent_control.runtime_model_call_manifest(
+        call_id,schema_revision,record_digest,turn_id,attempt_id,idempotency_key,
+        provider,model,prompt_digest,context_manifest,output_contract_digest,
+        request_digest,max_output_tokens,reserved_input_tokens,
+        reserved_external_cost_micro_usd,timeout_ms,temperature_micros,created_at
+    ) VALUES(
+        'tg-probe-call',1,manifest_digest,'tg-probe-turn','tg-probe-attempt',
+        'tg-probe-model-idempotency','openai','gpt-5-6-sol',
+        agent_control.runtime_sha256_json('{"probe":"prompt"}'::JSONB),
+        source_session.context_manifest,root_contract.record_digest,request_digest,
+        1000,1000,0,30000,0,at_time
+    );
+    output_ref:=jsonb_build_object(
+        'schema_revision',1,
+        'blob_id',source_session.context_manifest->>'blob_id',
+        'content_digest',source_session.context_manifest->>'content_digest',
+        'media_type','application/json',
+        'size_bytes',(source_session.context_manifest->>'size_bytes')::BIGINT,
+        'origin',jsonb_build_object(
+            'owner','agent_control','record_type','model_call_manifest',
+            'record_id','tg-probe-call','schema_revision',1,
+            'record_digest',manifest_digest
+        ),
+        'committed_at',agent_control.runtime_utc_text(at_time)
+    );
+    INSERT INTO agent_control.runtime_model_call_result(
+        result_id,schema_revision,record_digest,call_id,attempt_id,turn_id,
+        idempotency_key,request_digest,provider_request_id,output_origin_owner,
+        output_origin_record_type,output_origin_record_id,
+        output_origin_schema_revision,output_origin_record_digest,output,
+        input_tokens,output_tokens,external_cost_micro_usd,wall_time_ms,
+        finish_reason,committed_at
+    ) VALUES(
+        'tg-probe-result',1,result_digest_value,'tg-probe-call','tg-probe-attempt',
+        'tg-probe-turn','tg-probe-model-idempotency',request_digest,
+        'tg-probe-provider-request','agent_control','model_call_manifest',
+        'tg-probe-call',1,manifest_digest,output_ref,100,100,0,1000,'stop',at_time
+    );
+    UPDATE agent_control.runtime_turn SET state='result_committed',
+        state_generation=3,result_owner='agent_control',
+        result_record_type='model_call_result',result_id='tg-probe-result',
+        result_schema_revision=1,result_digest=result_digest_value,reservation_held=false,
+        finished_at=at_time,updated_at=at_time WHERE turn_id='tg-probe-turn';
+END
+$fixture$;
+
+CREATE TEMP TABLE task_graph_probe_command(command JSONB);
+INSERT INTO task_graph_probe_command(command)
+WITH fixture AS (
+    SELECT
+        task.objective,
+        jsonb_build_object(
+            'owner','agent_control','record_type','model_call_result',
+            'record_id',result.result_id,'schema_revision',1,
+            'record_digest',result.record_digest::TEXT
+        ) source_result,
+        jsonb_build_object(
+            'owner','agent_control','record_type','runtime_policy',
+            'record_id',run.runtime_policy_id,'schema_revision',1,
+            'record_digest',run.runtime_policy_digest::TEXT,
+            'generation',run.runtime_policy_generation
+        ) runtime_policy,
+        jsonb_build_object(
+            'owner','agent_control','record_type','output_contract_revision',
+            'record_id',memo.revision_id,'schema_revision',1,
+            'record_digest',memo.record_digest::TEXT,'generation',memo.generation
+        ) memo_contract,
+        jsonb_build_object(
+            'owner','agent_control','record_type','output_contract_revision',
+            'record_id',answer.revision_id,'schema_revision',1,
+            'record_digest',answer.record_digest::TEXT,'generation',answer.generation
+        ) answer_contract,
+        result.committed_at+interval '1 microsecond' created_at,
+        run.deadline_at
+    FROM agent_control.runtime_run run
+    JOIN agent_control.runtime_task task ON task.task_id=run.root_task_id
+    JOIN agent_control.runtime_model_call_result result
+      ON result.result_id='tg-probe-result'
+    JOIN agent_control.output_contract_revision memo
+      ON memo.revision_id='cortex-scout-research-memo-v1'
+    JOIN agent_control.output_contract_revision answer
+      ON answer.revision_id='cortex-text-output-v1'
+    WHERE run.run_id='tg-probe-run'
+), plan AS (
+    SELECT jsonb_build_object(
+        'schema_revision',1,'graph_id','tg-probe-graph','run_id','tg-probe-run',
+        'parent_task_id','tg-probe-root','source_result',source_result,
+        'runtime_policy',runtime_policy,'round',1,'max_rounds',2,
+        'authorized_limit',jsonb_build_object(
+            'max_model_calls',3,'max_input_tokens',6000,'max_output_tokens',3000,
+            'max_tool_calls',2,'max_external_cost_micro_usd',0,
+            'max_wall_time_ms',90000,'max_idle_time_ms',15000,'max_tasks',3,
+            'max_depth',2,'max_fanout',1,'max_parallelism',2,
+            'max_invalid_output_retries',0,'max_infrastructure_retries',0
+        ),
+        'nodes',jsonb_build_array(
+            jsonb_build_object(
+                'task_id','tg-probe-market','role_id','market_scout',
+                'role_revision',1,'depth',1,'objective',objective,'input_refs','[]'::JSONB,
+                'output_contract_name','specialist_memo_v1','output_contract',memo_contract,
+                'tool_grants',jsonb_build_array(jsonb_build_object(
+                    'tool_id','kernel_equity_quotes','tool_revision',1,'effect','read_only')),
+                'limit',jsonb_build_object(
+                    'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
+                    'max_tool_calls',1,'max_external_cost_micro_usd',0,
+                    'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
+                    'max_depth',0,'max_fanout',0,'max_parallelism',1,
+                    'max_invalid_output_retries',0,'max_infrastructure_retries',0),
+                'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '2 minutes')),
+            jsonb_build_object(
+                'task_id','tg-probe-fundamental','role_id','fundamental_scout',
+                'role_revision',1,'depth',1,'objective',objective,'input_refs','[]'::JSONB,
+                'output_contract_name','specialist_memo_v1','output_contract',memo_contract,
+                'tool_grants',jsonb_build_array(jsonb_build_object(
+                    'tool_id','kernel_financials','tool_revision',1,'effect','read_only')),
+                'limit',jsonb_build_object(
+                    'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
+                    'max_tool_calls',1,'max_external_cost_micro_usd',0,
+                    'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
+                    'max_depth',0,'max_fanout',0,'max_parallelism',1,
+                    'max_invalid_output_retries',0,'max_infrastructure_retries',0),
+                'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '2 minutes')),
+            jsonb_build_object(
+                'task_id','tg-probe-desk','role_id','decision_desk',
+                'role_revision',1,'depth',2,'objective',objective,'input_refs','[]'::JSONB,
+                'output_contract_name','answer_v1','output_contract',answer_contract,
+                'tool_grants','[]'::JSONB,
+                'limit',jsonb_build_object(
+                    'max_model_calls',1,'max_input_tokens',2000,'max_output_tokens',1000,
+                    'max_tool_calls',0,'max_external_cost_micro_usd',0,
+                    'max_wall_time_ms',30000,'max_idle_time_ms',5000,'max_tasks',1,
+                    'max_depth',0,'max_fanout',0,'max_parallelism',1,
+                    'max_invalid_output_retries',0,'max_infrastructure_retries',0),
+                'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '1 minute'))
+        ),
+        'edges',jsonb_build_array(
+            jsonb_build_object('from_task_id','tg-probe-market','to_task_id','tg-probe-desk'),
+            jsonb_build_object('from_task_id','tg-probe-fundamental','to_task_id','tg-probe-desk')),
+        'joins',jsonb_build_array(jsonb_build_object(
+            'join_id','tg-probe-join','downstream_task_id','tg-probe-desk',
+            'upstream_task_ids',jsonb_build_array('tg-probe-market','tg-probe-fundamental'),
+            'policy','all_required','minimum_success',2,'failure_policy','fail_graph',
+            'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '3 minutes'))),
+        'created_by',jsonb_build_object(
+            'principal_id','cortex-control-1','kind','workload','audience','control_api'),
+        'created_at',agent_control.runtime_utc_text(created_at),
+        'deadline_at',agent_control.runtime_utc_text(deadline_at-interval '30 seconds')
+    ) value FROM fixture
+), command AS (
+    SELECT jsonb_build_object(
+        'schema_revision',1,
+        'envelope',jsonb_build_object(
+            'schema_revision',1,'command_id','tg-probe-command',
+            'actor',jsonb_build_object(
+                'principal_id','cortex-control-1','kind','workload','audience','control_api'),
+            'audience','control_api','command_type','admit_task_graph',
+            'idempotency_key','tg-probe-idempotency',
+            'request_digest',agent_control.runtime_contract_digest(
+                'agent-platform.task-graph-plan.v1',value),
+            'causation_id','tg-probe-root','correlation_id','tg-probe-run',
+            'deadline',value->>'deadline_at'),
+        'expected_run_state_generation',2,
+        'expected_parent_state_generation',2,
+        'plan',value
+    ) value FROM plan
+)
+SELECT value FROM command;
+GRANT SELECT ON task_graph_probe_command TO alpheus_agent_control_api;
+CREATE TEMP TABLE task_graph_invalid_command AS
+WITH changed_plan AS (
+    SELECT jsonb_set(
+        jsonb_set(command->'plan','{graph_id}','"tg-invalid-graph"'::JSONB),
+        '{edges}',
+        (command#>'{plan,edges}')||jsonb_build_array(jsonb_build_object(
+            'from_task_id','tg-probe-desk','to_task_id','tg-probe-market'))
+    ) value
+    FROM task_graph_probe_command
+)
+SELECT jsonb_build_object(
+    'schema_revision',1,
+    'envelope',jsonb_build_object(
+        'schema_revision',1,'command_id','tg-invalid-command',
+        'actor',jsonb_build_object(
+            'principal_id','cortex-control-1','kind','workload','audience','control_api'),
+        'audience','control_api','command_type','admit_task_graph',
+        'idempotency_key','tg-invalid-idempotency',
+        'request_digest',agent_control.runtime_contract_digest(
+            'agent-platform.task-graph-plan.v1',value),
+        'causation_id','tg-probe-root','correlation_id','tg-probe-run',
+        'deadline',value->>'deadline_at'),
+    'expected_run_state_generation',2,
+    'expected_parent_state_generation',2,
+    'plan',value
+) command
+FROM changed_plan;
+CREATE TEMP TABLE task_graph_conflict_command AS
+SELECT jsonb_set(command,'{envelope,command_id}','"tg-conflict-command"'::JSONB) command
+FROM task_graph_probe_command;
+GRANT SELECT ON task_graph_invalid_command,task_graph_conflict_command
+TO alpheus_agent_control_api;
+
+SET SESSION AUTHORIZATION "cortex-control-1";
+SET ROLE alpheus_agent_control_api;
+SELECT agent_control.admit_cortex_task_graph(command) AS first_response
+FROM task_graph_probe_command;
+SELECT agent_control.admit_cortex_task_graph(command) AS exact_replay_response
+FROM task_graph_probe_command;
+DO $negative$
+BEGIN
+    BEGIN
+        PERFORM agent_control.admit_cortex_task_graph(command)
+        FROM task_graph_invalid_command;
+        RAISE EXCEPTION 'cyclic graph unexpectedly admitted';
+    EXCEPTION WHEN invalid_parameter_value THEN
+        NULL;
+    END;
+    BEGIN
+        PERFORM agent_control.admit_cortex_task_graph(command)
+        FROM task_graph_conflict_command;
+        RAISE EXCEPTION 'changed-body replay unexpectedly admitted';
+    EXCEPTION WHEN unique_violation THEN
+        NULL;
+    END;
+END
+$negative$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+DO $assertions$
+DECLARE
+    graph_count INTEGER;
+    node_count INTEGER;
+    ready_count INTEGER;
+    blocked_count INTEGER;
+    join_count INTEGER;
+    admission_count INTEGER;
+    parent_state TEXT;
+    attempt_state TEXT;
+BEGIN
+    SELECT count(*) INTO graph_count FROM agent_control.cortex_task_graph
+    WHERE graph_id='tg-probe-graph';
+    SELECT count(*),count(*) FILTER(WHERE task.state='ready'),
+        count(*) FILTER(WHERE task.state='blocked')
+    INTO node_count,ready_count,blocked_count
+    FROM agent_control.cortex_task_graph_node node
+    JOIN agent_control.runtime_task task ON task.task_id=node.task_id
+    WHERE node.graph_id='tg-probe-graph';
+    SELECT count(*) INTO join_count FROM agent_control.cortex_task_graph_join
+    WHERE graph_id='tg-probe-graph';
+    SELECT count(*) INTO admission_count
+    FROM agent_control.cortex_task_graph_admission
+    WHERE graph_id='tg-probe-graph';
+    SELECT state INTO parent_state FROM agent_control.runtime_task
+    WHERE task_id='tg-probe-root';
+    SELECT state INTO attempt_state FROM agent_control.runtime_attempt
+    WHERE attempt_id='tg-probe-attempt';
+    IF graph_count<>1 OR node_count<>3 OR ready_count<>2 OR blocked_count<>1
+       OR join_count<>1 OR admission_count<>1 OR parent_state<>'waiting'
+       OR attempt_state<>'superseded'
+       OR EXISTS (
+           SELECT 1 FROM agent_control.cortex_task_graph
+           WHERE graph_id='tg-invalid-graph'
+       ) THEN
+        RAISE EXCEPTION 'TaskGraph atomic admission assertion failed';
+    END IF;
+END
+$assertions$;
+
+SELECT 'task-graph-admission-pass' AS result;
+ROLLBACK;
