@@ -102,6 +102,7 @@ func (g *gateway) handler() http.Handler {
 	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/web-fetch", g.cortexWebFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/gexbot-as-of", g.cortexGEXBOTAsOfTool)
+	mux.HandleFunc("POST /internal/v1/cortex-tools/gexbot-live", g.cortexGEXBOTLiveTool)
 	mux.HandleFunc("GET /internal/v1/moody-blues/providers", g.moodyBluesProviders)
 	// Moody Blues is the canonical temporal-data surface. The older /gexbot
 	// paths remain narrow compatibility aliases while callers migrate.
