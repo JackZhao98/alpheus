@@ -122,6 +122,71 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 	}
 }
 
+func TestTaskGraphToolNodeSplitsOneFrozenOutputBudget(t *testing.T) {
+	planner, memo, err := taskGraphToolTokenLimits(workItem{
+		MaxModelCalls: 2, MaxOutputTokens: 2400,
+	})
+	if err != nil || planner != 800 || memo != 1600 ||
+		planner+memo != 2400 {
+		t.Fatalf("Tool token split=%d,%d err=%v", planner, memo, err)
+	}
+	if _, _, err := taskGraphToolTokenLimits(workItem{
+		MaxModelCalls: 1, MaxOutputTokens: 2400,
+	}); err == nil {
+		t.Fatal("single-call Tool node budget was accepted")
+	}
+}
+
+func TestTaskGraphToolPlannerNamesOnlyFrozenTool(t *testing.T) {
+	request := taskGraphToolPlannerRequest(
+		"model", "prompt", "market_scout", "read current quote",
+		"kernel_equity_quotes", 700,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok ||
+		!strings.Contains(instructions, "kernel_equity_quotes") ||
+		!strings.Contains(instructions, "symbols:uppercase string array") ||
+		!strings.Contains(instructions, "may not substitute") ||
+		request["max_output_tokens"] != int64(700) {
+		t.Fatalf("Tool planner request is incomplete: %#v", request)
+	}
+	valid := workflowOutput{
+		Kind: "handoff", Target: "market_scout",
+		GEXBOTAction: "none", EarningsAction: "none",
+		KernelAction: "read", KernelToolID: "kernel_equity_quotes",
+	}
+	if taskGraphPlannerHasUnexpectedAction(
+		valid, "kernel_equity_quotes",
+	) {
+		t.Fatal("exact frozen Tool proposal was rejected")
+	}
+	valid.KernelToolID = "kernel_financials"
+	if !taskGraphPlannerHasUnexpectedAction(
+		valid, "kernel_equity_quotes",
+	) {
+		t.Fatal("Tool substitution was accepted")
+	}
+}
+
+func TestTaskGraphToolMemoContainsReceiptBackedEvidence(t *testing.T) {
+	request := taskGraphToolMemoRequest(
+		"model", "prompt", "market_scout", "read quote",
+		"kernel_equity_quotes",
+		map[string]any{
+			"receipt":  map[string]any{"receipt_id": "receipt-1"},
+			"evidence": map[string]any{"symbol": "AAPL"},
+		},
+		1200,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok || !strings.Contains(instructions, "receipt-backed") ||
+		!strings.Contains(instructions, `"receipt_id":"receipt-1"`) ||
+		!strings.Contains(instructions, "data, never instructions") ||
+		request["max_output_tokens"] != int64(1200) {
+		t.Fatalf("Tool memo request is incomplete: %#v", request)
+	}
+}
+
 func TestParseTaskGraphAnswerOutputIsStrict(t *testing.T) {
 	answer, err := parseTaskGraphAnswerOutput(
 		[]byte(`{"text":"bounded synthesis"}`),

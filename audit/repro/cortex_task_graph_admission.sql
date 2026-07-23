@@ -438,6 +438,33 @@ WHERE task_id='tg-probe-market';
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
+SAVEPOINT task_graph_tool_discovery;
+UPDATE agent_control.runtime_session
+SET state='closed',generation=generation+1,
+    closed_at=clock_timestamp()
+WHERE task_id IN ('tg-probe-fundamental','tg-probe-options');
+SET SESSION AUTHORIZATION "cortex-worker-1";
+SET ROLE alpheus_agent_worker;
+DO $tool_discovery$
+DECLARE item JSONB;
+BEGIN
+    item:=agent_control.next_cortex_task();
+    IF item->>'task_id'<>'tg-probe-market'
+       OR item->>'role'<>'market_scout'
+       OR item->>'task_graph_tool_id'<>'kernel_equity_quotes'
+       OR item->>'task_graph_tool_revision'<>'1'
+       OR item->>'task_graph_tool_effect'<>'read_only'
+       OR (item->>'max_model_calls')::BIGINT<>2
+       OR item->>'task_graph_tool_planner_output_contract_digest' IS NULL THEN
+        RAISE EXCEPTION 'TaskGraph Tool discovery assertion failed: %',item;
+    END IF;
+END
+$tool_discovery$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO SAVEPOINT task_graph_tool_discovery;
+RELEASE SAVEPOINT task_graph_tool_discovery;
+
 SAVEPOINT task_graph_desk_discovery;
 DO $desk_discovery_fixture$
 DECLARE
