@@ -1635,6 +1635,8 @@ func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
 				Kind:        contracts.PrincipalWorkload,
 				Audience:    contracts.AudienceControlAPI,
 			},
+			Round:      1,
+			MaxRounds:  2,
 			DeadlineAt: prepared.DeadlineAt.UTC(),
 		},
 		objectives,

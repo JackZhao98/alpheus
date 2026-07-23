@@ -60,6 +60,7 @@ func planningContext(deadline time.Time) Context {
 			Kind:        contracts.PrincipalWorkload,
 			Audience:    contracts.AudienceControlAPI,
 		},
+		Round: 1, MaxRounds: 2,
 		DeadlineAt: deadline,
 	}
 }
@@ -135,6 +136,39 @@ func TestBuildExpandsProposalIntoDeterministicFanoutJoin(t *testing.T) {
 		join.MinimumSuccess != 1 ||
 		string(join.FailurePolicy) != "continue_if_threshold_met" {
 		t.Fatalf("unexpected Join: %+v", join)
+	}
+}
+
+func TestBuildPreservesControlledRoundFence(t *testing.T) {
+	committedAt := time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC)
+	deadline := committedAt.Add(6 * time.Minute)
+	objectives := []blob.BlobRef{
+		objective(
+			"proposal-result-1-branch-01",
+			"00000000-0000-4000-8000-000000000011", committedAt,
+		),
+		objective(
+			"proposal-result-1-branch-02",
+			"00000000-0000-4000-8000-000000000012",
+			committedAt.Add(time.Second),
+		),
+		objective(
+			"proposal-result-1-decision-desk",
+			"00000000-0000-4000-8000-000000000013",
+			committedAt.Add(2*time.Second),
+		),
+	}
+	context := planningContext(deadline)
+	context.Round = 2
+	context.MaxRounds = 2
+	command, err := Build(proposal(), context, objectives)
+	if err != nil || command.Plan.Round != 2 ||
+		command.Plan.MaxRounds != 2 {
+		t.Fatalf("round plan=%+v err=%v", command.Plan, err)
+	}
+	context.Round = 3
+	if _, err := Build(proposal(), context, objectives); err == nil {
+		t.Fatal("planner accepted a round beyond the frozen maximum")
 	}
 }
 

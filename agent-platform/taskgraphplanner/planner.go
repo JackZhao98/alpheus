@@ -24,6 +24,8 @@ type Context struct {
 	SpecialistOutputContract      contracts.RevisionRef
 	AnswerOutputContract          contracts.RevisionRef
 	Actor                         contracts.AuditActor
+	Round                         int64
+	MaxRounds                     int64
 	DeadlineAt                    time.Time
 }
 
@@ -133,8 +135,9 @@ func Build(
 		GraphID:        graphID, RunID: context.RunID,
 		ParentTaskID: context.ParentTaskID,
 		SourceResult: context.SourceResult, RuntimePolicy: context.RuntimePolicy,
-		Round: 1, MaxRounds: 2, AuthorizedLimit: authorized,
-		Nodes: nodes, Edges: edges, Joins: []taskgraphcontract.TaskGraphJoin{join},
+		Round: context.Round, MaxRounds: context.MaxRounds,
+		AuthorizedLimit: authorized,
+		Nodes:           nodes, Edges: edges, Joins: []taskgraphcontract.TaskGraphJoin{join},
 		CreatedBy: context.Actor, CreatedAt: createdAt,
 		DeadlineAt: context.DeadlineAt,
 	}
@@ -185,6 +188,8 @@ func validContext(value Context) bool {
 		value.Actor.Validate() == nil &&
 		value.Actor.Kind == contracts.PrincipalWorkload &&
 		value.Actor.Audience == contracts.AudienceControlAPI &&
+		value.Round >= 1 && value.MaxRounds >= value.Round &&
+		value.MaxRounds <= taskgraphcontract.AbsoluteMaxRoundsV1 &&
 		!value.DeadlineAt.IsZero() && value.DeadlineAt.Location() == time.UTC
 }
 
