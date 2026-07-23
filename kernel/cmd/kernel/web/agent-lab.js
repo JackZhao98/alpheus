@@ -29,8 +29,13 @@ const toolPrecisionTests = [
   },
   {
     id: "research_gexbot_as_of", state: "enabled", symbol: "SPX", source: "GEXBOT Provider", selector: "LLM Intent",
-    roles: "Intent → Decision Desk", description: "按 as_of 时间围栏读取一条 SPX GEX 历史快照。",
+    roles: "Intent → Options Scout → Decision Desk", description: "按 as_of 时间围栏读取一条 SPX GEX 历史快照。",
     prompt: "请读取当前可用的一条 SPX GEX Full 历史快照；分别报告实际 observed_at、首次 available_at 和请求 as_of 截止时间，不要把截止时间当作观测时间，也不要补充实时行情。",
+  },
+  {
+    id: "market_gexbot_live", state: "enabled", symbol: "SPX", source: "GEXBOT 官方 API", selector: "LLM Intent",
+    roles: "Intent → Options Scout → Decision Desk", description: "按需读取最新一条官方 SPX GEX 响应，并永久保存原始 Blob 与执行收据。",
+    prompt: "请调用官方 GEXBot Live API，读取最新一条 SPX GEX Full 数据；必须分别报告 provider 的 source_timestamp 和本次 fetched_at，并明确两者不是同一个时间，只依据工具收据回答。",
   },
   {
     id: "kernel_accounts", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
