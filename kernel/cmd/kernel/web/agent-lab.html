@@ -19,7 +19,30 @@
         <div><p class="eyebrow">READ-ONLY MVP</p><h2>测试 Agent Team</h2></div>
         <span class="badge">NO ORDERS</span>
       </div>
-      <p class="muted">Team 模式先由 Scout 生成证据简报，再由 Decision Desk 汇总。此页面不能创建 operation 或下单。</p>
+      <p class="muted">Cortex 先解释意图，再自行选择直接交给 Decision Desk、调用只读 Tool，或创建 Scout 子任务后回到 Desk。此页面不能创建 operation 或下单。</p>
+      <details id="tool-precision-tests" class="tool-test-panel">
+        <summary>
+          <span>工具精准调用测试</span>
+          <strong id="tool-test-count">加载中…</strong>
+        </summary>
+        <p class="muted">阶段 A：每一行用一条明确的自然语言请求，验证 Cortex 是否走到预期 Tool。每行会标明当前由 LLM Intent 或受控规则选择工具；测试会创建独立 Conversation，不会混入下面的正常对话。</p>
+        <p class="field-note">只有 Trace 同时出现目标 <code>tool_call_authorized</code> 与同一调用的 <code>tool_receipt_succeeded</code> 才算通过。这里不测试多 Agent 路线或意图分流；那会是单独的下一阶段。</p>
+        <div id="tool-test-active" class="tool-test-list" aria-live="polite"></div>
+        <details class="tool-test-candidates">
+          <summary>已登记但尚未授予 Cortex 的工具（不可运行）</summary>
+          <p class="field-note">这些行保留计划测试提示词，便于逐项接入时直接验收；按钮被锁定，不能绕过授权去调用 Kernel bridge 或 Robinhood MCP。</p>
+          <div id="tool-test-candidates" class="tool-test-list"></div>
+        </details>
+      </details>
+      <details id="intent-route-tests" class="tool-test-panel">
+        <summary>
+          <span>意图路线测试</span>
+          <strong id="route-test-count">加载中…</strong>
+        </summary>
+        <p class="muted">阶段 B：提示词不点名 Tool ID，也不指定 Agent。Cortex 必须自己解释意图，并走到预期的 Desk、Scout 或 Research 路线。</p>
+        <p class="field-note">通过条件是 Run 成功，且数据库 Trace 按顺序出现该行要求的 handoff、工具授权、收据或 continuation。每次仍使用独立 Conversation。</p>
+        <div id="route-test-list" class="tool-test-list" aria-live="polite"></div>
+      </details>
       <div class="conversation-bar">
         <p id="conversation-status" class="field-note">新对话：第一条消息会创建一个永久 Cortex Conversation。</p>
         <button id="new-conversation" class="secondary" type="button">新对话</button>
@@ -73,7 +96,7 @@
       <div class="result-head"><span>结果</span><strong id="status">READY</strong></div>
       <pre id="result">提交一个问题开始测试。</pre>
       <div class="result-head"><span>运行 Trace（调试）</span><strong id="trace-status">NO JOB</strong></div>
-      <pre id="trace">提交后会显示 Kernel → Runtime 的阶段、尝试次数和错误码。不会显示 prompt、密钥或完整内部请求。</pre>
+      <pre id="trace">提交后会显示 Cortex 的持久化 Turn、handoff、Tool 授权、收据和 continuation。不会显示 prompt、密钥或完整内部请求。</pre>
       <p id="query-error" class="error" role="alert"></p>
     </section>
   </main>

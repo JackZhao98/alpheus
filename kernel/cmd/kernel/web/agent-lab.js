@@ -18,6 +18,188 @@ function formatError(error) {
 let currentConversation = null;
 let conversationEntries = [];
 
+// This operator-facing catalog mirrors the reviewed Cortex allowlist. Runtime
+// authorization remains server-side and every execution still requires an
+// immutable intent plus a durable receipt.
+const toolPrecisionTests = [
+  {
+    id: "research_web_fetch", state: "enabled", symbol: "SPY", source: "Research Gateway", selector: "受控 URL 规则",
+    roles: "Intent → Decision Desk", description: "读取一个明确的公开网页，作为有界、不可信证据。",
+    prompt: "请先读取这个公开投资者教育网页，再提取其中两条关于投资风险的原文事实；不得凭记忆回答或使用其他来源：https://www.investor.gov/introduction-investing",
+  },
+  {
+    id: "research_gexbot_as_of", state: "enabled", symbol: "SPX", source: "GEXBOT Provider", selector: "LLM Intent",
+    roles: "Intent → Decision Desk", description: "按 as_of 时间围栏读取一条 SPX GEX 历史快照。",
+    prompt: "请读取当前可用的一条 SPX GEX Full 历史快照；分别报告实际 observed_at、首次 available_at 和请求 as_of 截止时间，不要把截止时间当作观测时间，也不要补充实时行情。",
+  },
+  {
+    id: "kernel_accounts", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的身份和账户事实。", prompt: "请读取我已绑定经纪账户的基本账户事实，只列账户类型与状态。",
+  },
+  {
+    id: "kernel_earnings_calendar", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Fundamental Scout",
+    description: "指定股票近期财报日期。", prompt: "请查询 AAPL 接下来最近一次财报的日期与盘前或盘后时间。",
+  },
+  {
+    id: "kernel_earnings_results", state: "enabled", symbol: "TSLA", source: "Kernel → Robinhood MCP", selector: "LLM Intent",
+    roles: "Intent → Decision Desk", description: "一个股票代码的标准化已发布财报结果。",
+    prompt: "请精确调用已安装的只读财报结果工具，读取 TSLA 最近已公布季度的 EPS 实际值、预期值和报告日期；只依据工具收据回答。",
+  },
+  {
+    id: "kernel_equity_fundamentals", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Fundamental Scout",
+    description: "股票基本面和估值字段。", prompt: "请读取 MSFT 的基本面与估值字段，并只列出 provider 返回的核心字段。",
+  },
+  {
+    id: "kernel_financials", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Fundamental Scout",
+    description: "一只股票的有界财务报表数据。", prompt: "请读取 NVDA 最近可用的财务报表数据，只概括营收、净利润和经营现金流字段。",
+  },
+  {
+    id: "kernel_equity_historicals", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout",
+    description: "有界历史股价 K 线。", prompt: "请读取 AAPL 最近 20 个交易日的日线历史价格，用于观察区间走势。",
+  },
+  {
+    id: "kernel_equity_price_book", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout",
+    description: "股票 bid、ask 与盘口快照。", prompt: "请读取 SOFI 当前的 bid、ask 与盘口快照，只报告可得报价字段。",
+  },
+  {
+    id: "kernel_equity_quotes", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout → Decision Desk",
+    description: "股票当前报价快照。", prompt: "请读取 AMD 当前股票报价快照，包括最新价、涨跌和时间戳。",
+  },
+  {
+    id: "kernel_equity_technical_indicators", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout",
+    description: "指定区间内的单一技术指标。", prompt: "请计算 SPY 最近 20 个交易日的 RSI 技术指标，并说明所用区间。",
+  },
+  {
+    id: "kernel_equity_tradability", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Decision Desk",
+    description: "股票可交易性和市场状态。", prompt: "请读取 GME 当前是否可交易以及市场状态事实。",
+  },
+  {
+    id: "kernel_indexes", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout",
+    description: "指数 symbol 到 provider 标识的解析。", prompt: "请解析 ^SPX 对应的指数 provider 标识和基本指数事实。",
+  },
+  {
+    id: "kernel_index_quotes", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Market Scout",
+    description: "指数当前报价快照；需要先由 kernel_indexes 取得真实 UUID。", prompt: "请只调用指数报价工具，读取 instrument UUID {{INDEX_UUID}} 的当前指数报价快照及时间戳；不要猜测或替换这个 UUID。",
+  },
+  {
+    id: "kernel_option_chains", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Options Scout",
+    description: "标的的期权链元数据。", prompt: "请读取 SPY 期权链的可用到期日与行权价范围元数据。",
+  },
+  {
+    id: "kernel_option_instruments", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Options Scout",
+    description: "精确期权合约 ID 与条款。", prompt: "请读取 SPY 下一周到期、接近平值的一张看涨期权的合约标识与条款。",
+  },
+  {
+    id: "kernel_option_quotes", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Options Scout",
+    description: "有界期权合约报价快照；需要先由 kernel_option_instruments 取得真实 UUID。", prompt: "请只调用期权报价工具，读取 option instrument UUID {{OPTION_UUID}} 的 bid、ask、最新价和时间戳；不要猜测或替换这个 UUID。",
+  },
+  {
+    id: "kernel_option_watchlist", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Options Scout",
+    description: "现有期权自选列表快照。", prompt: "请读取现有期权自选列表中的合约，不要修改任何自选列表。",
+  },
+  {
+    id: "kernel_option_level_upgrade_info", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的期权资格事实。", prompt: "请读取已绑定账户当前的期权资格信息，只报告资格事实。",
+  },
+  {
+    id: "kernel_equity_positions", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的股票持仓。", prompt: "请读取我已绑定账户的股票持仓，只列代码、数量和市值字段。",
+  },
+  {
+    id: "kernel_option_positions", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的期权持仓。", prompt: "请读取我已绑定账户的期权持仓，只列合约、数量与可得市值字段。",
+  },
+  {
+    id: "kernel_equity_orders", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的股票订单历史与状态。", prompt: "请读取我已绑定账户最近的股票订单及其状态；不要创建或修改订单。",
+  },
+  {
+    id: "kernel_option_orders", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的期权订单历史与状态。", prompt: "请读取我已绑定账户最近的期权订单及其状态；不要创建或修改订单。",
+  },
+  {
+    id: "kernel_equity_tax_lots", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "已绑定账户的股票 tax lots。", prompt: "请读取我已绑定账户中 AAPL 的股票 tax lots，只列取得日期、数量和成本基础字段。",
+  },
+  {
+    id: "kernel_portfolio", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager → Decision Desk",
+    description: "已绑定账户的组合汇总。", prompt: "请读取我已绑定账户的组合汇总，只报告总市值、现金与可得的当日变化字段。",
+  },
+  {
+    id: "kernel_pnl_trade_history", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "有界已实现交易 P&L 历史。", prompt: "请读取我已绑定账户最近 30 天的已实现交易盈亏历史。",
+  },
+  {
+    id: "kernel_realized_pnl", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Position Manager",
+    description: "有界已实现 P&L 汇总。", prompt: "请读取我已绑定账户今年截至目前的已实现盈亏汇总。",
+  },
+  {
+    id: "kernel_popular_watchlists", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout",
+    description: "公开热门自选列表元数据。", prompt: "请读取当前公开热门自选列表的名称和元数据。",
+  },
+  {
+    id: "kernel_watchlists", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout / Position Manager",
+    description: "公开或已绑定账户的自选列表元数据。", prompt: "请读取我已绑定账户中的自选列表名称和标识，不要修改它们。",
+  },
+  {
+    id: "kernel_watchlist_items", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout / Position Manager",
+    description: "一个明确自选列表 ID 的内容；需要先由 kernel_watchlists 取得真实 UUID。", prompt: "请只调用自选列表内容工具，读取 list UUID {{WATCHLIST_UUID}} 的成分，只列其中的资产代码；不要猜测或替换这个 UUID。",
+  },
+  {
+    id: "kernel_scanner_filter_specs", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout",
+    description: "有效的 Scanner filter 定义。", prompt: "请读取可用股票扫描器的筛选字段定义和允许值。",
+  },
+  {
+    id: "kernel_scans", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout",
+    description: "可用 Scanner 定义。", prompt: "请列出当前可用的股票扫描器定义及其标识。",
+  },
+  {
+    id: "kernel_run_scan", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout",
+    description: "执行一个获准且有界的 Scanner；需要先由 kernel_scans 取得真实 UUID。", prompt: "请只调用运行扫描器工具，执行 scan UUID {{SCAN_UUID}}，并仅返回前 10 个结果；不要猜测或替换这个 UUID。",
+  },
+  {
+    id: "kernel_search", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Scout",
+    description: "资产名称或股票代码到 provider 标识的解析。", prompt: "请搜索“Tesla”并返回对应资产的代码和 provider 标识。",
+  },
+  {
+    id: "kernel_review_equity_order", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Decision Desk",
+    description: "股票订单模拟预检，不会创建订单。", prompt: "请只调用股票订单预检工具，模拟检查一份 regular_hours、GFD、以 $180.00 限价买入 1 股 AAPL 的订单；quantity 使用字符串“1”。只报告校验结果，绝对不要创建订单。",
+  },
+  {
+    id: "kernel_review_option_order", state: "enabled", source: "Kernel → Robinhood MCP", roles: "Decision Desk",
+    description: "期权订单模拟预检；需要先由 kernel_option_instruments 取得真实 UUID，不会创建订单。", prompt: "请只调用期权订单预检工具，模拟检查买入开仓 1 张 SPY 单腿合约：option UUID {{OPTION_UUID}}，side=buy，position_effect=open，quantity 字符串“1”，type=market，time_in_force=gfd，market_hours=regular_hours，underlying_type=equity。只报告校验结果，绝对不要创建订单。",
+  },
+];
+
+const intentRouteTests = [
+  {
+    id: "route_earnings_to_desk", symbol: "TSLA", label: "财报事实 → Decision Desk",
+    prompt: "TSLA 最近一次公布的季度 EPS 到底是超预期还是低于预期？只使用系统已有的可信数据，不确定的指标不要补。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
+    expectedToolID: "kernel_earnings_results",
+  },
+  {
+    id: "route_gex_history_to_desk", symbol: "SPX", label: "历史 GEX → Research → Decision Desk",
+    prompt: "我想知道系统最近存下来的 SPX Full gamma 状态，告诉我实际采样时间、spot 和 zero gamma；不要冒充实时行情。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
+    expectedToolID: "research_gexbot_as_of",
+  },
+  {
+    id: "route_public_url_to_desk", symbol: "SPY", label: "明确 URL → Research → Decision Desk",
+    prompt: "这个页面主要说了什么？只按页面内容概括一条事实，并给出来源：https://example.com",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_desk", "tool_call_authorized", "tool_receipt_succeeded", "decision_desk_completed"],
+    expectedToolID: "research_web_fetch",
+  },
+  {
+    id: "route_scout_collaboration", symbol: "SOFI", label: "开放研究问题 → Scout → Decision Desk",
+    prompt: "先让合适的研究角色梳理 SOFI 当前最值得进一步验证的三件事，再由 Decision Desk 汇总；没有实时证据的地方必须明确写出来。",
+    expectedStages: ["intent_interpreter_completed", "handoff_to_scout", "scout_task_admitted", "scout_research_completed", "desk_continuation_ready", "decision_desk_completed"],
+  },
+];
+
+let toolPrecisionTestRunning = false;
+let intentRouteTestRunning = false;
+
 function renderConversation() {
   const target = byId("conversation");
   const count = conversationEntries.length;
@@ -298,6 +480,294 @@ byId("bind-robinhood").addEventListener("click", async () => {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+function createToolTestText(tag, className, value) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = value;
+  return node;
+}
+
+function createToolTestRow(test) {
+  const row = document.createElement("article");
+  row.className = `tool-test-row ${test.state === "enabled" ? "enabled" : "candidate"}`;
+  row.dataset.toolTest = test.id;
+
+  const head = document.createElement("div");
+  head.className = "tool-test-row-head";
+  const title = document.createElement("div");
+  const toolID = createToolTestText("code", "tool-test-id", test.id);
+  const description = createToolTestText("p", "field-note", test.description);
+  title.append(toolID, description);
+  const lifecycle = createToolTestText("span", `tool-test-badge ${test.state}`, test.state === "enabled" ? "CORTEX 已启用" : "CORTEX 未启用");
+  head.append(title, lifecycle);
+
+  const selector = test.selector || "LLM Intent";
+  const metadata = createToolTestText("p", "tool-test-meta", `${test.source} · 选择方：${selector} · 计划角色：${test.roles}`);
+  const promptLabel = createToolTestText("label", "tool-test-prompt-label", test.state === "enabled" ? "测试提示词（可编辑）" : "计划测试提示词");
+  const prompt = document.createElement("textarea");
+  prompt.className = "tool-test-prompt";
+  prompt.rows = 3;
+  prompt.value = test.prompt;
+  prompt.setAttribute("aria-label", `${test.id} 测试提示词`);
+  prompt.readOnly = test.state !== "enabled";
+
+  const controls = document.createElement("div");
+  controls.className = "tool-test-controls";
+  const expected = createToolTestText("span", "tool-test-expected", `预期 Tool ID：${test.id}`);
+  const state = createToolTestText("strong", "tool-test-state", test.state === "enabled" ? "尚未运行" : "尚未授予 Cortex" );
+  state.dataset.toolTestState = "true";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary tool-test-run";
+  button.textContent = test.state === "enabled" ? "运行精准测试" : "未启用";
+  button.disabled = test.state !== "enabled";
+  if (test.state !== "enabled") button.title = "必须先完成 Cortex bridge、授权和收据链，才能运行。";
+  if (test.state === "enabled") {
+    button.addEventListener("click", () => runToolPrecisionTest(test, row, prompt, button));
+  }
+  controls.append(expected, state, button);
+
+  const detail = document.createElement("pre");
+  detail.className = "tool-test-result hidden";
+  detail.dataset.toolTestResult = "true";
+  row.append(head, metadata, promptLabel, prompt, controls, detail);
+  return row;
+}
+
+function renderToolPrecisionTests() {
+  const enabled = toolPrecisionTests.filter((test) => test.state === "enabled");
+  const candidates = toolPrecisionTests.filter((test) => test.state !== "enabled");
+  byId("tool-test-count").textContent = `${enabled.length} 已启用 / ${candidates.length} 待接入`;
+  byId("tool-test-active").replaceChildren(...enabled.map(createToolTestRow));
+  byId("tool-test-candidates").replaceChildren(...candidates.map(createToolTestRow));
+}
+
+function routeTestVerdict(job, test) {
+  const trace = Array.isArray(job?.trace) ? job.trace : [];
+  let cursor = -1;
+  const matchedStages = [];
+  for (const expected of test.expectedStages) {
+    const index = trace.findIndex((event, candidate) => candidate > cursor && event.stage === expected);
+    if (index < 0) break;
+    cursor = index;
+    matchedStages.push(expected);
+  }
+  const authorized = test.expectedToolID
+    ? trace.find((event) => event.stage === "tool_call_authorized" && event.tool_id === test.expectedToolID)
+    : null;
+  const matchingReceipt = authorized && trace.find((event) =>
+    event.stage === "tool_receipt_succeeded" && event.tool_call_id === authorized.tool_call_id
+  );
+  const routeComplete = matchedStages.length === test.expectedStages.length;
+  const toolComplete = !test.expectedToolID || Boolean(authorized && matchingReceipt);
+  const passed = job?.status === "succeeded" && routeComplete && toolComplete;
+  return {
+    state: passed ? "passed" : "failed",
+    label: passed ? "通过：Cortex 自主选择了预期路线。" : "未通过：Run 没有完整走过预期路线。",
+    matchedStages,
+    routeComplete,
+    toolComplete,
+  };
+}
+
+function renderRouteTestRun(row, job, test, message) {
+  const state = row.querySelector("[data-route-test-state]");
+  const result = row.querySelector("[data-route-test-result]");
+  const inFlight = job?.status === "queued" || job?.status === "running";
+  const verdict = job && !inFlight ? routeTestVerdict(job, test) : null;
+  state.className = `tool-test-state ${verdict?.state || "running"}`;
+  state.textContent = message || verdict?.label || "运行中：等待 Cortex 路线 Trace…";
+  if (!job || inFlight) return;
+  result.classList.remove("hidden");
+  result.textContent = JSON.stringify({
+    run_id: job.id,
+    cortex_state: job.status,
+    expected_route: test.expectedStages,
+    expected_tool_id: test.expectedToolID || null,
+    matched_route: verdict.matchedStages,
+    route_complete: verdict.routeComplete,
+    tool_receipt_complete: verdict.toolComplete,
+    test_verdict: verdict.state,
+    trace: job.trace || [],
+  }, null, 2);
+}
+
+async function waitForRouteTest(job, test, row) {
+  const deadline = Date.now() + 540000;
+  while (job.status === "queued" || job.status === "running") {
+    if (Date.now() >= deadline) throw new Error("路线测试仍在运行，请稍后查看该 Run 的 Trace。");
+    renderRouteTestRun(row, job, test);
+    await wait(750);
+    job = await request(`/agent/cortex-runs/${encodeURIComponent(job.id)}`);
+  }
+  renderRouteTestRun(row, job, test);
+  return job;
+}
+
+async function runIntentRouteTest(test, row, prompt, button) {
+  if (intentRouteTestRunning) return;
+  const query = prompt.value.trim();
+  if (!query) {
+    renderRouteTestRun(row, null, test, "测试提示词不能为空。");
+    return;
+  }
+  intentRouteTestRunning = true;
+  button.disabled = true;
+  row.querySelector("[data-route-test-result]").classList.add("hidden");
+  try {
+    renderRouteTestRun(row, {status:"queued", trace:[]}, test);
+    let job = await request("/agent/cortex-requests", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({workflow:"auto", symbol:test.symbol || "SPY", query})
+    });
+    job = await waitForRouteTest(job, test, row);
+    if (job.status !== "succeeded") {
+      renderRouteTestRun(row, job, test, `Cortex Run 未成功结束：${job.error_code || "unknown"}`);
+    }
+  } catch (error) {
+    renderRouteTestRun(row, null, test, `测试提交或轮询失败：${formatError(error)}`);
+  } finally {
+    intentRouteTestRunning = false;
+    button.disabled = false;
+  }
+}
+
+function createRouteTestRow(test) {
+  const row = document.createElement("article");
+  row.className = "tool-test-row enabled";
+  row.dataset.routeTest = test.id;
+  const head = document.createElement("div");
+  head.className = "tool-test-row-head";
+  const title = document.createElement("div");
+  title.append(
+    createToolTestText("code", "tool-test-id", test.id),
+    createToolTestText("p", "field-note", test.label),
+  );
+  head.append(title, createToolTestText("span", "tool-test-badge enabled", "可运行"));
+  const metadata = createToolTestText(
+    "p",
+    "tool-test-meta",
+    `预期路线：${test.expectedStages.join(" → ")}${test.expectedToolID ? ` · 预期 Tool：${test.expectedToolID}` : ""}`,
+  );
+  const promptLabel = createToolTestText("label", "tool-test-prompt-label", "自然语言意图（可编辑）");
+  const prompt = document.createElement("textarea");
+  prompt.className = "tool-test-prompt";
+  prompt.rows = 3;
+  prompt.value = test.prompt;
+  prompt.setAttribute("aria-label", `${test.label} 测试提示词`);
+  const controls = document.createElement("div");
+  controls.className = "tool-test-controls";
+  const expected = createToolTestText("span", "tool-test-expected", `股票：${test.symbol}`);
+  const state = createToolTestText("strong", "tool-test-state", "尚未运行");
+  state.dataset.routeTestState = "true";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary tool-test-run";
+  button.textContent = "运行路线测试";
+  button.addEventListener("click", () => runIntentRouteTest(test, row, prompt, button));
+  controls.append(expected, state, button);
+  const detail = document.createElement("pre");
+  detail.className = "tool-test-result hidden";
+  detail.dataset.routeTestResult = "true";
+  row.append(head, metadata, promptLabel, prompt, controls, detail);
+  return row;
+}
+
+function renderIntentRouteTests() {
+  byId("route-test-count").textContent = `${intentRouteTests.length} 条可运行`;
+  byId("route-test-list").replaceChildren(...intentRouteTests.map(createRouteTestRow));
+}
+
+function toolPrecisionVerdict(job, expectedToolID) {
+  const trace = Array.isArray(job?.trace) ? job.trace : [];
+  const authorized = trace.find((event) => event.stage === "tool_call_authorized" && event.tool_id === expectedToolID);
+  const matchingReceipt = authorized && trace.find((event) =>
+    event.stage === "tool_receipt_succeeded" && event.tool_call_id === authorized.tool_call_id
+  );
+  const authorizedToolIDs = [...new Set(trace
+    .filter((event) => event.stage === "tool_call_authorized" && typeof event.tool_id === "string")
+    .map((event) => event.tool_id))];
+  if (job?.status === "succeeded" && authorized && matchingReceipt) {
+    return {state:"passed", label:"通过：预期工具已获授权，且收到对应执行收据。", authorized, matchingReceipt, authorizedToolIDs};
+  }
+  if (authorized && matchingReceipt) {
+    return {state:"failed", label:"工具已执行并收到收据，但 Cortex Run 未成功结束。", authorized, matchingReceipt, authorizedToolIDs};
+  }
+  if (authorized && !matchingReceipt) {
+    return {state:"failed", label:"未通过：预期工具获授权，但未获得对应执行收据。", authorized, matchingReceipt, authorizedToolIDs};
+  }
+  return {state:"failed", label:"未通过：Trace 未显示预期 Tool ID 获得授权。", authorized, matchingReceipt, authorizedToolIDs};
+}
+
+function renderToolTestRun(row, job, expectedToolID, message) {
+  const state = row.querySelector("[data-tool-test-state]");
+  const result = row.querySelector("[data-tool-test-result]");
+  const inFlight = job?.status === "queued" || job?.status === "running";
+  const verdict = job && !inFlight ? toolPrecisionVerdict(job, expectedToolID) : null;
+  state.className = `tool-test-state ${verdict?.state || "running"}`;
+  state.textContent = message || verdict?.label || "运行中：等待 Cortex Trace…";
+  if (!job || inFlight) return;
+  const trace = Array.isArray(job.trace) ? job.trace : [];
+  result.classList.remove("hidden");
+  result.textContent = JSON.stringify({
+    run_id: job.id,
+    cortex_state: job.status,
+    expected_tool_id: expectedToolID,
+    authorized_tool_ids: verdict.authorizedToolIDs,
+    expected_tool_authorized: Boolean(verdict.authorized),
+    receipt_for_expected_call: Boolean(verdict.matchingReceipt),
+    test_verdict: verdict.state,
+    relevant_trace: trace.filter((event) => event.stage === "tool_call_authorized" || event.stage === "tool_receipt_succeeded"),
+  }, null, 2);
+}
+
+async function waitForToolPrecisionTest(job, test, row) {
+  const deadline = Date.now() + 540000;
+  while (job.status === "queued" || job.status === "running") {
+    if (Date.now() >= deadline) throw new Error("工具测试仍在运行，请稍后查看该 Run 的 Trace。");
+    renderToolTestRun(row, job, test.id);
+    await wait(750);
+    job = await request(`/agent/cortex-runs/${encodeURIComponent(job.id)}`);
+  }
+  renderToolTestRun(row, job, test.id);
+  return job;
+}
+
+async function runToolPrecisionTest(test, row, prompt, button) {
+  if (toolPrecisionTestRunning) return;
+  const query = prompt.value.trim();
+  if (!query) {
+    renderToolTestRun(row, null, test.id, "测试提示词不能为空。");
+    return;
+  }
+  if (query.includes("{{")) {
+    renderToolTestRun(row, null, test.id, "请先用说明中的前置只读工具取得真实 UUID，并替换提示词占位符。");
+    return;
+  }
+  toolPrecisionTestRunning = true;
+  button.disabled = true;
+  const result = row.querySelector("[data-tool-test-result]");
+  result.classList.add("hidden");
+  try {
+    renderToolTestRun(row, {status:"queued", trace:[]}, test.id);
+    let job = await request("/agent/cortex-requests", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      // Deliberately omit conversation fields: a precision test is isolated
+      // from the user's normal Agent Lab conversation and its context.
+      body:JSON.stringify({workflow:"auto", symbol:test.symbol, query})
+    });
+    job = await waitForToolPrecisionTest(job, test, row);
+    if (job.status !== "succeeded") {
+      renderToolTestRun(row, job, test.id, `Cortex Run 未成功结束：${job.error_code || "unknown"}`);
+    }
+  } catch (error) {
+    renderToolTestRun(row, null, test.id, `测试提交或轮询失败：${formatError(error)}`);
+  } finally {
+    toolPrecisionTestRunning = false;
+    button.disabled = false;
+  }
+}
+
 async function waitForAgentQuery(job) {
   const deadline = Date.now() + 540000;
   while (job.status === "queued" || job.status === "running") {
@@ -360,4 +830,6 @@ byId("query-form").addEventListener("submit", async (event) => {
   }
 });
 
+renderToolPrecisionTests();
+renderIntentRouteTests();
 restoreSession();

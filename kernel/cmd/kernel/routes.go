@@ -28,6 +28,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /agent/secrets/{name}", s.authorizeAgentWeb(s.deleteAgentSecret))
 	mux.HandleFunc("POST /agent/gexbot/test", s.authorizeAgentWeb(s.postGEXBotTest))
 	mux.HandleFunc("GET /agent/robinhood/connection", s.authorizeAgentWeb(s.getRobinhoodConnection))
+	mux.HandleFunc("GET /agent/robinhood/capabilities", s.authorizeAgentWeb(s.getRobinhoodCapabilities))
 	mux.HandleFunc("POST /agent/robinhood/connect", s.authorizeAgentWeb(s.postRobinhoodConnect))
 	// OAuth returns from Robinhood without the Agent Lab session cookie in some
 	// browser configurations; the one-time PKCE state is the callback proof.
@@ -55,6 +56,13 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /provider/status", s.authorize(permissionRead, s.getProviderStatus))
 	mux.HandleFunc("GET /mcp/read-tools", s.authorize(permissionRead, s.getMCPReadTools))
 	mux.HandleFunc("POST /mcp/read-query", s.authorize(permissionRead, s.postMCPReadQuery))
+	// This is a deliberately narrow internal fact bridge, not a second generic
+	// MCP endpoint. Cortex Input may request published earnings facts only.
+	mux.HandleFunc("POST /internal/v1/cortex-tools/earnings-results", s.postCortexEarningsResults)
+	// The reviewed read registry may name only a server-side allowlisted Tool
+	// and arguments. Kernel still injects the bound account and blocks all MCP
+	// mutation tools.
+	mux.HandleFunc("POST /internal/v1/cortex-tools/read", s.postCortexKernelRead)
 	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(s.postAgentQuery))
 	mux.HandleFunc("GET /agent/query-jobs/{id}", s.authorizeAgentWeb(s.getAgentQueryJob))
 	mux.HandleFunc("POST /agent/cortex-requests", s.authorizeAgentWeb(s.postCortexRequest))

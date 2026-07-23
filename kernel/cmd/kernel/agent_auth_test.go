@@ -56,7 +56,7 @@ func TestAgentLabIsSeparateFromCockpit(t *testing.T) {
 	}
 }
 
-func TestAgentLabLocalAccessDoesNotRequirePassword(t *testing.T) {
+func TestAgentLabLocalAccessDoesNotRequirePasswordOrClientNetworkCheck(t *testing.T) {
 	s := &server{mode: config.ModeConfig{TradingMode: config.ModeReadOnly, AgentWebAuthMode: config.AgentWebAuthLocal, AgentWebSessionKey: strings.Repeat("k", 32)}}
 	req := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
 	req.RemoteAddr = "10.0.10.42:60000"
@@ -65,19 +65,12 @@ func TestAgentLabLocalAccessDoesNotRequirePassword(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"auth_mode":"local"`) {
 		t.Fatalf("local session status=%d body=%s", w.Code, w.Body.String())
 	}
-	linkLocal := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
-	linkLocal.RemoteAddr = "[fe80::1]:60000"
+	remote := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
+	remote.RemoteAddr = "203.0.113.42:60000"
 	w = httptest.NewRecorder()
-	s.routes().ServeHTTP(w, linkLocal)
+	s.routes().ServeHTTP(w, remote)
 	if w.Code != http.StatusOK {
-		t.Fatalf("link-local session status=%d body=%s", w.Code, w.Body.String())
-	}
-	blocked := httptest.NewRequest(http.MethodGet, "/agent/auth/session", nil)
-	blocked.RemoteAddr = "203.0.113.42:60000"
-	w = httptest.NewRecorder()
-	s.routes().ServeHTTP(w, blocked)
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "agent_local_network_required") {
-		t.Fatalf("public session status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("remote session status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

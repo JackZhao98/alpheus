@@ -91,3 +91,36 @@ func TestRobinhoodWebOAuthPersistsEncryptedConnectionAndConsumesCallbackOnce(t *
 		t.Fatalf("replay=%d calls=%d", replay.Code, exchanged)
 	}
 }
+
+func TestRobinhoodCapabilityReviewExposesOnlySafeSecretFreeSchemas(t *testing.T) {
+	tools := make([]rhmcp.ToolSchema, 0, len(rhmcp.SafeQueryTools)+1)
+	for _, name := range rhmcp.SafeQueryTools {
+		tools = append(tools, rhmcp.ToolSchema{
+			Name: name, Description: "reviewable read schema",
+			InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		})
+	}
+	tools = append(tools, rhmcp.ToolSchema{
+		Name: "place_equity_order", Description: "must not escape",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	})
+	s := &server{
+		mode: protectedMode(config.ModeReadOnly), robinhoodEnabled: true, brokerTimeout: time.Second,
+		robinhoodDiscover: func(context.Context) ([]rhmcp.ToolSchema, error) {
+			return tools, nil
+		},
+	}
+	response := routeRequest(s.routes(), http.MethodGet, "/agent/robinhood/capabilities", "", "kernel-secret")
+	if response.Code != http.StatusOK {
+		t.Fatalf("capability review status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "place_equity_order") || strings.Contains(response.Body.String(), "access_token") {
+		t.Fatalf("capability review leaked an excluded surface: %s", response.Body.String())
+	}
+	var payload struct {
+		Tools []rhmcp.ToolSchema `json:"tools"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || len(payload.Tools) != len(rhmcp.SafeQueryTools) {
+		t.Fatalf("capability review tools=%d err=%v", len(payload.Tools), err)
+	}
+}

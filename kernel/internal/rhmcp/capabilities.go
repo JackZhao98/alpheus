@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,7 @@ func validateSnapshotSchemas(snapshot CapabilitySnapshot, live []ToolSchema, req
 		liveByName[tool.Name] = tool
 	}
 	requiredSeen := make(map[string]bool, len(required))
+	drifted := make([]string, 0)
 	for _, name := range required {
 		if name == "" || requiredSeen[name] {
 			return fmt.Errorf("invalid required provider tool")
@@ -145,8 +147,11 @@ func validateSnapshotSchemas(snapshot CapabilitySnapshot, live []ToolSchema, req
 			return fmt.Errorf("invalid provider tool schema")
 		}
 		if committedInput != currentInput || committedOutput != currentOutput {
-			return fmt.Errorf("required provider tool schema drift")
+			drifted = append(drifted, name)
 		}
+	}
+	if len(drifted) > 0 {
+		return fmt.Errorf("required provider tool schema drift: %s", strings.Join(drifted, ","))
 	}
 	return nil
 }

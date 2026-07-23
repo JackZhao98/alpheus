@@ -228,6 +228,55 @@ func (s *server) getRobinhoodConnection(w http.ResponseWriter, _ *http.Request) 
 	})
 }
 
+// getRobinhoodCapabilities exposes only secret-free schemas for the committed
+// read allowlist. It exists so operators can review provider drift without
+// exporting OAuth material or enabling a generic Tool call surface.
+func (s *server) getRobinhoodCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !s.robinhoodEnabled {
+		writeError(w, http.StatusConflict, "robinhood_not_enabled", "Kernel is not configured for Robinhood")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.brokerTimeout)
+	defer cancel()
+	tools, err := s.discoverRobinhoodCapabilities(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "robinhood_capabilities_unavailable", "Robinhood capability discovery is unavailable")
+		return
+	}
+	allowed := make(map[string]struct{}, len(rhmcp.SafeQueryTools))
+	for _, name := range rhmcp.SafeQueryTools {
+		allowed[name] = struct{}{}
+	}
+	safe := make([]rhmcp.ToolSchema, 0, len(allowed))
+	for _, tool := range tools {
+		if _, ok := allowed[tool.Name]; ok {
+			safe = append(safe, tool)
+		}
+	}
+	if len(safe) != len(allowed) {
+		writeError(w, http.StatusBadGateway, "robinhood_capabilities_incomplete", "Robinhood read capability discovery is incomplete")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source": "robinhood-mcp", "generated_at": time.Now().UTC(), "tools": safe,
+	})
+}
+
+func (s *server) discoverRobinhoodCapabilities(ctx context.Context) ([]rhmcp.ToolSchema, error) {
+	if s.robinhoodDiscover != nil {
+		return s.robinhoodDiscover(ctx)
+	}
+	if _, err := s.loadRobinhoodConnection(); err != nil {
+		return nil, err
+	}
+	client, err := rhmcp.New(rhmcp.Config{TokenStore: s.robinhoodTokenStore(), AllowedTools: rhmcp.SafeQueryTools})
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	return client.Discover(ctx)
+}
+
 func (s *server) getRobinhoodAccounts(w http.ResponseWriter, r *http.Request) {
 	if !s.robinhoodEnabled {
 		writeError(w, http.StatusConflict, "robinhood_not_enabled", "Kernel is not configured for Robinhood")
@@ -378,7 +427,7 @@ func (s *server) activateRobinhood(ctx context.Context) error {
 		}
 	}()
 	if err := rhmcp.ValidateSnapshot(ctx, client, s.robinhoodSnapshot, rhmcp.SafeQueryTools); err != nil {
-		return fmt.Errorf("capability snapshot validation failed")
+		return fmt.Errorf("capability snapshot validation failed: %w", err)
 	}
 	readAccount, err := broker.NewRobinhood(client, connection.BoundAccountID)
 	if err != nil {

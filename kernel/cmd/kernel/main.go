@@ -46,6 +46,7 @@ type server struct {
 	// Robinhood. Production leaves both nil and uses rhmcp directly.
 	robinhoodBegin    func(context.Context, string) (rhmcp.AuthorizationStart, error)
 	robinhoodExchange func(context.Context, string, string, string, string) (rhmcp.OAuthToken, error)
+	robinhoodDiscover func(context.Context) ([]rhmcp.ToolSchema, error)
 	// broker is a simulation/test compatibility seam. Production construction
 	// leaves it nil and registers read and execution capabilities separately.
 	broker                            broker.Adapter
@@ -244,7 +245,7 @@ func main() {
 			if mode.TradingMode == config.ModeLive {
 				log.Fatalf("broker: a persisted Robinhood connection and explicit account binding are required in live mode")
 			}
-			log.Printf("Robinhood provider inactive: connect it from Agent Lab")
+			log.Printf("Robinhood provider inactive: %v", activateErr)
 		}
 	default:
 		log.Fatalf("broker: unknown BROKER %q", brokerName)

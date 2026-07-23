@@ -1,7 +1,7 @@
 {
   "version": "rh-mcp-v1",
   "endpoint": "https://agent.robinhood.com/mcp/trading",
-  "generated_at": "2026-07-17T05:43:46.543123Z",
+  "generated_at": "2026-07-23T07:58:57.667761Z",
   "tools": [
     {
       "name": "add_option_to_watchlist",
@@ -734,7 +734,7 @@
                       "type": "string"
                     },
                     "agentic_allowed": {
-                      "description": "True when this account is accessible to this agent specifically. An account with false may be agentic-enabled but scoped to a different agent type — do not tell the user it is disabled. review_*/place_*/cancel_* tools reject accounts where this is false.",
+                      "description": "True when this account is accessible to this agent specifically. An account with false may be agentic-enabled but scoped to a different agent type — do not tell the user it is disabled. Sole source of truth for eligibility — never infer it from nickname text. review_*/place_*/cancel_* tools reject accounts where this is false.",
                       "type": "boolean"
                     },
                     "brokerage_account_type": {
@@ -754,7 +754,7 @@
                       "type": "string"
                     },
                     "nickname": {
-                      "description": "User-set nickname; present alongside account_number when set.",
+                      "description": "User-set nickname; present alongside account_number when set. Cosmetic only — not an agentic_allowed or agentic-account signal.",
                       "type": "string"
                     },
                     "option_level": {
@@ -811,7 +811,7 @@
             "type": "object"
           },
           "guide": {
-            "description": "Sort the list deterministically when presenting: the default account first, agentic accounts (agentic_allowed=true) second, then other individual accounts, then retirement (IRA) accounts. Present account_number, rhc_account_number (label it \"Crypto Account\"), brokerage_account_type (label it \"Account Type\" — a linked crypto account always shares it, so never add a separate crypto account type column), type (label it \"Brokerage Trading Type\"), nickname (if set), and is_default — in that column order. In the Crypto Account column show \"N/A\" for accounts with an empty rhc_account_number; omit the column entirely only when no account has one. When referring to the account in user-facing prose (e.g. \"your \u003cX\u003e account\"), use nickname when set; fall back to brokerage_account_type otherwise. When displaying account_number or rhc_account_number to the user, mask all but the last 4 digits (e.g. '••••1234'); pass the full value to other tools unchanged — including get_option_level_upgrade_info and any fallback upgrade URL; masking breaks the link. Flag agentic_allowed when the user is choosing an account for a trade. agentic_allowed is caller-relative — true means accessible to this agent, false means this agent cannot act on it (the account may still be agentic-enabled for a different agent). Skip false accounts for trade operations; if the user asks why, say the account is not accessible to this agent, not that it needs to be enabled. When option_level is empty or 'option_level_0' and the user wants options, call get_option_level_upgrade_info with the account_number; if that tool is unavailable, direct the user to https://applink.robinhood.com/upgrade_options?account_number=\u003cthat account's account_number\u003e (embed the full unmasked account_number in the URL). management_type='managed' is layered on brokerage_account_type — surface alongside, not as a replacement. For tools that ask for an account identifier on a crypto-backed flow (get_crypto_positions, future crypto write tools), pass rhs_account_number; for everything else (equities, options, etc.) pass account_number.",
+            "description": "Sort the list deterministically when presenting: the default account first, agentic accounts (agentic_allowed=true) second, then other individual accounts, then retirement (IRA) accounts. Present account_number, rhc_account_number (label it \"Crypto Account\"), brokerage_account_type (label it \"Account Type\" — a linked crypto account always shares it, so never add a separate crypto account type column), type (label it \"Brokerage Trading Type\"), nickname (if set), and is_default — in that column order. In the Crypto Account column show \"N/A\" for accounts with an empty rhc_account_number; omit the column entirely only when no account has one. When referring to the account in user-facing prose (e.g. \"your \u003cX\u003e account\"), use nickname when set; fall back to brokerage_account_type otherwise. When displaying account_number or rhc_account_number to the user, mask all but the last 4 digits (e.g. '••••1234'); pass the full value to other tools unchanged — including get_option_level_upgrade_info and any fallback upgrade URL; masking breaks the link. Flag agentic_allowed when the user is choosing an account for a trade. agentic_allowed is caller-relative — true means accessible to this agent, false means this agent cannot act on it (the account may still be agentic-enabled for a different agent). Do not use nickname to determine agentic-account eligibility. Skip false accounts for trade operations; if the user asks why, say the account is not accessible to this agent, not that it needs to be enabled. When option_level is empty or 'option_level_0' and the user wants options, call get_option_level_upgrade_info with the account_number; if that tool is unavailable, direct the user to https://applink.robinhood.com/upgrade_options?account_number=\u003cthat account's account_number\u003e (embed the full unmasked account_number in the URL). management_type='managed' is layered on brokerage_account_type — surface alongside, not as a replacement. For tools that ask for an account identifier on a crypto-backed flow (get_crypto_positions, future crypto write tools), pass rhs_account_number; for everything else (equities, options, etc.) pass account_number.",
             "type": "string"
           }
         },
