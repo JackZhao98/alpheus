@@ -606,6 +606,294 @@ BEGIN
 END
 $slot_release$;
 
+SAVEPOINT task_graph_success_completion;
+DO $success_release_sources$
+DECLARE
+    task_row agent_control.runtime_task%ROWTYPE;
+    attempt_row agent_control.runtime_attempt%ROWTYPE;
+    at_time TIMESTAMPTZ:=clock_timestamp();
+BEGIN
+    FOR task_row IN
+        SELECT * FROM agent_control.runtime_task
+        WHERE task_id IN ('tg-probe-fundamental','tg-probe-options')
+        ORDER BY task_id
+    LOOP
+        SELECT * INTO STRICT attempt_row
+        FROM agent_control.runtime_attempt
+        WHERE task_id=task_row.task_id AND state='leased';
+        UPDATE agent_control.runtime_attempt
+        SET state='failed',state_generation=state_generation+1,
+            failure=jsonb_build_object(
+                'code','probe_branch_closed',
+                'message','success-path fixture closes branch',
+                'retryable',false),
+            updated_at=at_time,terminal_at=at_time
+        WHERE attempt_id=attempt_row.attempt_id;
+        IF NOT agent_control.runtime_release_active_slot_ancestors(
+            task_row.run_id,task_row.budget_ledger_id,at_time
+        ) THEN
+            RAISE EXCEPTION 'success fixture slot release failed';
+        END IF;
+        UPDATE agent_control.runtime_task
+        SET state='failed',state_generation=state_generation+1,
+            budget_slot_held=false,
+            failure=jsonb_build_object(
+                'code','probe_branch_closed',
+                'message','success-path fixture closes branch',
+                'retryable',false),
+            updated_at=at_time,terminal_at=at_time
+        WHERE task_id=task_row.task_id;
+        UPDATE agent_control.runtime_session
+        SET state='closed',generation=generation+1,closed_at=at_time
+        WHERE session_id=task_row.session_id;
+    END LOOP;
+    UPDATE agent_control.runtime_task
+    SET state='dead_lettered',state_generation=state_generation+1,
+        failure=jsonb_build_object(
+            'code','probe_branch_closed',
+            'message','success-path fixture closes branch',
+            'retryable',false),
+        updated_at=at_time,terminal_at=at_time
+    WHERE task_id='tg-probe-market';
+    UPDATE agent_control.runtime_session
+    SET state='closed',generation=generation+1,closed_at=at_time
+    WHERE task_id='tg-probe-market';
+    UPDATE agent_control.runtime_task
+    SET state='ready',state_generation=state_generation+1,
+        updated_at=at_time
+    WHERE task_id='tg-probe-desk';
+    WITH RECURSIVE ledger_chain AS (
+        SELECT ledger.*
+        FROM agent_control.runtime_budget_ledger AS ledger
+        JOIN agent_control.runtime_task AS task
+          ON task.budget_ledger_id=ledger.ledger_id
+        WHERE task.task_id='tg-probe-desk'
+        UNION ALL
+        SELECT parent.*
+        FROM agent_control.runtime_budget_ledger AS parent
+        JOIN ledger_chain AS child
+          ON child.parent_ledger_id=parent.ledger_id
+    )
+    UPDATE agent_control.runtime_budget_ledger AS ledger
+    SET consumed_active_tasks=ledger.consumed_active_tasks+1,
+        generation=ledger.generation+1,updated_at=at_time
+    FROM ledger_chain AS chain
+    WHERE ledger.ledger_id=chain.ledger_id;
+    UPDATE agent_control.runtime_task
+    SET state='running',state_generation=state_generation+1,
+        budget_slot_held=true,updated_at=at_time
+    WHERE task_id='tg-probe-desk';
+    INSERT INTO agent_control.runtime_attempt(
+        attempt_id,schema_revision,run_id,task_id,session_id,ordinal,
+        state,state_generation,lease_generation,lease_token,lease_worker,
+        lease_claimed_at,lease_heartbeat_at,lease_expires_at,
+        created_at,updated_at
+    )
+    SELECT
+        'tg-success-desk-attempt',1,task.run_id,task.task_id,
+        task.session_id,1,'leased',1,1,
+        '00000000-0000-4000-8000-000000000177',
+        jsonb_build_object(
+            'principal_id','cortex-worker-1',
+            'kind','workload','audience','worker'),
+        at_time,at_time,at_time+interval '60 seconds',at_time,at_time
+    FROM agent_control.runtime_task AS task
+    WHERE task.task_id='tg-probe-desk';
+    UPDATE agent_control.runtime_attempt
+    SET state='executing',state_generation=2,updated_at=at_time
+    WHERE attempt_id='tg-success-desk-attempt';
+END
+$success_release_sources$;
+
+DO $success_desk_artifact$
+DECLARE
+    task_row agent_control.runtime_task%ROWTYPE;
+    session_row agent_control.runtime_session%ROWTYPE;
+    attempt_row agent_control.runtime_attempt%ROWTYPE;
+    request_digest CHAR(64):=
+        agent_control.runtime_sha256_json(
+            '{"probe":"desk-request"}'::JSONB);
+    manifest_digest CHAR(64):=
+        agent_control.runtime_sha256_json(
+            '{"probe":"desk-manifest"}'::JSONB);
+    result_digest_value CHAR(64):=
+        agent_control.runtime_sha256_json(
+            '{"probe":"desk-result"}'::JSONB);
+    artifact_digest_value CHAR(64):=
+        agent_control.runtime_sha256_json(
+            '{"probe":"desk-artifact"}'::JSONB);
+    output_ref JSONB;
+    at_time TIMESTAMPTZ:=clock_timestamp();
+    artifact_time TIMESTAMPTZ;
+BEGIN
+    artifact_time:=at_time+interval '1 microsecond';
+    SELECT * INTO STRICT task_row
+    FROM agent_control.runtime_task WHERE task_id='tg-probe-desk';
+    SELECT * INTO STRICT session_row
+    FROM agent_control.runtime_session WHERE session_id=task_row.session_id;
+    SELECT * INTO STRICT attempt_row
+    FROM agent_control.runtime_attempt
+    WHERE attempt_id='tg-success-desk-attempt';
+    INSERT INTO agent_control.runtime_turn(
+        turn_id,schema_revision,run_id,task_id,session_id,attempt_id,
+        ordinal,kind,state,state_generation,request_digest,
+        reservation_held,created_at,updated_at
+    ) VALUES(
+        'tg-success-desk-turn',1,task_row.run_id,task_row.task_id,
+        session_row.session_id,attempt_row.attempt_id,1,'model_call',
+        'planned',1,request_digest,false,at_time,at_time
+    );
+    UPDATE agent_control.runtime_turn
+    SET state='dispatched',state_generation=2,reservation_held=true,
+        dispatched_at=at_time,updated_at=at_time
+    WHERE turn_id='tg-success-desk-turn';
+    INSERT INTO agent_control.runtime_model_call_manifest(
+        call_id,schema_revision,record_digest,turn_id,attempt_id,
+        idempotency_key,provider,model,prompt_digest,context_manifest,
+        output_contract_digest,request_digest,max_output_tokens,
+        reserved_input_tokens,reserved_external_cost_micro_usd,
+        timeout_ms,temperature_micros,created_at
+    ) VALUES(
+        'tg-success-desk-call',1,manifest_digest,
+        'tg-success-desk-turn',attempt_row.attempt_id,
+        'tg-success-desk-model-idem','openai','gpt-5-6-sol',
+        agent_control.runtime_sha256_json(
+            '{"probe":"desk-prompt"}'::JSONB),
+        session_row.context_manifest,task_row.output_contract_digest,
+        request_digest,1000,1000,0,30000,0,at_time
+    );
+    output_ref:=jsonb_set(
+        session_row.context_manifest,'{origin}',
+        jsonb_build_object(
+            'owner','agent_control',
+            'record_type','model_call_manifest',
+            'record_id','tg-success-desk-call',
+            'schema_revision',1,
+            'record_digest',manifest_digest
+        )
+    );
+    INSERT INTO agent_control.runtime_model_call_result(
+        result_id,schema_revision,record_digest,call_id,attempt_id,
+        turn_id,idempotency_key,request_digest,provider_request_id,
+        output_origin_owner,output_origin_record_type,
+        output_origin_record_id,output_origin_schema_revision,
+        output_origin_record_digest,output,input_tokens,output_tokens,
+        external_cost_micro_usd,wall_time_ms,finish_reason,committed_at
+    ) VALUES(
+        'tg-success-desk-result',1,result_digest_value,
+        'tg-success-desk-call',attempt_row.attempt_id,
+        'tg-success-desk-turn','tg-success-desk-model-idem',
+        request_digest,'tg-success-provider-request',
+        'agent_control','model_call_manifest','tg-success-desk-call',
+        1,manifest_digest,output_ref,100,100,0,1000,'stop',at_time
+    );
+    UPDATE agent_control.runtime_turn
+    SET state='result_committed',state_generation=3,
+        result_owner='agent_control',
+        result_record_type='model_call_result',
+        result_id='tg-success-desk-result',
+        result_schema_revision=1,result_digest=result_digest_value,
+        reservation_held=false,finished_at=at_time,updated_at=at_time
+    WHERE turn_id='tg-success-desk-turn';
+    INSERT INTO agent_control.runtime_artifact(
+        artifact_id,schema_revision,record_digest,run_id,task_id,
+        session_id,attempt_id,source_result_owner,
+        source_result_record_type,source_result_id,
+        source_result_schema_revision,source_result_digest,
+        artifact_type,output_contract_digest,effect_class,created_at
+    ) VALUES(
+        'tg-success-desk-artifact',1,artifact_digest_value,task_row.run_id,
+        task_row.task_id,session_row.session_id,attempt_row.attempt_id,
+        'agent_control','model_call_result','tg-success-desk-result',
+        1,result_digest_value,'assistant_response',
+        task_row.output_contract_digest,'none',artifact_time
+    );
+    INSERT INTO agent_control.runtime_artifact_section(
+        artifact_id,ordinal,name,required,content
+    ) VALUES(
+        'tg-success-desk-artifact',1,'response',true,output_ref
+    );
+    UPDATE agent_control.runtime_attempt
+    SET state='result_committed',state_generation=state_generation+1,
+        result_artifact_owner='agent_control',
+        result_artifact_record_type='artifact',
+        result_artifact_id='tg-success-desk-artifact',
+        result_artifact_schema_revision=1,
+        result_artifact_digest=artifact_digest_value,
+        updated_at=artifact_time,terminal_at=artifact_time
+    WHERE attempt_id=attempt_row.attempt_id;
+    IF NOT agent_control.runtime_release_active_slot_ancestors(
+        task_row.run_id,task_row.budget_ledger_id,artifact_time
+    ) THEN
+        RAISE EXCEPTION 'Desk active slot release failed';
+    END IF;
+    UPDATE agent_control.runtime_task
+    SET state='result_committed',state_generation=state_generation+1,
+        result_artifact_id='tg-success-desk-artifact',
+        updated_at=artifact_time
+    WHERE task_id=task_row.task_id;
+    UPDATE agent_control.runtime_task
+    SET state='succeeded',state_generation=state_generation+1,
+        budget_slot_held=false,updated_at=artifact_time,
+        terminal_at=artifact_time
+    WHERE task_id=task_row.task_id;
+    UPDATE agent_control.runtime_session
+    SET state='closed',generation=generation+1,closed_at=artifact_time
+    WHERE session_id=session_row.session_id;
+END
+$success_desk_artifact$;
+
+SET SESSION AUTHORIZATION "cortex-control-1";
+SET ROLE alpheus_agent_control_api;
+DO $success_completion$
+DECLARE
+    reconciled JSONB;
+    result JSONB;
+BEGIN
+    reconciled:=agent_control.reconcile_cortex_task_graph_joins(
+        'cortex-worker-1');
+    result:=agent_control.get_cortex_run_result('tg-probe-run');
+    IF (reconciled->>'completed_graphs')::BIGINT<>1
+       OR result->>'state'<>'succeeded'
+       OR result #>> '{owning_reference,record_id}'
+            <>'tg-success-desk-artifact' THEN
+        RAISE EXCEPTION
+          'TaskGraph success completion failed: % result=%',
+          reconciled,result;
+    END IF;
+END
+$success_completion$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET CONSTRAINTS ALL IMMEDIATE;
+DO $success_assertions$
+DECLARE
+    parent_state TEXT;
+    run_state TEXT;
+    result_count BIGINT;
+    active_count BIGINT;
+BEGIN
+    SELECT state INTO parent_state FROM agent_control.runtime_task
+    WHERE task_id='tg-probe-root';
+    SELECT state INTO run_state FROM agent_control.runtime_run
+    WHERE run_id='tg-probe-run';
+    SELECT count(*) INTO result_count
+    FROM agent_control.cortex_task_graph_result
+    WHERE graph_id='tg-probe-graph'
+      AND artifact_id='tg-success-desk-artifact';
+    SELECT active_tasks INTO active_count
+    FROM agent_control.cortex_task_graph_schedule
+    WHERE graph_id='tg-probe-graph' AND state='closed';
+    IF parent_state<>'superseded' OR run_state<>'succeeded'
+       OR result_count<>1 OR active_count<>0 THEN
+        RAISE EXCEPTION 'TaskGraph result promotion assertion failed';
+    END IF;
+END
+$success_assertions$;
+SET CONSTRAINTS ALL DEFERRED;
+ROLLBACK TO SAVEPOINT task_graph_success_completion;
+RELEASE SAVEPOINT task_graph_success_completion;
+
 DO $terminal_failures$
 DECLARE
     task_row agent_control.runtime_task%ROWTYPE;
