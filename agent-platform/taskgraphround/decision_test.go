@@ -24,13 +24,19 @@ func TestDecisionAcceptsAnswerOrBoundedRefinement(t *testing.T) {
 func TestDecisionRejectsAuthorityAndActionMismatch(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte(`{"schema_revision":1,"action":"answer","text":"","rationale":"","join_mode":"all_required","branches":[]}`),
-		[]byte(`{"schema_revision":1,"action":"answer","text":"done","rationale":"again","join_mode":"all_required","branches":[]}`),
 		[]byte(`{"schema_revision":1,"action":"refine","text":"premature","rationale":"more work","join_mode":"all_required","branches":[]}`),
 		[]byte(`{"schema_revision":1,"action":"answer","text":"done","rationale":"","join_mode":"all_required","branches":[],"max_parallelism":16}`),
 	} {
 		if _, err := DecodeStrict(raw); err == nil {
 			t.Fatalf("invalid round decision accepted: %s", raw)
 		}
+	}
+}
+
+func TestDecisionAllowsBoundedAnswerRationale(t *testing.T) {
+	value, err := DecodeStrict([]byte(`{"schema_revision":1,"action":"answer","text":"done","rationale":"the joined evidence is sufficient","join_mode":"all_required","branches":[]}`))
+	if err != nil || value.Action != ActionAnswer {
+		t.Fatalf("bounded answer rationale rejected: value=%+v err=%v", value, err)
 	}
 }
 

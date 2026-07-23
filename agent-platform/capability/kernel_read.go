@@ -23,7 +23,7 @@ type KernelReadToolSpec struct {
 var kernelReadToolSpecs = map[ToolID]KernelReadToolSpec{
 	"kernel_accounts":                    kernelSpec("kernel_accounts", "get_accounts", "no arguments", nil, nil),
 	"kernel_earnings_calendar":           kernelSpec("kernel_earnings_calendar", "get_earnings_calendar", "days?:integer, filter?:string, start_date?:YYYY-MM-DD", []string{"days", "filter", "start_date"}, nil),
-	"kernel_equity_fundamentals":         kernelSpec("kernel_equity_fundamentals", "get_equity_fundamentals", "symbols:uppercase string array; bounds?:string", []string{"bounds", "symbols"}, []string{"symbols"}),
+	"kernel_equity_fundamentals":         kernelSpec("kernel_equity_fundamentals", "get_equity_fundamentals", "symbols:uppercase string array; bounds?:one of regular,trading,extended,24_5 (omit unless a trading session is explicitly needed)", []string{"bounds", "symbols"}, []string{"symbols"}),
 	"kernel_equity_historicals":          kernelSpec("kernel_equity_historicals", "get_equity_historicals", "symbols:uppercase string array; start_time:RFC3339; end_time?, interval?, bounds?, adjustment_type?", []string{"adjustment_type", "bounds", "end_time", "interval", "start_time", "symbols"}, []string{"start_time", "symbols"}),
 	"kernel_equity_orders":               kernelSpec("kernel_equity_orders", "get_equity_orders", "symbol?, state?, created_at_gte?, order_id?, cursor?, placed_agent?; bound account is automatic", []string{"created_at_gte", "cursor", "order_id", "placed_agent", "state", "symbol"}, nil),
 	"kernel_equity_positions":            kernelSpec("kernel_equity_positions", "get_equity_positions", "cursor?; bound account is automatic", []string{"cursor"}, nil),
@@ -86,6 +86,15 @@ func (value KernelReadRequest) Validate() error {
 	for _, key := range spec.RequiredArgs {
 		if _, ok := value.Arguments[key]; !ok {
 			return ErrInvalidCapability
+		}
+	}
+	if value.ToolID == "kernel_equity_fundamentals" {
+		if bounds, supplied := value.Arguments["bounds"]; supplied {
+			selected, ok := bounds.(string)
+			if !ok || (selected != "regular" && selected != "trading" &&
+				selected != "extended" && selected != "24_5") {
+				return ErrInvalidCapability
+			}
 		}
 	}
 	raw, err := json.Marshal(value.Arguments)

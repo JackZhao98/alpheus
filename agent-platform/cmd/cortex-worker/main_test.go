@@ -137,7 +137,7 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 				},
 			},
 		},
-		1200,
+		1, 2, 1200,
 	)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "immutable TaskGraph Join") ||
@@ -148,7 +148,7 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 		t.Fatalf("TaskGraph Decision Desk request is incomplete: %#v", request)
 	}
 	if request := taskGraphDecisionDeskRequest(
-		"model", "prompt", "objective", nil, 1000,
+		"model", "prompt", "objective", nil, 1, 2, 1000,
 	); request != nil {
 		t.Fatal("Decision Desk prompt accepted no Join inputs")
 	}
@@ -284,22 +284,34 @@ func TestTaskGraphToolMemoContainsReceiptBackedEvidence(t *testing.T) {
 	}
 }
 
-func TestParseTaskGraphAnswerOutputIsStrict(t *testing.T) {
-	answer, err := parseTaskGraphAnswerOutput(
-		[]byte(`{"text":"bounded synthesis"}`),
+func TestParseTaskGraphRoundDecisionOutputIsStrict(t *testing.T) {
+	answer, err := parseTaskGraphRoundDecisionOutput(
+		[]byte(`{"schema_revision":1,"action":"answer","text":"bounded synthesis","rationale":"","join_mode":"all_required","branches":[]}`),
 	)
 	if err != nil || answer.Kind != "answer" ||
 		answer.Target != "user" || answer.Text != "bounded synthesis" {
 		t.Fatalf("TaskGraph answer=%+v err=%v", answer, err)
 	}
 	for _, raw := range [][]byte{
-		[]byte(`{"text":""}`),
-		[]byte(`{"text":"ok","extra":true}`),
+		[]byte(`{"schema_revision":1,"action":"answer","text":"","rationale":"","join_mode":"all_required","branches":[]}`),
+		[]byte(`{"schema_revision":1,"action":"answer","text":"ok","rationale":"","join_mode":"all_required","branches":[],"extra":true}`),
 		[]byte(`{"wrong":"answer"}`),
 	} {
-		if _, err := parseTaskGraphAnswerOutput(raw); err == nil {
+		if _, err := parseTaskGraphRoundDecisionOutput(raw); err == nil {
 			t.Fatalf("invalid TaskGraph answer was accepted: %s", raw)
 		}
+	}
+}
+
+func TestArtifactTypeForTaskGraphDecisionDesk(t *testing.T) {
+	if got := artifactTypeFor(workItem{
+		TaskGraphID: "task-graph-1",
+		Role:        "decision_desk",
+	}); got != "task_graph_round_decision" {
+		t.Fatalf("TaskGraph Decision Desk artifact type = %q", got)
+	}
+	if got := artifactTypeFor(workItem{Role: "intent"}); got != "assistant_response" {
+		t.Fatalf("ordinary answer artifact type = %q", got)
 	}
 }
 

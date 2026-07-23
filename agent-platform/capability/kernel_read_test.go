@@ -52,3 +52,30 @@ func TestKernelReadRequestValidatesKnownAndRequiredArguments(t *testing.T) {
 		t.Fatal("missing required search query was accepted")
 	}
 }
+
+func TestKernelEquityFundamentalsRejectsInventedBounds(t *testing.T) {
+	for _, bounds := range []string{"regular", "trading", "extended", "24_5"} {
+		request := KernelReadRequest{
+			ToolID:     "kernel_equity_fundamentals",
+			SourceTool: "get_equity_fundamentals",
+			Arguments: map[string]any{
+				"symbols": []any{"TSLA"},
+				"bounds":  bounds,
+			},
+		}
+		if err := request.Validate(); err != nil {
+			t.Fatalf("valid fundamentals bounds %q rejected: %v", bounds, err)
+		}
+	}
+	request := KernelReadRequest{
+		ToolID:     "kernel_equity_fundamentals",
+		SourceTool: "get_equity_fundamentals",
+		Arguments: map[string]any{
+			"symbols": []any{"TSLA"},
+			"bounds":  "as_of=2026-07-23",
+		},
+	}
+	if request.Validate() == nil {
+		t.Fatal("invented fundamentals bounds was accepted")
+	}
+}

@@ -58,7 +58,7 @@ func (value Decision) Validate() error {
 		if strings.TrimSpace(value.Text) == "" ||
 			strings.TrimSpace(value.Text) != value.Text ||
 			len(value.Text) > 16000 ||
-			value.Rationale != "" ||
+			len(value.Rationale) > 4000 ||
 			value.JoinMode != taskgraphproposal.JoinAllRequired ||
 			len(value.Branches) != 0 {
 			return ErrInvalidDecision

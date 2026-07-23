@@ -22,6 +22,7 @@ import (
 	"alpheus/agentplatform/taskgraphcontract"
 	"alpheus/agentplatform/taskgraphplanner"
 	"alpheus/agentplatform/taskgraphproposal"
+	"alpheus/agentplatform/taskgraphround"
 )
 
 const (
@@ -405,6 +406,8 @@ type taskGraphProposalContext struct {
 	ParentTaskID              string                `json:"parent_task_id"`
 	RunStateGeneration        int64                 `json:"run_state_generation"`
 	ParentTaskStateGeneration int64                 `json:"parent_task_state_generation"`
+	Round                     int64                 `json:"round"`
+	MaxRounds                 int64                 `json:"max_rounds"`
 	SourceResult              contracts.RecordRef   `json:"source_result"`
 	RuntimePolicy             contracts.RevisionRef `json:"runtime_policy"`
 	SpecialistOutputContract  contracts.RevisionRef `json:"specialist_output_contract"`
@@ -413,6 +416,37 @@ type taskGraphProposalContext struct {
 	ProposalOutputBindingID   string                `json:"proposal_output_binding_id"`
 	RawInput                  blob.BlobRef          `json:"raw_input"`
 	DeadlineAt                time.Time             `json:"deadline_at"`
+}
+
+type TaskGraphRoundContinuation struct {
+	Status          string `json:"status"`
+	SourceCallID    string `json:"source_call_id"`
+	RunID           string `json:"run_id"`
+	GraphID         string `json:"graph_id"`
+	CompletedRound  int64  `json:"completed_round"`
+	NextRound       int64  `json:"next_round"`
+	MaxRounds       int64  `json:"max_rounds"`
+	ParentTaskID    string `json:"parent_task_id"`
+	ParentSessionID string `json:"parent_session_id"`
+}
+
+type taskGraphRoundSeed struct {
+	Status                  string              `json:"status"`
+	SourceCallID            string              `json:"source_call_id"`
+	RunID                   string              `json:"run_id"`
+	GraphID                 string              `json:"graph_id"`
+	CompletedRound          int64               `json:"completed_round"`
+	MaxRounds               int64               `json:"max_rounds"`
+	ParentTaskID            string              `json:"parent_task_id"`
+	DecisionTaskID          string              `json:"decision_task_id"`
+	SourceResult            contracts.RecordRef `json:"source_result"`
+	DecisionOutput          blob.BlobRef        `json:"decision_output"`
+	DecisionOutputBindingID string              `json:"decision_output_binding_id"`
+	RequestID               string              `json:"request_id"`
+	ConversationID          string              `json:"conversation_id"`
+	SubjectPrincipalID      string              `json:"subject_principal_id"`
+	RawInput                blob.BlobRef        `json:"raw_input"`
+	DeadlineAt              time.Time           `json:"deadline_at"`
 }
 
 type TaskGraphJoinReconciliation struct {
@@ -1552,6 +1586,7 @@ func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
 		prepared.Status != "ready" || prepared.RunID == "" ||
 		prepared.ParentTaskID == "" || prepared.RunStateGeneration < 1 ||
 		prepared.ParentTaskStateGeneration < 1 ||
+		prepared.Round < 1 || prepared.MaxRounds < prepared.Round ||
 		prepared.SourceResult.Validate() != nil ||
 		prepared.RuntimePolicy.Validate() != nil ||
 		prepared.SpecialistOutputContract.Validate() != nil ||
@@ -1635,8 +1670,8 @@ func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
 				Kind:        contracts.PrincipalWorkload,
 				Audience:    contracts.AudienceControlAPI,
 			},
-			Round:      1,
-			MaxRounds:  2,
+			Round:      prepared.Round,
+			MaxRounds:  prepared.MaxRounds,
 			DeadlineAt: prepared.DeadlineAt.UTC(),
 		},
 		objectives,
@@ -1646,6 +1681,137 @@ func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
 			"expand TaskGraph proposal: %w", err)
 	}
 	return adapter.AdmitAndPrepareTaskGraph(ctx, command, prepared.RawInput)
+}
+
+// PrepareTaskGraphNextRound accepts only a lease-bound, schema-validated
+// Decision Desk refinement. Control revalidates the model output, creates a
+// node-scoped root Session, and lets the database atomically close the prior
+// graph before the next proposal Task becomes ready.
+func (adapter *PostgresAdapter) PrepareTaskGraphNextRound(
+	ctx context.Context,
+	sourceCallID, attemptID string,
+	leaseGeneration int64,
+	leaseToken string,
+) (TaskGraphRoundContinuation, error) {
+	if adapter == nil || adapter.db == nil ||
+		strings.TrimSpace(sourceCallID) == "" ||
+		strings.TrimSpace(attemptID) == "" ||
+		leaseGeneration < 1 || strings.TrimSpace(leaseToken) == "" {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("invalid TaskGraph next round request")
+	}
+	var seedRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.get_cortex_task_graph_round_seed(
+				$1,$2,$3,$4::UUID
+			)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken,
+		).Scan(&seedRaw)
+	}); err != nil {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("read TaskGraph round seed: %w", err)
+	}
+	var seed taskGraphRoundSeed
+	if json.Unmarshal(seedRaw, &seed) != nil ||
+		seed.Status != "ready" || seed.SourceCallID != sourceCallID ||
+		seed.RunID == "" || seed.GraphID == "" ||
+		seed.CompletedRound < 1 ||
+		seed.MaxRounds <= seed.CompletedRound ||
+		seed.ParentTaskID == "" || seed.DecisionTaskID == "" ||
+		seed.SourceResult.Validate() != nil ||
+		seed.DecisionOutput.Validate() != nil ||
+		seed.DecisionOutputBindingID == "" ||
+		seed.RequestID == "" || seed.ConversationID == "" ||
+		seed.SubjectPrincipalID == "" ||
+		seed.RawInput.Validate() != nil || seed.DeadlineAt.IsZero() {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("invalid TaskGraph round seed response")
+	}
+	decisionRaw, err := adapter.readConversationBlob(
+		ctx, seed.DecisionOutput, seed.DecisionOutputBindingID,
+		seed.DecisionOutput.Origin,
+	)
+	if err != nil {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("read TaskGraph round decision: %w", err)
+	}
+	decision, err := taskgraphround.DecodeStrict(decisionRaw)
+	if err != nil || decision.Action != taskgraphround.ActionRefine {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("TaskGraph round decision is not a refinement")
+	}
+	execution, err := adapter.CommitControlJSON(
+		ctx, "execution_binding",
+		"cortex-round-planner-"+sourceCallID,
+		"agent-platform.contract.task_graph_round_execution.v1",
+		map[string]any{
+			"schema_revision":     1,
+			"task_id":             seed.ParentTaskID,
+			"role":                "round_planner",
+			"worker_principal_id": "cortex-worker-1",
+			"provider":            "openai",
+			"model":               "gpt-5.6-sol",
+			"completed_round":     seed.CompletedRound,
+			"max_rounds":          seed.MaxRounds,
+		},
+	)
+	if err != nil {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("commit TaskGraph round execution: %w", err)
+	}
+	contextRef, err := adapter.CommitControlJSON(
+		ctx, "context_manifest",
+		"cortex-round-context-"+sourceCallID,
+		"agent-platform.contract.task_graph_round_context.v1",
+		map[string]any{
+			"schema_revision": 1,
+			"role":            "round_planner",
+			"request_id":      seed.RequestID,
+			"conversation_id": seed.ConversationID,
+			"graph_id":        seed.GraphID,
+			"completed_round": seed.CompletedRound,
+			"max_rounds":      seed.MaxRounds,
+			"source_result":   seed.SourceResult,
+			"decision_output": seed.DecisionOutput,
+			"raw_input":       seed.RawInput,
+		},
+	)
+	if err != nil {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("commit TaskGraph round context: %w", err)
+	}
+	executionRaw, _ := json.Marshal(execution)
+	contextRaw, _ := json.Marshal(contextRef)
+	var responseRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.prepare_cortex_task_graph_next_round(
+				$1,$2,$3,$4::UUID,$5::JSONB,$6::JSONB,$7
+			)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken,
+			string(executionRaw), string(contextRaw), "cortex-worker-1",
+		).Scan(&responseRaw)
+	}); err != nil {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("prepare TaskGraph next round: %w", err)
+	}
+	var result TaskGraphRoundContinuation
+	if json.Unmarshal(responseRaw, &result) != nil ||
+		result.Status != "ready" ||
+		result.SourceCallID != sourceCallID ||
+		result.RunID != seed.RunID || result.GraphID != seed.GraphID ||
+		result.CompletedRound != seed.CompletedRound ||
+		result.NextRound != seed.CompletedRound+1 ||
+		result.MaxRounds != seed.MaxRounds ||
+		result.ParentTaskID != seed.ParentTaskID ||
+		result.ParentSessionID == "" {
+		return TaskGraphRoundContinuation{},
+			fmt.Errorf("invalid TaskGraph next round response")
+	}
+	return result, nil
 }
 
 // ReconcileTaskGraphJoins advances only database-proven terminal Join state.

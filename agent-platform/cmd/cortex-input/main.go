@@ -476,6 +476,42 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(admission)
 	})
+	mux.HandleFunc("POST /internal/v1/task-graph-rounds", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string `json:"source_call_id"`
+			AttemptID       string `json:"attempt_id"`
+			LeaseGeneration int64  `json:"lease_generation"`
+			LeaseToken      string `json:"lease_token"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 8<<10,
+		))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid TaskGraph round request",
+				http.StatusBadRequest)
+			return
+		}
+		continuation, err := adapter.PrepareTaskGraphNextRound(
+			request.Context(), strings.TrimSpace(body.SourceCallID),
+			strings.TrimSpace(body.AttemptID), body.LeaseGeneration,
+			strings.TrimSpace(body.LeaseToken),
+		)
+		if err != nil {
+			log.Printf("Cortex TaskGraph next round failed: %v", err)
+			http.Error(w, "TaskGraph next round denied",
+				http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(continuation)
+	})
 	mux.HandleFunc("POST /internal/v1/tool-calls/web-fetch", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
