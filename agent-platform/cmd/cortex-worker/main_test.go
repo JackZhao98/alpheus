@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -134,6 +135,71 @@ func TestTaskGraphToolNodeSplitsOneFrozenOutputBudget(t *testing.T) {
 		MaxModelCalls: 1, MaxOutputTokens: 2400,
 	}); err == nil {
 		t.Fatal("single-call Tool node budget was accepted")
+	}
+}
+
+func TestTaskGraphProposalRequestIsBoundedAndCatalogBacked(t *testing.T) {
+	request := taskGraphProposalRequest(
+		"gpt-test", "Analyze TSLA with current price and financial context.",
+		workflowOutput{
+			Kind: "handoff", Target: "market_scout",
+			Objective: "Assess the setup.", Rationale: "Current facts matter.",
+		},
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok ||
+		!strings.Contains(instructions, "2 to 4 independent Specialist") ||
+		!strings.Contains(instructions, "kernel_equity_quotes") ||
+		!strings.Contains(instructions, "kernel_financials") ||
+		strings.Contains(instructions, "kernel_review_equity_order") {
+		t.Fatalf("TaskGraph proposal request is not bounded: %#v", request)
+	}
+	format := request["text"].(map[string]any)["format"].(map[string]any)
+	if format["name"] != "cortex_task_graph_proposal" ||
+		format["strict"] != true {
+		t.Fatalf("TaskGraph proposal schema is not strict: %#v", format)
+	}
+}
+
+func TestParseTaskGraphProposalOutputIsStrict(t *testing.T) {
+	valid := []byte(`{
+		"schema_revision":1,
+		"rationale":"parallel price and financial evidence",
+		"join_mode":"minimum_succeeded",
+		"branches":[
+			{"role_id":"market_scout","objective":"Inspect price.","tool_id":"kernel_equity_quotes"},
+			{"role_id":"fundamental_scout","objective":"Inspect statements.","tool_id":"kernel_financials"}
+		]
+	}`)
+	if _, err := parseTaskGraphProposalOutput(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalidOwner := bytes.Replace(
+		valid, []byte(`"role_id":"market_scout"`),
+		[]byte(`"role_id":"options_scout"`), 1,
+	)
+	if _, err := parseTaskGraphProposalOutput(invalidOwner); err == nil {
+		t.Fatal("wrong Tool owner passed proposal parser")
+	}
+	withAuthority := bytes.Replace(
+		valid, []byte(`"schema_revision":1`),
+		[]byte(`"schema_revision":1,"max_parallelism":99`), 1,
+	)
+	if _, err := parseTaskGraphProposalOutput(withAuthority); err == nil {
+		t.Fatal("proposal authority field passed")
+	}
+}
+
+func TestTaskGraphProposalTokenLimitIsBounded(t *testing.T) {
+	if got := taskGraphProposalTokenLimit(
+		workItem{MaxOutputTokens: 128000},
+	); got != 3000 {
+		t.Fatalf("large proposal token limit=%d", got)
+	}
+	if got := taskGraphProposalTokenLimit(
+		workItem{MaxOutputTokens: 8000},
+	); got != 1200 {
+		t.Fatalf("small proposal token limit=%d", got)
 	}
 }
 

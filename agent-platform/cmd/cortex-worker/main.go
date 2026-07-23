@@ -24,6 +24,7 @@ import (
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/runtimecontract"
 	"alpheus/agentplatform/security"
+	"alpheus/agentplatform/taskgraphproposal"
 	_ "github.com/lib/pq"
 )
 
@@ -341,6 +342,39 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 		return err
 	}
 	if intent.Workflow.Kind == "handoff" {
+		if item.TaskGraphProposalDigest != "" {
+			proposalTurn, err := w.executeModelTurnWithContract(
+				ctx, item, claim, started.AttemptGeneration,
+				taskGraphProposalRequest(
+					w.model, modelPrompt, intent.Workflow,
+				),
+				parseTaskGraphProposalOutput,
+				item.TaskGraphProposalDigest,
+				taskGraphProposalTokenLimit(item),
+			)
+			if err != nil {
+				return err
+			}
+			admission, err := w.admitTaskGraph(
+				ctx, proposalTurn.CallID, claim,
+			)
+			if err != nil {
+				failure := contracts.Failure{
+					Code:    "task_graph_admission_failed",
+					Message: bounded(err.Error()), Retryable: true,
+				}
+				_ = w.failAfterResolved(
+					ctx, item, claim, started.AttemptGeneration,
+					runtimecontract.RetryInfrastructure, failure,
+				)
+				return err
+			}
+			log.Printf(
+				"Cortex Intent Task %s admitted TaskGraph %s with %d nodes",
+				item.TaskID, admission.GraphID, admission.TaskCount,
+			)
+			return nil
+		}
 		admission, err := w.recordHandoff(ctx, intent.CallID, intent.Workflow)
 		if err != nil {
 			failure := contracts.Failure{Code: "handoff_record_failed", Message: bounded(err.Error()), Retryable: true}
@@ -831,6 +865,76 @@ func taskGraphSpecialistMemoRequest(
 			"schema": scoutMemoSchema(),
 		}},
 	}
+}
+
+func taskGraphProposalTokenLimit(item workItem) int64 {
+	limit := item.MaxOutputTokens / 8
+	if limit > 3000 {
+		limit = 3000
+	}
+	if limit < 1200 {
+		limit = 1200
+	}
+	return limit
+}
+
+func taskGraphProposalRequest(
+	model, prompt string,
+	intent workflowOutput,
+) map[string]any {
+	type toolChoice struct {
+		ToolID      string `json:"tool_id"`
+		RoleID      string `json:"role_id"`
+		Description string `json:"description"`
+	}
+	choices := make([]toolChoice, 0)
+	for _, tool := range capability.Catalog() {
+		roles := capability.AgentRolesForTool(tool.ID)
+		if tool.State != capability.CatalogStateActive ||
+			tool.Revision != 1 || tool.Effect != "read_only" ||
+			len(roles) != 1 {
+			continue
+		}
+		choices = append(choices, toolChoice{
+			ToolID: string(tool.ID), RoleID: string(roles[0]),
+			Description: tool.Description,
+		})
+	}
+	catalog, _ := json.Marshal(choices)
+	handoff, _ := json.Marshal(map[string]string{
+		"target": intent.Target, "objective": intent.Objective,
+		"rationale": intent.Rationale,
+	})
+	instructions := "You are Cortex's bounded research graph proposer. " +
+		"The prior Intent Interpreter requested this handoff: " +
+		string(handoff) +
+		". Decide which 2 to 4 independent Specialist branches can run concurrently before one Decision Desk synthesis. " +
+		"Use only installed role IDs. Each branch may name either no Tool or exactly one Tool from the catalog below, and the Tool's role_id must match the branch role_id. " +
+		"A no-Tool branch is useful for reasoning from the immutable conversation, but it must not claim current facts. " +
+		"Choose a Tool only when its evidence is materially required and its arguments can be derived from the user's request. " +
+		"Do not invent IDs, arguments, budgets, topology, permissions, or execution claims. " +
+		"Use join_mode=all_required only when every branch is indispensable; otherwise use minimum_succeeded. " +
+		"Installed read-only choices: " + string(catalog) +
+		". Return only JSON matching the proposal schema."
+	return map[string]any{
+		"model": model, "instructions": instructions,
+		"input": prompt, "store": false,
+		"max_output_tokens": 3000,
+		"reasoning":         map[string]any{"effort": "low"},
+		"text": map[string]any{"format": map[string]any{
+			"type":   "json_schema",
+			"name":   "cortex_task_graph_proposal",
+			"strict": true,
+			"schema": taskgraphproposal.OutputSchema(),
+		}},
+	}
+}
+
+func parseTaskGraphProposalOutput(raw []byte) (workflowOutput, error) {
+	if _, err := taskgraphproposal.DecodeStrict(raw); err != nil {
+		return workflowOutput{}, err
+	}
+	return workflowOutput{}, nil
 }
 
 func taskGraphDecisionDeskRequest(
@@ -1645,6 +1749,56 @@ type handoffAdmission struct {
 	ChildSessionID  string `json:"child_session_id"`
 	ParentTaskState string `json:"parent_task_state"`
 	ReasonCode      string `json:"reason_code"`
+}
+
+type taskGraphAdmission struct {
+	GraphID   string `json:"graph_id"`
+	RunID     string `json:"run_id"`
+	TaskCount int64  `json:"task_count"`
+}
+
+func (w *worker) admitTaskGraph(
+	ctx context.Context,
+	sourceCallID string,
+	claim claimResult,
+) (taskGraphAdmission, error) {
+	body, _ := json.Marshal(map[string]any{
+		"source_call_id":   sourceCallID,
+		"attempt_id":       claim.AttemptID,
+		"lease_generation": claim.LeaseGeneration,
+		"lease_token":      claim.LeaseToken,
+	})
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		w.controlURL+"/internal/v1/task-graphs",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return taskGraphAdmission{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+w.controlToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return taskGraphAdmission{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+		return taskGraphAdmission{}, fmt.Errorf(
+			"Control TaskGraph status %d", resp.StatusCode)
+	}
+	var admission taskGraphAdmission
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&admission) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		admission.GraphID == "" || admission.RunID == "" ||
+		admission.TaskCount < 3 || admission.TaskCount > 5 {
+		return taskGraphAdmission{},
+			fmt.Errorf("invalid Control TaskGraph admission response")
+	}
+	return admission, nil
 }
 
 func (w *worker) recordHandoff(ctx context.Context, callID string, handoff workflowOutput) (handoffAdmission, error) {
