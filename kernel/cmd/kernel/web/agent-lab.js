@@ -295,6 +295,23 @@ function renderTrace(job) {
       stage: event.stage,
       state: event.state,
       target_role: event.target_role,
+      graph_id: event.graph_id,
+      parent_task_id: event.parent_task_id,
+      task_id: event.task_id,
+      turn_id: event.turn_id,
+      role_id: event.role_id,
+      join_id: event.join_id,
+      join_policy: event.join_policy,
+      outcome: event.outcome,
+      artifact_id: event.artifact_id,
+      round: event.round,
+      max_rounds: event.max_rounds,
+      max_parallelism: event.max_parallelism,
+      task_count: event.task_count,
+      minimum_success: event.minimum_success,
+      nodes: event.nodes,
+      successful_task_ids: event.successful_task_ids,
+      failed_task_ids: event.failed_task_ids,
       tool_call_id: event.tool_call_id,
       tool_id: event.tool_id,
       receipt_id: event.receipt_id,
@@ -302,6 +319,117 @@ function renderTrace(job) {
     })),
   };
   byId("trace").textContent = JSON.stringify(summary, null, 2);
+  renderTaskGraph(trace);
+}
+
+const graphRoleLabels = {
+  market_scout: "Market Scout",
+  fundamental_scout: "Fundamental Scout",
+  options_scout: "Options Scout",
+  position_manager: "Position Manager",
+  catalyst_scout: "Catalyst Scout",
+  discovery_scout: "Discovery Scout",
+  decision_desk: "Decision Desk",
+};
+
+function graphNodeState(trace, taskID, roleID) {
+  const events = trace.filter((event) => event.task_id === taskID);
+  const latest = events[events.length - 1];
+  if (!latest) return {css:"waiting", label:"等待"};
+  if (latest.stage === "task_graph_succeeded" ||
+      latest.stage.endsWith("_completed")) {
+    return {css:"completed", label:"已完成"};
+  }
+  if (latest.stage.endsWith("_failed")) {
+    return {css:"failed", label:"失败"};
+  }
+  if (latest.stage.endsWith("_in_progress")) {
+    return {css:"running", label:"运行中"};
+  }
+  if (roleID === "decision_desk") return {css:"waiting", label:"等待汇合"};
+  return {css:"waiting", label:"已入场"};
+}
+
+function makeGraphNode(node, trace) {
+  const state = graphNodeState(trace, node.task_id, node.role_id);
+  const card = document.createElement("div");
+  card.className = `task-graph-node ${state.css}` +
+    (node.role_id === "decision_desk" ? " task-graph-desk" : "");
+  const title = document.createElement("strong");
+  title.textContent = graphRoleLabels[node.role_id] || node.role_id;
+  const status = document.createElement("span");
+  status.textContent = `${state.label} · 深度 ${node.depth}`;
+  card.append(title, status);
+  if (node.tool_id) {
+    const tool = document.createElement("span");
+    tool.textContent = `Tool：${node.tool_id}`;
+    card.append(tool);
+  }
+  return card;
+}
+
+function renderTaskGraph(trace) {
+  const panel = byId("task-graph-panel");
+  const target = byId("task-graph");
+  const admitted = trace.find((event) => event.stage === "task_graph_admitted");
+  if (!admitted || !Array.isArray(admitted.nodes)) {
+    panel.hidden = true;
+    target.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  const succeeded = trace.some((event) => event.stage === "task_graph_succeeded");
+  const failed = trace.some((event) => event.stage === "task_graph_join_failed");
+  byId("task-graph-status").textContent = succeeded
+    ? "已完成"
+    : failed ? "汇合失败" : "运行中";
+
+  const meta = document.createElement("div");
+  meta.className = "task-graph-meta";
+  for (const text of [
+    `第 ${admitted.round || 1}/${admitted.max_rounds || 1} 轮`,
+    `${admitted.task_count || admitted.nodes.length} 个节点`,
+    `最多 ${admitted.max_parallelism || 1} 路并行`,
+  ]) {
+    const chip = document.createElement("span");
+    chip.className = "task-graph-chip";
+    chip.textContent = text;
+    meta.append(chip);
+  }
+
+  const branches = admitted.nodes.filter((node) => node.role_id !== "decision_desk");
+  const desk = admitted.nodes.find((node) => node.role_id === "decision_desk");
+  const lanes = document.createElement("div");
+  lanes.className = "task-graph-lanes";
+  lanes.append(...branches.map((node) => makeGraphNode(node, trace)));
+
+  const arrowOne = document.createElement("div");
+  arrowOne.className = "task-graph-arrow";
+  arrowOne.textContent = "↓";
+  const joinEvent = [...trace].reverse().find((event) =>
+    event.stage === "task_graph_join_ready" ||
+    event.stage === "task_graph_join_failed");
+  const join = document.createElement("div");
+  join.className = "task-graph-join " +
+    (joinEvent?.stage === "task_graph_join_ready"
+      ? "completed"
+      : joinEvent?.stage === "task_graph_join_failed" ? "failed" : "");
+  const joinTitle = document.createElement("strong");
+  joinTitle.textContent = "Join 汇合屏障";
+  const joinStatus = document.createElement("span");
+  joinStatus.textContent = joinEvent
+    ? `${joinEvent.outcome === "ready" ? "已放行" : "未通过"} · ${joinEvent.join_policy || "受控策略"}`
+    : "等待并行分支";
+  join.append(joinTitle, joinStatus);
+
+  const nodes = [meta, lanes, arrowOne, join];
+  if (desk) {
+    const arrowTwo = document.createElement("div");
+    arrowTwo.className = "task-graph-arrow";
+    arrowTwo.textContent = "↓";
+    nodes.push(arrowTwo, makeGraphNode(desk, trace));
+  }
+  target.replaceChildren(...nodes);
 }
 
 async function restoreSession() {

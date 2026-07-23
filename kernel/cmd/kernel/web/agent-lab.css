@@ -51,6 +51,22 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .tool-test-result { min-height:0; max-height:280px; margin:12px 0 0; padding:12px; font-size:12px; }
 .tool-test-candidates { margin-top:14px; padding:0 12px 12px; border:1px solid #284d41; border-radius:12px; background:rgba(1,8,6,.3); }
 .tool-test-candidates > summary { padding:12px 0; color:#bdd0c7; font-size:13px; }
+.task-graph-panel { margin-top:28px; padding:0 14px 14px; border:1px solid #2d6654; border-radius:14px; background:rgba(5,20,16,.7); }
+.task-graph-panel[hidden] { display:none; }
+.task-graph-panel > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 0; color:#d9f4e8; font-weight:850; cursor:pointer; }
+.task-graph-panel > summary strong { color:#72dfb4; font-size:12px; letter-spacing:.04em; }
+.task-graph { display:grid; gap:12px; margin-top:12px; }
+.task-graph-meta { display:flex; flex-wrap:wrap; gap:8px; }
+.task-graph-chip { padding:5px 8px; border:1px solid #315e50; border-radius:999px; color:#a6beb4; background:#0a1b16; font-size:11px; }
+.task-graph-lanes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.task-graph-node,.task-graph-join { padding:12px; border:1px solid #284d41; border-radius:12px; background:rgba(3,12,9,.74); }
+.task-graph-node strong,.task-graph-join strong { display:block; margin-bottom:5px; color:#d9f4e8; font-size:13px; overflow-wrap:anywhere; }
+.task-graph-node span,.task-graph-join span { display:block; color:#86a59a; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.task-graph-node.running { border-color:#4d9079; box-shadow:inset 3px 0 #4d9079; }
+.task-graph-node.completed,.task-graph-join.completed { border-color:#397761; box-shadow:inset 3px 0 #3bd79f; }
+.task-graph-node.failed,.task-graph-join.failed { border-color:#7e4646; box-shadow:inset 3px 0 #ff8080; }
+.task-graph-arrow { color:#72dfb4; text-align:center; font-size:18px; line-height:1; }
+.task-graph-desk { border-color:#527a91; background:rgba(8,25,34,.72); }
 .collector-config { margin:4px 0 10px; padding:14px; border:1px solid #244b3e; border-radius:12px; background:rgba(6,19,15,.55); }
 .collector-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; align-items:center; }
 .collector-controls label { margin:0; }
@@ -83,4 +99,5 @@ pre { min-height:190px; max-height:55vh; overflow:auto; padding:18px; border-rad
   nav { flex-direction:column; align-items:flex-end; }
   .tool-test-row-head,.tool-test-controls { align-items:flex-start; flex-direction:column; }
   .tool-test-badge,.tool-test-run { width:100%; text-align:center; }
+  .task-graph-lanes { grid-template-columns:1fr; }
 }

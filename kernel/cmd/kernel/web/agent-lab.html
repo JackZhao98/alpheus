@@ -95,6 +95,14 @@
       <div id="conversation" class="conversation" aria-live="polite"><p class="field-note">后续问题会沿用同一个 Cortex Conversation；历史来自已持久化的 UserRequest 和回答 Artifact。</p></div>
       <div class="result-head"><span>结果</span><strong id="status">READY</strong></div>
       <pre id="result">提交一个问题开始测试。</pre>
+      <details id="task-graph-panel" class="task-graph-panel" hidden>
+        <summary>
+          <span>多 Agent 执行图</span>
+          <strong id="task-graph-status">未启动</strong>
+        </summary>
+        <p class="field-note">这里展示 Cortex 实际持久化的并行分支、汇合屏障和最终 Decision Desk，不根据回答文本猜测。</p>
+        <div id="task-graph" class="task-graph" aria-live="polite"></div>
+      </details>
       <div class="result-head"><span>运行 Trace（调试）</span><strong id="trace-status">NO JOB</strong></div>
       <pre id="trace">提交后会显示 Cortex 的持久化 Turn、handoff、Tool 授权、收据和 continuation。不会显示 prompt、密钥或完整内部请求。</pre>
       <p id="query-error" class="error" role="alert"></p>
