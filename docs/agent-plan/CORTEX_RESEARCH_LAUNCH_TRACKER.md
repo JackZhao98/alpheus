@@ -71,6 +71,8 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   `2026-07-22T20:00:00Z` 的来源时间和
   `2026-07-23T10:02:47.922246Z` 的抓取时间分开。
 - Agent Lab 当前为 37/37 已启用；`market_gexbot_live` 有独立精准测试行。
+- 4,215 条旧 GEX 观察值已完成一次性导入，`gexbot-legacy-import` 已从
+  Compose 删除；导入源码仅作为灾难恢复工具保留，不再生成容器。
 
 ## 本次 Moody Blues 接口
 

@@ -194,24 +194,6 @@ services:
       gexbot-provider-secret-export: { condition: service_completed_successfully }
     restart: unless-stopped
 
-  # A root-only, idempotent import keeps the old dashboard history readable
-  # while moving every raw payload into Provider-owned Blob retention. It has
-  # no runtime dependency and may be removed after the migration window.
-  gexbot-legacy-import:
-    build:
-      context: .
-      dockerfile: agent-platform/Dockerfile.gexbot-legacy-import
-    environment:
-      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
-      GEXBOT_PROVIDER_URL: http://gexbot-provider:8500
-      GEXBOT_PROVIDER_INGEST_TOKEN_FILE: /run/secrets/cortex/gexbot-provider-ingest-token
-      GEXBOT_LEGACY_IMPORT_LIMIT: ${GEXBOT_LEGACY_IMPORT_LIMIT:-50000}
-    volumes:
-      - ./.secrets/cortex:/run/secrets/cortex:ro
-    depends_on:
-      gexbot-provider: { condition: service_healthy }
-    restart: "no"
-
   cortex-activator-login:
     image: postgres:16-alpine
     environment:
