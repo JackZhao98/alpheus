@@ -249,11 +249,25 @@ Tasks; and a database-owned per-Graph schedule atomically accounts
 `ready → running` slots separately from the wider Run ledger. Its rollback
 probe starts two nodes at `max_parallelism=2`, rejects a third concurrent
 claim, and proves slot release/reacquisition. Tool-granted nodes and Decision
-Desk nodes remain undiscoverable until their dedicated Tool and P4 Join
-boundaries are active. The staged TODO is tracked in
+Desk nodes remained undiscoverable until their dedicated boundaries were
+reviewed. P4 is now complete: Control resolves `all_required` and
+`minimum_succeeded` barriers only after every upstream Task is terminal,
+binds only committed required memo sections into the downstream Session,
+grants narrowly scoped Worker read ACLs, and atomically releases the blocked
+Decision Desk. Failed thresholds dead-letter the downstream Task, parked root
+Task and Run; successful Desk output remains the exact child Artifact that
+produced it, while an immutable graph-result row records promotion and the
+parked root Task is superseded. Both success and failure close every node and
+parent Session and close the graph schedule. Worker discovery and prompts now
+consume the exact joined memo list and produce a strict `answer_v1` response.
+The rollback audit covers ready-gating, two-lane parallel accounting, failed
+Join closure, successful result promotion, result reads, terminal Session
+lifecycle and immediate deferred-constraint validation. The staged TODO is
+tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
-P4 now adds explicit fan-in policies, followed by bounded iterative research,
-DAG Trace/UI, and concurrency/failure acceptance.
+P5 next enables separately authorized read-only Tool nodes and the Moody Blues
+normalization context, followed by bounded iterative research, DAG Trace/UI,
+and concurrency/failure acceptance.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the
