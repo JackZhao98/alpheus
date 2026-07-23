@@ -1,6 +1,7 @@
 package taskgraphplanner
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +122,13 @@ func TestBuildExpandsProposalIntoDeterministicFanoutJoin(t *testing.T) {
 		first.Plan.Nodes[1].Limit.MaxModelCalls != 1 ||
 		first.Plan.Nodes[2].RoleID != "decision_desk" {
 		t.Fatalf("unexpected expanded plan: %+v", first.Plan)
+	}
+	encoded, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"tool_grants":null`) {
+		t.Fatal("empty Tool grants must be encoded as an array")
 	}
 	join := first.Plan.Joins[0]
 	if string(join.Policy) != "minimum_succeeded" ||

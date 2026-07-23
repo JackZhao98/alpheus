@@ -71,7 +71,7 @@ func Build(
 		)
 		taskID := fmt.Sprintf("%s-branch-%02d", graphID, index+1)
 		limit := specialistLimit(branch.ToolID != "")
-		var grants []taskgraphcontract.ToolGrantSnapshot
+		grants := []taskgraphcontract.ToolGrantSnapshot{}
 		if branch.ToolID != "" {
 			tool, _ := capability.LookupTool(capability.ToolID(branch.ToolID))
 			grants = []taskgraphcontract.ToolGrantSnapshot{{
