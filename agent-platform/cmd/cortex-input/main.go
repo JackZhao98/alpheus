@@ -21,6 +21,7 @@ import (
 	"alpheus/agentplatform/outputcontract"
 	"alpheus/agentplatform/security"
 	"alpheus/agentplatform/taskgraphproposal"
+	"alpheus/agentplatform/taskgraphround"
 	_ "github.com/lib/pq"
 )
 
@@ -203,6 +204,7 @@ func run() error {
 		},
 	}
 	taskGraphProposalSchema := taskgraphproposal.OutputSchema()
+	taskGraphRoundSchema := taskgraphround.OutputSchema()
 	answerSchemaRaw, err := json.Marshal(answerSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex answer schema: %w", err)
@@ -242,6 +244,10 @@ func run() error {
 	taskGraphProposalSchemaRaw, err := json.Marshal(taskGraphProposalSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex TaskGraph proposal schema: %w", err)
+	}
+	taskGraphRoundSchemaRaw, err := json.Marshal(taskGraphRoundSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex TaskGraph round schema: %w", err)
 	}
 	answerSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", answerSchema)
@@ -293,9 +299,26 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex TaskGraph proposal schema: %w", err)
 	}
+	taskGraphRoundSchemaRef, err := adapter.CommitControlJSON(
+		ctx, "output_contract_schema",
+		"cortex-task-graph-round-schema-v1",
+		"agent-platform.contract.output_contract_schema.v1",
+		taskGraphRoundSchema,
+	)
+	if err != nil {
+		return fmt.Errorf("commit Cortex TaskGraph round schema: %w", err)
+	}
 	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, scoutMemoSchemaRef, taskGraphProposalSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
+	}
+	runtimeDefinitions.TaskGraphRoundOutputContractDigest, err =
+		adapter.EnsureTaskGraphRoundOutputContract(
+			ctx, taskGraphRoundSchemaRef,
+		)
+	if err != nil {
+		return fmt.Errorf(
+			"select Cortex TaskGraph round output contract: %w", err)
 	}
 	outputSchemas := map[string][]byte{
 		runtimeDefinitions.AnswerOutputContractDigest:             answerSchemaRaw,
@@ -308,6 +331,7 @@ func run() error {
 		runtimeDefinitions.LiveWorkflowOutputContractDigest:       liveWorkflowSchemaRaw,
 		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
 		runtimeDefinitions.TaskGraphProposalOutputContractDigest:  taskGraphProposalSchemaRaw,
+		runtimeDefinitions.TaskGraphRoundOutputContractDigest:     taskGraphRoundSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {

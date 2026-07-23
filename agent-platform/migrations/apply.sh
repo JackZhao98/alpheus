@@ -170,5 +170,6 @@ run_sql agent-platform/migrations/0087_cortex_task_graph_parked_slot.sql 0087_co
 run_sql agent-platform/migrations/0088_cortex_task_graph_trace.sql 0088_cortex_task_graph_trace
 run_sql agent-platform/migrations/0089_cortex_expired_run_recovery.sql 0089_cortex_expired_run_recovery
 run_sql agent-platform/migrations/0090_cortex_expired_run_trace.sql 0090_cortex_expired_run_trace
+run_sql agent-platform/migrations/0091_cortex_task_graph_round_contract.sql 0091_cortex_task_graph_round_contract
 
 echo "agent-platform migration bootstrap complete"
