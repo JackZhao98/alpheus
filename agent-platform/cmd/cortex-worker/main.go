@@ -1160,8 +1160,10 @@ func taskGraphToolMemoRequest(
 // manifest reservation remains database-enforced for every individual call.
 func modelOutputTokenLimit(item workItem) int64 {
 	limit := int64(2000)
-	if item.Role == "scout" ||
-		item.TaskGraphID != "" && item.Role != "decision_desk" {
+	if item.TaskGraphID != "" && item.Role == "decision_desk" {
+		limit = 6000
+	} else if item.Role == "scout" ||
+		item.TaskGraphID != "" {
 		limit = 4000
 	}
 	if item.MaxOutputTokens > 0 && item.MaxOutputTokens < limit {

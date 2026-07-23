@@ -85,8 +85,15 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 	}
 	if got := modelOutputTokenLimit(workItem{
 		Role: "decision_desk", TaskGraphID: "graph-1",
-	}); got != 2000 {
+		MaxOutputTokens: 8000,
+	}); got != 6000 {
 		t.Fatalf("TaskGraph Decision Desk output token limit=%d", got)
+	}
+	if got := modelOutputTokenLimit(workItem{
+		Role: "decision_desk", TaskGraphID: "graph-1",
+		MaxOutputTokens: 3500,
+	}); got != 3500 {
+		t.Fatalf("bounded TaskGraph Decision Desk output token limit=%d", got)
 	}
 }
 
