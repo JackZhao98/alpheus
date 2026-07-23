@@ -423,6 +423,15 @@ type TaskGraphJoinReconciliation struct {
 	CompletedGraphs int64  `json:"completed_graphs"`
 }
 
+type ExpiredRunReconciliation struct {
+	Status               string `json:"status"`
+	RecoveredRuns        int64  `json:"recovered_runs"`
+	TerminalizedTurns    int64  `json:"terminalized_turns"`
+	TerminalizedAttempts int64  `json:"terminalized_attempts"`
+	ClosedSessions       int64  `json:"closed_sessions"`
+	TerminalizedTasks    int64  `json:"terminalized_tasks"`
+}
+
 type CortexRunResult struct {
 	RunID string             `json:"run_id"`
 	State string             `json:"state"`
@@ -1628,6 +1637,40 @@ func (adapter *PostgresAdapter) ReconcileTaskGraphJoins(
 		result.ReadyJoins+result.FailedJoins != result.ResolvedJoins {
 		return TaskGraphJoinReconciliation{},
 			fmt.Errorf("invalid TaskGraph Join reconciliation response")
+	}
+	return result, nil
+}
+
+// ReconcileExpiredRuns atomically closes bounded Cortex execution trees whose
+// immutable Run deadline has passed. The database owns selection, locks,
+// accounting, terminal states and audit events; this adapter only schedules
+// the Control command.
+func (adapter *PostgresAdapter) ReconcileExpiredRuns(
+	ctx context.Context, limit int,
+) (ExpiredRunReconciliation, error) {
+	if adapter == nil || adapter.db == nil || limit < 1 || limit > 32 {
+		return ExpiredRunReconciliation{},
+			fmt.Errorf("invalid expired Run reconciler")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.reconcile_expired_cortex_runs($1)::TEXT`,
+			limit,
+		).Scan(&raw)
+	})
+	if err != nil {
+		return ExpiredRunReconciliation{},
+			fmt.Errorf("reconcile expired Cortex Runs: %w", err)
+	}
+	var result ExpiredRunReconciliation
+	if json.Unmarshal(raw, &result) != nil || result.Status != "reconciled" ||
+		result.RecoveredRuns < 0 || result.RecoveredRuns > int64(limit) ||
+		result.TerminalizedTurns < 0 || result.TerminalizedAttempts < 0 ||
+		result.ClosedSessions < 0 || result.TerminalizedTasks < 0 {
+		return ExpiredRunReconciliation{},
+			fmt.Errorf("invalid expired Run reconciliation response")
 	}
 	return result, nil
 }

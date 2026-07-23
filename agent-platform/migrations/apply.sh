@@ -168,5 +168,6 @@ run_sql agent-platform/migrations/0085_cortex_manifest_guard_definer.sql 0085_co
 run_sql agent-platform/migrations/0086_cortex_task_graph_parent_slot_release.sql 0086_cortex_task_graph_parent_slot_release
 run_sql agent-platform/migrations/0087_cortex_task_graph_parked_slot.sql 0087_cortex_task_graph_parked_slot
 run_sql agent-platform/migrations/0088_cortex_task_graph_trace.sql 0088_cortex_task_graph_trace
+run_sql agent-platform/migrations/0089_cortex_expired_run_recovery.sql 0089_cortex_expired_run_recovery
 
 echo "agent-platform migration bootstrap complete"
