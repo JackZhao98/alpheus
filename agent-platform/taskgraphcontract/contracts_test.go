@@ -136,6 +136,14 @@ func TestTaskGraphPlanRejectsUnsafeGraphs(t *testing.T) {
 		"tool revision drift": func(value *TaskGraphPlan) {
 			value.Nodes[0].ToolGrants[0].ToolRevision = 2
 		},
+		"specialist latent tool budget": func(value *TaskGraphPlan) {
+			value.Nodes[0].Limit.MaxToolCalls = 2
+			value.AuthorizedLimit.MaxToolCalls++
+		},
+		"desk latent tool budget": func(value *TaskGraphPlan) {
+			value.Nodes[2].Limit.MaxToolCalls = 1
+			value.AuthorizedLimit.MaxToolCalls++
+		},
 		"desk tool escalation": func(value *TaskGraphPlan) {
 			value.Nodes[2].ToolGrants = []ToolGrantSnapshot{{
 				ToolID: "kernel_equity_quotes", ToolRevision: 1, Effect: "read_only",

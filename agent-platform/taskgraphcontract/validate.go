@@ -59,7 +59,8 @@ func (value TaskGraphNode) validate(createdAt, graphDeadline time.Time) error {
 
 	maxTools := uint16(0)
 	if value.RoleID == DecisionDeskRole {
-		if value.RoleRevision != 1 || value.OutputContractName != "answer_v1" || len(value.ToolGrants) != 0 {
+		if value.RoleRevision != 1 || value.OutputContractName != "answer_v1" ||
+			len(value.ToolGrants) != 0 || value.Limit.MaxToolCalls != 0 {
 			return ErrInvalidTaskGraph
 		}
 	} else {
@@ -68,7 +69,8 @@ func (value TaskGraphNode) validate(createdAt, graphDeadline time.Time) error {
 			return ErrInvalidTaskGraph
 		}
 		maxTools = role.MaxToolCalls
-		if value.OutputContractName != role.OutputContract {
+		if value.OutputContractName != role.OutputContract ||
+			value.Limit.MaxToolCalls > int64(maxTools) {
 			return ErrInvalidTaskGraph
 		}
 	}
