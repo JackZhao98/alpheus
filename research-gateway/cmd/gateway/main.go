@@ -95,6 +95,7 @@ func run() error {
 	mux.HandleFunc("POST /v1/web/search", g.webSearch)
 	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/web-fetch", g.cortexWebFetch)
+	mux.HandleFunc("POST /internal/v1/cortex-tools/gexbot-as-of", g.cortexGEXBOTAsOfTool)
 	mux.HandleFunc("POST /internal/v1/gexbot/as-of", g.cortexGEXBOTAsOf)
 	mux.HandleFunc("POST /internal/v1/gexbot/replays", g.cortexGEXBOTReplay)
 	mux.HandleFunc("POST /internal/v1/gexbot/replays/{id}/next", g.cortexGEXBOTReplayNext)

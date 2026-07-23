@@ -422,6 +422,24 @@ type CortexWebFetchResult struct {
 	Evidence capability.WebFetchEvidence `json:"evidence"`
 }
 
+// GEXBOTAsOfAuthorization is the one read-only historical observation Tool
+// that is currently installed.  It names an archived Provider series and an
+// exact availability fence, never a provider endpoint or credential.
+type GEXBOTAsOfAuthorization struct {
+	Status        string    `json:"status"`
+	ToolCallID    string    `json:"tool_call_id"`
+	ToolID        string    `json:"tool_id"`
+	RequestDigest string    `json:"request_digest"`
+	Symbol        string    `json:"symbol"`
+	Category      string    `json:"category"`
+	AsOf          time.Time `json:"as_of"`
+}
+
+type CortexGEXBOTAsOfResult struct {
+	Receipt  capability.GEXBOTToolReceipt  `json:"receipt"`
+	Evidence capability.GEXBOTAsOfEvidence `json:"evidence"`
+}
+
 // WebFetchRecoveryClaim is a short-lived Control-owned lease over an already
 // immutable Tool intent.  It is intentionally not a Worker lease: recovery
 // must never impersonate or revive the Worker that originally authorized it.
@@ -547,6 +565,65 @@ func (adapter *PostgresAdapter) RecordWebFetchReceipt(ctx context.Context, resul
 		if json.Unmarshal(raw, &response) != nil || response.Status != "recorded" || response.ReceiptID != result.Receipt.ReceiptID ||
 			response.EvidenceID != result.Evidence.EvidenceID {
 			return fmt.Errorf("Research receipt acknowledgement mismatch")
+		}
+		return nil
+	})
+}
+
+func (adapter *PostgresAdapter) AuthorizeGEXBOTAsOf(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken string, request capability.GEXBOTAsOfRequest) (GEXBOTAsOfAuthorization, error) {
+	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 || leaseToken == "" || request.Validate() != nil || request.AsOf.After(time.Now().UTC()) {
+		return GEXBOTAsOfAuthorization{}, fmt.Errorf("invalid Cortex GEXBOT authorization")
+	}
+	// PostgreSQL timestamps are stored at microsecond precision. Canonicalize
+	// before the immutable intent is derived so a provider receipt can prove
+	// the exact same as_of fence on a retry.
+	request.AsOf = request.AsOf.UTC().Truncate(time.Microsecond)
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.authorize_cortex_gexbot_as_of($1,$2,$3,$4::UUID,$5,$6,$7)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken, request.Symbol, request.Category, request.AsOf.UTC()).Scan(&raw)
+	})
+	if err != nil {
+		return GEXBOTAsOfAuthorization{}, fmt.Errorf("authorize Cortex GEXBOT: %w", err)
+	}
+	var result GEXBOTAsOfAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Status != "authorized" || result.ToolCallID == "" ||
+		result.ToolID != string(capability.ToolResearchGEXBOTAsOf) || result.RequestDigest == "" || result.Symbol != request.Symbol ||
+		result.Category != request.Category || !result.AsOf.Equal(request.AsOf) {
+		return GEXBOTAsOfAuthorization{}, fmt.Errorf("Cortex GEXBOT authorization was denied or mismatched")
+	}
+	return result, nil
+}
+
+// RecordGEXBOTAsOfReceipt proves the normalized historical observation was
+// persisted by Research Gateway for this exact Tool intent.  Raw Provider
+// bytes cannot be manufactured by a Worker or passed through this method.
+func (adapter *PostgresAdapter) RecordGEXBOTAsOfReceipt(ctx context.Context, result CortexGEXBOTAsOfResult) error {
+	if adapter == nil || adapter.db == nil || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != result.Evidence.ToolCallID || result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID ||
+		result.Receipt.Evidence.RecordDigest == "" {
+		return fmt.Errorf("invalid Research GEXBOT receipt")
+	}
+	receiptRaw, err := json.Marshal(result.Receipt)
+	if err != nil {
+		return err
+	}
+	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var raw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_gexbot_tool_receipt($1,$2::JSONB)::TEXT`,
+			result.Receipt.ToolCallID, string(receiptRaw)).Scan(&raw); err != nil {
+			return err
+		}
+		var response struct {
+			Status     string `json:"status"`
+			ReceiptID  string `json:"receipt_id"`
+			EvidenceID string `json:"evidence_id"`
+		}
+		if json.Unmarshal(raw, &response) != nil || response.Status != "recorded" || response.ReceiptID != result.Receipt.ReceiptID ||
+			response.EvidenceID != result.Evidence.EvidenceID {
+			return fmt.Errorf("Research GEXBOT receipt acknowledgement mismatch")
 		}
 		return nil
 	})
@@ -904,16 +981,17 @@ func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request b
 }
 
 type RuntimeDefinitions struct {
-	AnswerOutputContractDigest        string
-	WorkflowOutputContractDigest      string
-	ScoutWorkflowOutputContractDigest string
-	ScoutMemoOutputContractDigest     string
+	AnswerOutputContractDigest         string
+	WorkflowOutputContractDigest       string
+	ScoutWorkflowOutputContractDigest  string
+	GEXBOTWorkflowOutputContractDigest string
+	ScoutMemoOutputContractDigest      string
 }
 
-func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
-	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
-		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
-		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
+func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, gexbotWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
+	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || gexbotWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
+		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || gexbotWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
+		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || gexbotWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
 		return RuntimeDefinitions{}, fmt.Errorf("invalid Cortex output schema BlobRef")
 	}
 	answerRaw, err := json.Marshal(answerSchema)
@@ -929,6 +1007,10 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 		return RuntimeDefinitions{}, err
 	}
 	workflowRaw, err := json.Marshal(workflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	gexbotWorkflowRaw, err := json.Marshal(gexbotWorkflowSchema)
 	if err != nil {
 		return RuntimeDefinitions{}, err
 	}
@@ -960,6 +1042,13 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 			return fmt.Errorf("Cortex Scout workflow output contract was not selected")
 		}
 		definitions.ScoutWorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v4($1::JSONB)::TEXT`, string(gexbotWorkflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex GEXBOT workflow output contract was not selected")
+		}
+		definitions.GEXBOTWorkflowOutputContractDigest = response.OutputContractDigest
 		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_scout_memo_output_contract($1::JSONB)::TEXT`, string(scoutMemoRaw)).Scan(&responseRaw); err != nil {
 			return err
 		}
@@ -1005,7 +1094,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v4($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v5($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)

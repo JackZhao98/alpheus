@@ -62,9 +62,17 @@
   the GEXBot upstream credential or raw payload. The existing 4,215 historical
   Kernel observations were imported one-for-one with the original collector
   availability time and Provider-owned Blob references. Kernel no longer starts
-  a GEXBot collector. This is a Research Data Plane foundation, not an active
-  Cortex GEX Tool/Capability Registry entry, a Scout grant, or an options
-  execution feature.
+  a GEXBot collector. One deliberately narrow, pre-registry Cortex Tool is now
+  deployed: the immutable Intent output may propose exactly one SPX
+  `research_gexbot_as_of` snapshot; Control binds its source Model result,
+  Worker lease, budget and `as_of` fence; Research Gateway records a durable
+  normalized evidence/receipt pair before Desk can consume it. It exposes no
+  Provider credential or raw payload, and it does not collect, mutate, or
+  submit an order. Live proof: Run
+  `e13d25aa-595c-4d92-ab2f-02dcc96e879e` recorded both
+  `tool_call_authorized` and `tool_receipt_succeeded` before Decision Desk
+  completed. General AP3 registration/discovery, a Scout grant, and an
+  Agent-facing replay/stream Tool remain later work.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record

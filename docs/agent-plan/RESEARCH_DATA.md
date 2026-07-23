@@ -197,11 +197,16 @@ but Kernel no longer schedules GEXBot requests or owns fresh snapshots.
 Neither form is a Kernel Provider, an execution Plugin, or an authority to
 permit an order.
 
-The generalized registration still belongs in AP3's Capability Registry; the
-Provider foundation does not itself activate a Cortex Tool or grant it to a
-Scout. The Plugin must have a credential-isolated connector and expose one or
-more versioned read capabilities. It must not receive a Robinhood mutation
-credential, a Kernel mutation path, or a Delegation grant.
+The generalized registration still belongs in AP3's Capability Registry. Until
+then, one intentionally narrow pre-registry path is deployed: an immutable
+Cortex Intent can propose one `research_gexbot_as_of` SPX snapshot, Cortex
+Control binds the Tool intent/budget/lease, and Research Gateway persists a
+normalized evidence/receipt pair before Decision Desk sees it. The model has
+no Provider URL, credential, raw payload, collection control, replay cursor or
+generic query surface. Replay remains a Provider/Gateway simulation API for
+evaluation work; it is not yet an Agent-facing stream Tool or a Scout grant.
+The Plugin must not receive a Robinhood mutation credential, a Kernel mutation
+path, or a Delegation grant.
 
 Each collection result must preserve:
 

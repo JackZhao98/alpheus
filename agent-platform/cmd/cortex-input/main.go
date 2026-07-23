@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"alpheus/agentplatform/blob"
+	"alpheus/agentplatform/capability"
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputgateway"
 	"alpheus/agentplatform/outputcontract"
@@ -107,6 +108,23 @@ func run() error {
 			"text":      map[string]any{"type": "string", "maxLength": 16000},
 		},
 	}
+	gexbotWorkflowSchema := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"kind", "target", "objective", "rationale", "text", "gexbot_action", "gexbot_symbol", "gexbot_category", "gexbot_as_of"},
+		"properties": map[string]any{
+			"kind":            map[string]any{"type": "string", "enum": []string{"answer", "handoff"}},
+			"target":          map[string]any{"type": "string", "enum": []string{"desk", "scout", "user"}},
+			"objective":       map[string]any{"type": "string", "maxLength": 4000},
+			"rationale":       map[string]any{"type": "string", "maxLength": 4000},
+			"text":            map[string]any{"type": "string", "maxLength": 16000},
+			"gexbot_action":   map[string]any{"type": "string", "enum": []string{"none", "as_of"}},
+			"gexbot_symbol":   map[string]any{"type": "string", "maxLength": 16},
+			"gexbot_category": map[string]any{"type": "string", "enum": []string{"", "gex_full", "gex_zero", "gex_one"}},
+			"gexbot_as_of":    map[string]any{"type": "string", "maxLength": 64},
+		},
+	}
 	scoutMemoSchema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
@@ -130,6 +148,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("encode Cortex Scout workflow schema: %w", err)
 	}
+	gexbotWorkflowSchemaRaw, err := json.Marshal(gexbotWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex GEXBOT workflow schema: %w", err)
+	}
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex Scout memo schema: %w", err)
@@ -149,20 +171,26 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout workflow schema: %w", err)
 	}
+	gexbotWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v4",
+		"agent-platform.contract.output_contract_schema.v1", gexbotWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex GEXBOT workflow schema: %w", err)
+	}
 	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, scoutMemoSchemaRef)
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, scoutMemoSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
 	outputSchemas := map[string][]byte{
-		runtimeDefinitions.AnswerOutputContractDigest:        answerSchemaRaw,
-		runtimeDefinitions.WorkflowOutputContractDigest:      workflowSchemaRaw,
-		runtimeDefinitions.ScoutWorkflowOutputContractDigest: scoutWorkflowSchemaRaw,
-		runtimeDefinitions.ScoutMemoOutputContractDigest:     scoutMemoSchemaRaw,
+		runtimeDefinitions.AnswerOutputContractDigest:         answerSchemaRaw,
+		runtimeDefinitions.WorkflowOutputContractDigest:       workflowSchemaRaw,
+		runtimeDefinitions.ScoutWorkflowOutputContractDigest:  scoutWorkflowSchemaRaw,
+		runtimeDefinitions.GEXBOTWorkflowOutputContractDigest: gexbotWorkflowSchemaRaw,
+		runtimeDefinitions.ScoutMemoOutputContractDigest:      scoutMemoSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
@@ -318,6 +346,55 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+	mux.HandleFunc("POST /internal/v1/tool-calls/gexbot-as-of", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string    `json:"source_call_id"`
+			AttemptID       string    `json:"attempt_id"`
+			LeaseGeneration int64     `json:"lease_generation"`
+			LeaseToken      string    `json:"lease_token"`
+			Symbol          string    `json:"symbol"`
+			Category        string    `json:"category"`
+			AsOf            time.Time `json:"as_of"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid tool call", http.StatusBadRequest)
+			return
+		}
+		toolRequest := capability.GEXBOTAsOfRequest{Symbol: strings.ToUpper(strings.TrimSpace(body.Symbol)), Category: strings.TrimSpace(body.Category), AsOf: body.AsOf.UTC()}
+		authorization, err := adapter.AuthorizeGEXBOTAsOf(request.Context(), strings.TrimSpace(body.SourceCallID), strings.TrimSpace(body.AttemptID),
+			body.LeaseGeneration, strings.TrimSpace(body.LeaseToken), toolRequest)
+		if err != nil {
+			log.Printf("Cortex GEXBOT authorization failed: %v", err)
+			http.Error(w, "tool authorization denied", http.StatusForbidden)
+			return
+		}
+		result, err := invokeResearchGEXBOTAsOf(request.Context(), researchHTTP, researchURL, researchToken, authorization.ToolCallID)
+		if err != nil {
+			log.Printf("Research GEXBOT as_of failed for %s: %v", authorization.ToolCallID, err)
+			http.Error(w, "research tool unavailable", http.StatusBadGateway)
+			return
+		}
+		if result.Receipt.ToolCallID != authorization.ToolCallID || result.Receipt.ToolID != capability.ToolResearchGEXBOTAsOf ||
+			result.Receipt.RequestDigest != authorization.RequestDigest || result.Evidence.ToolCallID != authorization.ToolCallID ||
+			result.Evidence.Symbol != authorization.Symbol || result.Evidence.Category != authorization.Category || !result.Evidence.AsOf.Equal(authorization.AsOf) {
+			http.Error(w, "research tool response invalid", http.StatusBadGateway)
+			return
+		}
+		if err := adapter.RecordGEXBOTAsOfReceipt(request.Context(), result); err != nil {
+			log.Printf("Cortex GEXBOT receipt recording failed: %v", err)
+			http.Error(w, "research receipt unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	server := &http.Server{
 		Addr:              env("CORTEX_INPUT_ADDR", ":8400"),
 		Handler:           mux,
@@ -368,6 +445,36 @@ func invokeResearchWebFetch(ctx context.Context, client *http.Client, baseURL, t
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil {
 		return inputgateway.CortexWebFetchResult{}, fmt.Errorf("Research tool returned an invalid receipt")
+	}
+	return result, nil
+}
+
+func invokeResearchGEXBOTAsOf(ctx context.Context, client *http.Client, baseURL, token, toolCallID string) (inputgateway.CortexGEXBOTAsOfResult, error) {
+	if client == nil || baseURL == "" || token == "" || toolCallID == "" {
+		return inputgateway.CortexGEXBOTAsOfResult{}, fmt.Errorf("Research GEXBOT Tool is unavailable")
+	}
+	body, _ := json.Marshal(map[string]string{"tool_call_id": toolCallID})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/v1/cortex-tools/gexbot-as-of", bytes.NewReader(body))
+	if err != nil {
+		return inputgateway.CortexGEXBOTAsOfResult{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return inputgateway.CortexGEXBOTAsOfResult{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil || len(raw) == 0 || len(raw) >= 64<<10 || response.StatusCode != http.StatusOK {
+		return inputgateway.CortexGEXBOTAsOfResult{}, fmt.Errorf("Research GEXBOT Tool HTTP %d", response.StatusCode)
+	}
+	var result inputgateway.CortexGEXBOTAsOfResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != result.Evidence.ToolCallID || result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID {
+		return inputgateway.CortexGEXBOTAsOfResult{}, fmt.Errorf("Research GEXBOT Tool returned an invalid receipt")
 	}
 	return result, nil
 }

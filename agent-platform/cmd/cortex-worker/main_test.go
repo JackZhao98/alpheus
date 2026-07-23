@@ -36,22 +36,29 @@ func TestModelOutputTokenLimitReservesScoutMemoCapacity(t *testing.T) {
 }
 
 func TestParseWorkflowOutputEnforcesSemanticRoute(t *testing.T) {
-	answer, err := parseWorkflowOutput([]byte(`{"kind":"answer","target":"user","objective":"answer directly","rationale":"simple request","text":"hello"}`), false)
+	answer, err := parseWorkflowOutput([]byte(`{"kind":"answer","target":"user","objective":"answer directly","rationale":"simple request","text":"hello"}`), false, false)
 	if err != nil || answer.Kind != "answer" {
 		t.Fatalf("answer=%+v err=%v", answer, err)
 	}
-	handoff, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"assess investment case","rationale":"requires analysis","text":""}`), false)
+	handoff, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"assess investment case","rationale":"requires analysis","text":""}`), false, false)
 	if err != nil || handoff.Kind != "handoff" {
 		t.Fatalf("handoff=%+v err=%v", handoff, err)
 	}
-	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"user","objective":"bad","rationale":"bad","text":""}`), false); err == nil {
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"user","objective":"bad","rationale":"bad","text":""}`), false, false); err == nil {
 		t.Fatal("invalid handoff route was accepted")
 	}
-	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"scout","objective":"gather bounded evidence","rationale":"current facts matter","text":""}`), false); err == nil {
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"scout","objective":"gather bounded evidence","rationale":"current facts matter","text":""}`), false, false); err == nil {
 		t.Fatal("Scout route was accepted for a legacy Run")
 	}
-	if scout, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"scout","objective":"gather bounded evidence","rationale":"current facts matter","text":""}`), true); err != nil || scout.Target != "scout" {
+	if scout, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"scout","objective":"gather bounded evidence","rationale":"current facts matter","text":""}`), true, false); err != nil || scout.Target != "scout" {
 		t.Fatalf("scout=%+v err=%v", scout, err)
+	}
+	gexbot, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"inspect GEX","rationale":"current option positioning matters","text":"","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current"}`), true, true)
+	if err != nil || gexbot.GEXBOTAction != "as_of" {
+		t.Fatalf("gexbot=%+v err=%v", gexbot, err)
+	}
+	if _, err := parseWorkflowOutput([]byte(`{"kind":"answer","target":"user","objective":"bad","rationale":"bad","text":"bad","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current"}`), true, true); err == nil {
+		t.Fatal("GEXBOT Tool was accepted outside an Intent -> Desk handoff")
 	}
 }
 

@@ -1,10 +1,10 @@
 // Package capability defines the narrow AP3 cross-plane Tool boundary.
 //
-// It intentionally contains one external-read Tool only: a public web page
-// fetch.  Tool selection and authorization live in Cortex Control; connector
-// execution and the evidence record live in Research Gateway.  No connector
-// credential, generic request primitive, or external mutation is part of this
-// package.
+// It intentionally contains only two external-read slices: a public web page
+// fetch and a bounded GEXBOT archived as_of observation. Tool selection and
+// authorization live in Cortex Control; connector execution and the evidence
+// record live in Research Gateway. No connector credential, generic request
+// primitive, or external mutation is part of this package.
 package capability
 
 import (
@@ -28,7 +28,10 @@ var (
 
 type ToolID string
 
-const ToolResearchWebFetch ToolID = "research_web_fetch"
+const (
+	ToolResearchWebFetch   ToolID = "research_web_fetch"
+	ToolResearchGEXBOTAsOf ToolID = "research_gexbot_as_of"
+)
 
 type ReceiptState string
 
@@ -39,6 +42,15 @@ const ReceiptSucceeded ReceiptState = "succeeded"
 type WebFetchRequest struct {
 	URL      string `json:"url"`
 	MaxChars int    `json:"max_chars"`
+}
+
+// GEXBOTAsOfRequest deliberately names one archived Provider series and one
+// point-in-time fence.  Cortex cannot ask the Provider to collect, mutate, or
+// reveal its raw payload through this Tool.
+type GEXBOTAsOfRequest struct {
+	Symbol   string    `json:"symbol"`
+	Category string    `json:"category"`
+	AsOf     time.Time `json:"as_of"`
 }
 
 type ToolCallIntent struct {
@@ -92,6 +104,13 @@ func (value WebFetchRequest) Validate() error {
 	return nil
 }
 
+func (value GEXBOTAsOfRequest) Validate() error {
+	if !gexbotSymbol(value.Symbol) || !gexbotCategory(value.Category) || !validUTC(value.AsOf) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
 func (value ToolCallIntent) Validate() error {
 	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ToolCallID) || value.ToolID != ToolResearchWebFetch ||
 		value.SourceResult.Validate() != nil || value.SourceResult.Owner != contracts.OwnerAgentControl ||
@@ -129,9 +148,116 @@ func (value ToolReceipt) Validate() error {
 	return nil
 }
 
+// GEXBOTAsOfEvidence is a compact normalized observation.  Raw Provider
+// bytes are retained under the Provider's Blob reference and never cross into
+// a Worker prompt.
+type GEXBOTAsOfEvidence struct {
+	SchemaRevision    uint16             `json:"schema_revision"`
+	EvidenceID        string             `json:"evidence_id"`
+	ToolCallID        string             `json:"tool_call_id"`
+	Provider          string             `json:"provider"`
+	Available         bool               `json:"available"`
+	Symbol            string             `json:"symbol"`
+	Category          string             `json:"category"`
+	AsOf              time.Time          `json:"as_of"`
+	ObservationID     string             `json:"observation_id,omitempty"`
+	ObservationDigest string             `json:"observation_digest,omitempty"`
+	ObservedAt        *time.Time         `json:"observed_at,omitempty"`
+	AvailableAt       *time.Time         `json:"available_at,omitempty"`
+	Metrics           GEXBOTMetrics      `json:"metrics,omitempty"`
+	Raw               *GEXBOTRawMetadata `json:"raw,omitempty"`
+}
+
+type GEXBOTMetrics struct {
+	// Decimal strings preserve the Provider's normalized number exactly while
+	// allowing the immutable receipt digest to remain canonical across Go and
+	// PostgreSQL. They are evidence values, not executable numeric inputs.
+	Spot        *string `json:"spot,omitempty"`
+	ZeroGamma   *string `json:"zero_gamma,omitempty"`
+	MajorPosVol *string `json:"major_pos_vol,omitempty"`
+	MajorPosOI  *string `json:"major_pos_oi,omitempty"`
+	MajorNegVol *string `json:"major_neg_vol,omitempty"`
+	MajorNegOI  *string `json:"major_neg_oi,omitempty"`
+}
+
+type GEXBOTRawMetadata struct {
+	BlobID        string `json:"blob_id"`
+	ContentDigest string `json:"content_digest"`
+	SizeBytes     int64  `json:"size_bytes"`
+}
+
+type GEXBOTToolReceipt struct {
+	SchemaRevision uint16               `json:"schema_revision"`
+	ReceiptID      string               `json:"receipt_id"`
+	ToolCallID     string               `json:"tool_call_id"`
+	ToolID         ToolID               `json:"tool_id"`
+	RequestDigest  string               `json:"request_digest"`
+	State          ReceiptState         `json:"state"`
+	Evidence       contracts.RecordRef  `json:"evidence"`
+	Executor       contracts.AuditActor `json:"executor"`
+	CompletedAt    time.Time            `json:"completed_at"`
+}
+
+func (value GEXBOTAsOfEvidence) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.EvidenceID) || !validID(value.ToolCallID) ||
+		value.Provider != "gexbot_classic" || !gexbotSymbol(value.Symbol) || !gexbotCategory(value.Category) || !validUTC(value.AsOf) {
+		return ErrInvalidCapability
+	}
+	if !value.Available {
+		if value.ObservationID != "" || value.ObservationDigest != "" || value.ObservedAt != nil || value.AvailableAt != nil ||
+			value.Raw != nil || value.Metrics.any() {
+			return ErrInvalidCapability
+		}
+		return nil
+	}
+	if !validUUID(value.ObservationID) || !validDigest(value.ObservationDigest) || value.ObservedAt == nil || value.AvailableAt == nil ||
+		!validUTC(*value.ObservedAt) || !validUTC(*value.AvailableAt) || value.AvailableAt.Before(*value.ObservedAt) || value.AvailableAt.After(value.AsOf) ||
+		value.Raw == nil || !validUUID(value.Raw.BlobID) || !validDigest(value.Raw.ContentDigest) || value.Raw.SizeBytes < 1 || value.Raw.SizeBytes > 2<<20 ||
+		!value.Metrics.valid() {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
+func (value GEXBOTToolReceipt) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ReceiptID) || !validID(value.ToolCallID) ||
+		value.ToolID != ToolResearchGEXBOTAsOf || !validDigest(value.RequestDigest) || value.State != ReceiptSucceeded ||
+		value.Evidence.Validate() != nil || value.Evidence.Owner != contracts.OwnerResearchGateway ||
+		value.Evidence.RecordType != "gexbot_as_of_evidence" || value.Executor.Validate() != nil ||
+		value.Executor.Kind != contracts.PrincipalWorkload || value.Executor.Audience != contracts.AudienceResearchGateway || !validUTC(value.CompletedAt) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
 func validID(value string) bool     { return identifierPattern.MatchString(value) }
 func validDigest(value string) bool { return digestPattern.MatchString(value) }
 func validUTC(value time.Time) bool { return !value.IsZero() && value.Location() == time.UTC }
+
+func gexbotSymbol(value string) bool {
+	return regexp.MustCompile(`^[A-Z0-9._-]{1,16}$`).MatchString(value)
+}
+
+func gexbotCategory(value string) bool {
+	return value == "gex_full" || value == "gex_zero" || value == "gex_one"
+}
+
+func validUUID(value string) bool {
+	return regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(value)
+}
+
+func (value GEXBOTMetrics) any() bool {
+	return value.Spot != nil || value.ZeroGamma != nil || value.MajorPosVol != nil || value.MajorPosOI != nil || value.MajorNegVol != nil || value.MajorNegOI != nil
+}
+
+func (value GEXBOTMetrics) valid() bool {
+	for _, metric := range []*string{value.Spot, value.ZeroGamma, value.MajorPosVol, value.MajorPosOI, value.MajorNegVol, value.MajorNegOI} {
+		if metric != nil && (len(*metric) < 1 || len(*metric) > 64 || !regexp.MustCompile(`^-?[0-9]+(?:[.][0-9]+)?$`).MatchString(*metric)) {
+			return false
+		}
+	}
+	return true
+}
 
 func allowedContentType(value string) bool {
 	switch value {
