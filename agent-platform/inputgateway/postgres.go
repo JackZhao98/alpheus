@@ -19,6 +19,7 @@ import (
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputcontract"
 	"alpheus/agentplatform/outputcontract"
+	"alpheus/agentplatform/taskgraphcontract"
 )
 
 const (
@@ -385,6 +386,15 @@ type RunAdmission struct {
 	RootTaskID string `json:"root_task_id"`
 	RunState   string `json:"run_state"`
 	TaskState  string `json:"task_state"`
+}
+
+type TaskGraphAdmission struct {
+	GraphID         string   `json:"graph_id"`
+	RunID           string   `json:"run_id"`
+	ParentTaskID    string   `json:"parent_task_id"`
+	TaskIDs         []string `json:"task_ids"`
+	TaskCount       int64    `json:"task_count"`
+	ParentTaskState string   `json:"parent_task_state"`
 }
 
 type CortexRunResult struct {
@@ -1369,6 +1379,193 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 		return RunAdmission{}, fmt.Errorf("canonical Run admission was denied or mismatched")
 	}
 	return envelope.RunAdmission, nil
+}
+
+// AdmitAndPrepareTaskGraph crosses the immutable graph boundary once, then
+// idempotently prepares every admitted node Session. A retry resumes Session
+// preparation against the exact already-admitted graph; it cannot alter the
+// plan, grants, budgets, topology, or node inputs.
+func (adapter *PostgresAdapter) AdmitAndPrepareTaskGraph(
+	ctx context.Context,
+	command taskgraphcontract.AdmitTaskGraphCommand,
+	rawInput blob.BlobRef,
+) (TaskGraphAdmission, error) {
+	admission, err := adapter.AdmitTaskGraph(ctx, command)
+	if err != nil {
+		return TaskGraphAdmission{}, err
+	}
+	for _, node := range command.Plan.Nodes {
+		if err := adapter.PrepareTaskGraphNodeSession(
+			ctx, command.Plan.GraphID, node, rawInput,
+		); err != nil {
+			return TaskGraphAdmission{}, fmt.Errorf(
+				"prepare TaskGraph node %s: %w", node.TaskID, err)
+		}
+	}
+	return admission, nil
+}
+
+func (adapter *PostgresAdapter) AdmitTaskGraph(
+	ctx context.Context,
+	command taskgraphcontract.AdmitTaskGraphCommand,
+) (TaskGraphAdmission, error) {
+	if adapter == nil || adapter.db == nil || command.Validate() != nil ||
+		command.Plan.CreatedBy.PrincipalID != adapter.principal {
+		return TaskGraphAdmission{}, fmt.Errorf("invalid TaskGraph admission")
+	}
+	encoded, err := json.Marshal(command)
+	if err != nil {
+		return TaskGraphAdmission{}, err
+	}
+	var responseRaw []byte
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.admit_cortex_task_graph($1::JSONB)::TEXT`,
+			string(encoded),
+		).Scan(&responseRaw)
+	})
+	if err != nil {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"admit canonical TaskGraph: %w", err)
+	}
+	var response struct {
+		Status string `json:"status"`
+		TaskGraphAdmission
+	}
+	if json.Unmarshal(responseRaw, &response) != nil ||
+		response.Status != "admitted" ||
+		response.GraphID != command.Plan.GraphID ||
+		response.RunID != command.Plan.RunID ||
+		response.ParentTaskID != command.Plan.ParentTaskID ||
+		response.ParentTaskState != "waiting" ||
+		response.TaskCount != int64(len(command.Plan.Nodes)) ||
+		len(response.TaskIDs) != len(command.Plan.Nodes) {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"canonical TaskGraph admission was denied or mismatched")
+	}
+	for index, node := range command.Plan.Nodes {
+		if response.TaskIDs[index] != node.TaskID {
+			return TaskGraphAdmission{}, fmt.Errorf(
+				"canonical TaskGraph task order mismatched")
+		}
+	}
+	return response.TaskGraphAdmission, nil
+}
+
+type taskGraphExecutionBinding struct {
+	SchemaRevision    uint16 `json:"schema_revision"`
+	GraphID           string `json:"graph_id"`
+	TaskID            string `json:"task_id"`
+	RoleID            string `json:"role_id"`
+	RoleRevision      uint16 `json:"role_revision"`
+	WorkerPrincipalID string `json:"worker_principal_id"`
+	Provider          string `json:"provider"`
+	Model             string `json:"model"`
+}
+
+type taskGraphContextManifest struct {
+	SchemaRevision uint16       `json:"schema_revision"`
+	RequestID      string       `json:"request_id"`
+	RawInput       blob.BlobRef `json:"raw_input"`
+}
+
+func taskGraphSessionDocuments(
+	graphID string,
+	node taskgraphcontract.TaskGraphNode,
+	rawInput blob.BlobRef,
+	workerPrincipal string,
+) (taskGraphExecutionBinding, taskGraphContextManifest, error) {
+	if graphID == "" || node.TaskID == "" || node.RoleID == "" ||
+		node.RoleRevision != 1 || node.Objective.Validate() != nil ||
+		rawInput.Validate() != nil ||
+		rawInput.Origin.Owner != contracts.OwnerAgentControl ||
+		rawInput.Origin.RecordType != "input_raw" ||
+		rawInput.Origin.RecordID == "" || workerPrincipal == "" {
+		return taskGraphExecutionBinding{}, taskGraphContextManifest{},
+			fmt.Errorf("invalid TaskGraph Session inputs")
+	}
+	return taskGraphExecutionBinding{
+			SchemaRevision:    1,
+			GraphID:           graphID,
+			TaskID:            node.TaskID,
+			RoleID:            node.RoleID,
+			RoleRevision:      node.RoleRevision,
+			WorkerPrincipalID: workerPrincipal,
+			Provider:          "openai",
+			Model:             "gpt-5.6-sol",
+		}, taskGraphContextManifest{
+			SchemaRevision: 1,
+			RequestID:      rawInput.Origin.RecordID,
+			RawInput:       rawInput,
+		}, nil
+}
+
+// PrepareTaskGraphNodeSession installs only immutable documents derived from
+// an already-validated node. The database independently proves that raw input
+// and objective belong to the exact admitted graph before granting Worker
+// reads or attaching the Session.
+func (adapter *PostgresAdapter) PrepareTaskGraphNodeSession(
+	ctx context.Context,
+	graphID string,
+	node taskgraphcontract.TaskGraphNode,
+	rawInput blob.BlobRef,
+) error {
+	const workerPrincipal = "cortex-worker-1"
+	if adapter == nil || adapter.db == nil {
+		return fmt.Errorf("invalid TaskGraph Session adapter")
+	}
+	executionValue, contextValue, err := taskGraphSessionDocuments(
+		graphID, node, rawInput, workerPrincipal)
+	if err != nil {
+		return err
+	}
+	execution, err := adapter.CommitControlJSON(
+		ctx, "execution_binding", node.TaskID,
+		"agent-platform.contract.task_graph_execution_binding.v1",
+		executionValue,
+	)
+	if err != nil {
+		return fmt.Errorf("commit TaskGraph execution binding: %w", err)
+	}
+	contextRef, err := adapter.CommitControlJSON(
+		ctx, "context_manifest", node.TaskID,
+		"agent-platform.contract.task_graph_context_manifest.v1",
+		contextValue,
+	)
+	if err != nil {
+		return fmt.Errorf("commit TaskGraph context manifest: %w", err)
+	}
+	executionRaw, _ := json.Marshal(execution)
+	contextRaw, _ := json.Marshal(contextRef)
+	inputRaw, _ := json.Marshal(rawInput)
+	objectiveRaw, _ := json.Marshal(node.Objective)
+	var responseRaw []byte
+	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.prepare_cortex_task_graph_node_session(
+				$1,$2::JSONB,$3::JSONB,$4::JSONB,$5::JSONB,$6
+			)::TEXT`,
+			node.TaskID, string(executionRaw), string(contextRaw),
+			string(inputRaw), string(objectiveRaw), workerPrincipal,
+		).Scan(&responseRaw)
+	})
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Status    string `json:"status"`
+		GraphID   string `json:"graph_id"`
+		TaskID    string `json:"task_id"`
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(responseRaw, &response) != nil ||
+		response.Status != "ready" || response.GraphID != graphID ||
+		response.TaskID != node.TaskID || response.SessionID == "" {
+		return fmt.Errorf("TaskGraph node Session was not prepared")
+	}
+	return nil
 }
 
 func (adapter *PostgresAdapter) beginStage(ctx context.Context, stageID, mediaType, digest string, size int64) (blob.StageGrant, error) {
