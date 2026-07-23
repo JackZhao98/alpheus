@@ -136,5 +136,6 @@ run_sql agent-platform/migrations/0053_cortex_agent_role_registry.sql 0053_corte
 run_sql agent-platform/migrations/0054_cortex_specialist_tool_grants.sql 0054_cortex_specialist_tool_grants
 run_sql agent-platform/migrations/0055_cortex_specialist_handoffs.sql 0055_cortex_specialist_handoffs
 run_sql agent-platform/migrations/0056_cortex_specialist_tool_enforcement.sql 0056_cortex_specialist_tool_enforcement
+run_sql agent-platform/migrations/0057_cortex_specialist_trace.sql 0057_cortex_specialist_trace
 
 echo "agent-platform migration bootstrap complete"
