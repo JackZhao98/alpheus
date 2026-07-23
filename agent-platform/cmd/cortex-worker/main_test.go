@@ -74,13 +74,13 @@ func TestParseWorkflowOutputRoutesToolsToSpecialists(t *testing.T) {
 
 func TestSpecialistRequestIsBoundedToRegisteredRole(t *testing.T) {
 	request := specialistRequest("model", "prompt", "market_scout", "inspect quote", "current price matters", nil, nil, nil,
-		&capability.KernelReadEvidence{ToolID: "kernel_equity_quotes"})
+		&capability.KernelReadEvidence{ToolID: "kernel_equity_quotes"}, true, true, true)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "market_scout") || !strings.Contains(instructions, "kernel_equity_quotes") ||
 		!strings.Contains(instructions, "memo for Decision Desk") {
 		t.Fatalf("Specialist instructions are incomplete: %q", instructions)
 	}
-	if request := specialistRequest("model", "prompt", "invented_role", "x", "y", nil, nil, nil, nil); request != nil {
+	if request := specialistRequest("model", "prompt", "invented_role", "x", "y", nil, nil, nil, nil, true, true, true); request != nil {
 		t.Fatal("unregistered Specialist acquired a prompt")
 	}
 }

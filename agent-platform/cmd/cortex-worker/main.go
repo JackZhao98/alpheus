@@ -269,8 +269,8 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 		if _, installed := capability.LookupAgentRole(capability.AgentRoleID(intent.Workflow.Target)); installed {
 			specialist, specialistErr := w.executeModelTurn(ctx, item, claim, started.AttemptGeneration,
 				specialistRequest(w.model, modelPrompt, intent.Workflow.Target, intent.Workflow.Objective, intent.Workflow.Rationale,
-					webEvidence, gexbotEvidence, earningsEvidence, kernelEvidence), func(raw []byte) (workflowOutput, error) {
-					return parseWorkflowOutput(raw, false, false)
+					webEvidence, gexbotEvidence, earningsEvidence, kernelEvidence, item.GEXBOTEnabled, item.EarningsEnabled, item.KernelToolsEnabled), func(raw []byte) (workflowOutput, error) {
+					return parseWorkflowOutput(raw, item.ScoutEnabled, item.GEXBOTEnabled, item.EarningsEnabled, item.KernelToolsEnabled, item.KernelToolsEnabled)
 				})
 			if specialistErr != nil {
 				return specialistErr
@@ -540,7 +540,7 @@ func deskRequest(model, prompt, objective, rationale, specialistRole, specialist
 	return workflowRequest(model, instructions, prompt, false, gexbotEnabled, earningsEnabled, kernelToolsEnabled)
 }
 
-func specialistRequest(model, prompt, role, objective, rationale string, webEvidence *capability.WebFetchEvidence, gexbotEvidence *capability.GEXBOTAsOfEvidence, earningsEvidence *capability.KernelEarningsResultsEvidence, kernelEvidence *capability.KernelReadEvidence) map[string]any {
+func specialistRequest(model, prompt, role, objective, rationale string, webEvidence *capability.WebFetchEvidence, gexbotEvidence *capability.GEXBOTAsOfEvidence, earningsEvidence *capability.KernelEarningsResultsEvidence, kernelEvidence *capability.KernelReadEvidence, gexbotEnabled, earningsEnabled, kernelToolsEnabled bool) map[string]any {
 	descriptor, found := capability.LookupAgentRole(capability.AgentRoleID(role))
 	if !found {
 		return nil
@@ -568,7 +568,16 @@ func specialistRequest(model, prompt, role, objective, rationale string, webEvid
 		instructions += " No Tool receipt is present. State that limitation plainly and do not invent evidence."
 	}
 	instructions += " Return only workflow JSON with kind=answer,target=user, non-empty objective and rationale, and place the internal memo in text."
-	return workflowRequest(model, instructions, prompt, false, false, false, false)
+	if gexbotEnabled {
+		instructions += " Set gexbot_action=none and all other gexbot fields to empty strings."
+	}
+	if earningsEnabled {
+		instructions += " Set earnings_action=none and earnings_symbol to an empty string."
+	}
+	if kernelToolsEnabled {
+		instructions += " Set kernel_action=none, kernel_tool_id=\"\", and kernel_arguments=\"\"."
+	}
+	return workflowRequest(model, instructions, prompt, false, gexbotEnabled, earningsEnabled, kernelToolsEnabled)
 }
 
 func deskFromScoutRequest(model, prompt, objective, rationale string, memo scoutMemoOutput, gexbotEnabled, earningsEnabled, kernelToolsEnabled bool) map[string]any {

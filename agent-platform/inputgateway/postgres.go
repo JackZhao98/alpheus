@@ -1127,19 +1127,20 @@ func (adapter *PostgresAdapter) AuthorizeBlobRead(ctx context.Context, request b
 }
 
 type RuntimeDefinitions struct {
-	AnswerOutputContractDigest           string
-	WorkflowOutputContractDigest         string
-	ScoutWorkflowOutputContractDigest    string
-	GEXBOTWorkflowOutputContractDigest   string
-	EarningsWorkflowOutputContractDigest string
-	KernelWorkflowOutputContractDigest   string
-	ScoutMemoOutputContractDigest        string
+	AnswerOutputContractDigest             string
+	WorkflowOutputContractDigest           string
+	ScoutWorkflowOutputContractDigest      string
+	GEXBOTWorkflowOutputContractDigest     string
+	EarningsWorkflowOutputContractDigest   string
+	KernelWorkflowOutputContractDigest     string
+	SpecialistWorkflowOutputContractDigest string
+	ScoutMemoOutputContractDigest          string
 }
 
-func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, gexbotWorkflowSchema, earningsWorkflowSchema, kernelWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
-	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || gexbotWorkflowSchema.Validate() != nil || earningsWorkflowSchema.Validate() != nil || kernelWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
-		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || gexbotWorkflowSchema.Origin.RecordType != "output_contract_schema" || earningsWorkflowSchema.Origin.RecordType != "output_contract_schema" || kernelWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
-		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || gexbotWorkflowSchema.MediaType != controlJSONMediaType || earningsWorkflowSchema.MediaType != controlJSONMediaType || kernelWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
+func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, answerSchema, workflowSchema, scoutWorkflowSchema, gexbotWorkflowSchema, earningsWorkflowSchema, kernelWorkflowSchema, specialistWorkflowSchema, scoutMemoSchema blob.BlobRef) (RuntimeDefinitions, error) {
+	if answerSchema.Validate() != nil || workflowSchema.Validate() != nil || scoutWorkflowSchema.Validate() != nil || gexbotWorkflowSchema.Validate() != nil || earningsWorkflowSchema.Validate() != nil || kernelWorkflowSchema.Validate() != nil || specialistWorkflowSchema.Validate() != nil || scoutMemoSchema.Validate() != nil ||
+		answerSchema.Origin.RecordType != "output_contract_schema" || workflowSchema.Origin.RecordType != "output_contract_schema" || scoutWorkflowSchema.Origin.RecordType != "output_contract_schema" || gexbotWorkflowSchema.Origin.RecordType != "output_contract_schema" || earningsWorkflowSchema.Origin.RecordType != "output_contract_schema" || kernelWorkflowSchema.Origin.RecordType != "output_contract_schema" || specialistWorkflowSchema.Origin.RecordType != "output_contract_schema" || scoutMemoSchema.Origin.RecordType != "output_contract_schema" ||
+		answerSchema.MediaType != controlJSONMediaType || workflowSchema.MediaType != controlJSONMediaType || scoutWorkflowSchema.MediaType != controlJSONMediaType || gexbotWorkflowSchema.MediaType != controlJSONMediaType || earningsWorkflowSchema.MediaType != controlJSONMediaType || kernelWorkflowSchema.MediaType != controlJSONMediaType || specialistWorkflowSchema.MediaType != controlJSONMediaType || scoutMemoSchema.MediaType != controlJSONMediaType {
 		return RuntimeDefinitions{}, fmt.Errorf("invalid Cortex output schema BlobRef")
 	}
 	answerRaw, err := json.Marshal(answerSchema)
@@ -1167,6 +1168,10 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 		return RuntimeDefinitions{}, err
 	}
 	kernelWorkflowRaw, err := json.Marshal(kernelWorkflowSchema)
+	if err != nil {
+		return RuntimeDefinitions{}, err
+	}
+	specialistWorkflowRaw, err := json.Marshal(specialistWorkflowSchema)
 	if err != nil {
 		return RuntimeDefinitions{}, err
 	}
@@ -1219,6 +1224,13 @@ func (adapter *PostgresAdapter) EnsureRuntimeDefinitions(ctx context.Context, an
 			return fmt.Errorf("Cortex Kernel read workflow output contract was not selected")
 		}
 		definitions.KernelWorkflowOutputContractDigest = response.OutputContractDigest
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_workflow_output_contract_v7($1::JSONB)::TEXT`, string(specialistWorkflowRaw)).Scan(&responseRaw); err != nil {
+			return err
+		}
+		if json.Unmarshal(responseRaw, &response) != nil || response.Status != "ready" || len(response.OutputContractDigest) != 64 {
+			return fmt.Errorf("Cortex Specialist workflow output contract was not selected")
+		}
+		definitions.SpecialistWorkflowOutputContractDigest = response.OutputContractDigest
 		if err := tx.QueryRowContext(ctx, `SELECT agent_control.ensure_cortex_scout_memo_output_contract($1::JSONB)::TEXT`, string(scoutMemoRaw)).Scan(&responseRaw); err != nil {
 			return err
 		}
@@ -1264,7 +1276,7 @@ func (adapter *PostgresAdapter) AdmitRun(ctx context.Context, admission Admissio
 	}
 	var responseRaw []byte
 	err = adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v7($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.admit_cortex_user_request_run_v8($1::JSONB)::TEXT`, string(raw)).Scan(&responseRaw)
 	})
 	if err != nil {
 		return RunAdmission{}, fmt.Errorf("admit canonical Run: %w", err)

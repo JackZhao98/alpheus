@@ -169,6 +169,16 @@ func run() error {
 			"kernel_arguments": map[string]any{"type": "string", "maxLength": 12288},
 		},
 	}
+	specialistWorkflowSchemaRaw, err := json.Marshal(kernelWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("clone Cortex Specialist workflow schema: %w", err)
+	}
+	var specialistWorkflowSchema map[string]any
+	if json.Unmarshal(specialistWorkflowSchemaRaw, &specialistWorkflowSchema) != nil {
+		return fmt.Errorf("clone Cortex Specialist workflow schema")
+	}
+	specialistTargets := append([]string{"desk", "scout", "user"}, capability.AgentRoleIDs()...)
+	specialistWorkflowSchema["properties"].(map[string]any)["target"] = map[string]any{"type": "string", "enum": specialistTargets}
 	scoutMemoSchema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
@@ -204,6 +214,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("encode Cortex Kernel read workflow schema: %w", err)
 	}
+	specialistWorkflowSchemaRaw, err = json.Marshal(specialistWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("encode Cortex Specialist workflow schema: %w", err)
+	}
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex Scout memo schema: %w", err)
@@ -238,23 +252,29 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex Kernel read workflow schema: %w", err)
 	}
+	specialistWorkflowSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-workflow-output-schema-v7",
+		"agent-platform.contract.output_contract_schema.v1", specialistWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("commit Cortex Specialist workflow schema: %w", err)
+	}
 	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
 	if err != nil {
 		return fmt.Errorf("commit Cortex Scout memo schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, scoutMemoSchemaRef)
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, scoutMemoSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
 	outputSchemas := map[string][]byte{
-		runtimeDefinitions.AnswerOutputContractDigest:           answerSchemaRaw,
-		runtimeDefinitions.WorkflowOutputContractDigest:         workflowSchemaRaw,
-		runtimeDefinitions.ScoutWorkflowOutputContractDigest:    scoutWorkflowSchemaRaw,
-		runtimeDefinitions.GEXBOTWorkflowOutputContractDigest:   gexbotWorkflowSchemaRaw,
-		runtimeDefinitions.EarningsWorkflowOutputContractDigest: earningsWorkflowSchemaRaw,
-		runtimeDefinitions.KernelWorkflowOutputContractDigest:   kernelWorkflowSchemaRaw,
-		runtimeDefinitions.ScoutMemoOutputContractDigest:        scoutMemoSchemaRaw,
+		runtimeDefinitions.AnswerOutputContractDigest:             answerSchemaRaw,
+		runtimeDefinitions.WorkflowOutputContractDigest:           workflowSchemaRaw,
+		runtimeDefinitions.ScoutWorkflowOutputContractDigest:      scoutWorkflowSchemaRaw,
+		runtimeDefinitions.GEXBOTWorkflowOutputContractDigest:     gexbotWorkflowSchemaRaw,
+		runtimeDefinitions.EarningsWorkflowOutputContractDigest:   earningsWorkflowSchemaRaw,
+		runtimeDefinitions.KernelWorkflowOutputContractDigest:     kernelWorkflowSchemaRaw,
+		runtimeDefinitions.SpecialistWorkflowOutputContractDigest: specialistWorkflowSchemaRaw,
+		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {
