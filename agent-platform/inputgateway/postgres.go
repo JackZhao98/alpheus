@@ -286,7 +286,7 @@ func (adapter *PostgresAdapter) bindConversationRaw(ctx context.Context, request
 	}
 	var raw []byte
 	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT agent_control.bind_cortex_conversation_raw($1)::TEXT`, request.RequestID).Scan(&raw)
+		return tx.QueryRowContext(ctx, `SELECT agent_control.bind_cortex_conversation_raw_v3($1)::TEXT`, request.RequestID).Scan(&raw)
 	}); err != nil {
 		return err
 	}
