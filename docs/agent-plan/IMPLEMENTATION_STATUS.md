@@ -227,7 +227,12 @@ Schema parity, semantic goldens and tests reject cycles, missing joins,
 cross-role Tool grants, revision drift, Desk escalation, unbounded child
 expansion and aggregate overcommit. Execution remains disabled until P2 adds
 atomic database admission, so the deployed single-Tool/Specialist chain is
-unchanged. The staged TODO is tracked in
+unchanged. P2's first storage slice is deployed: six default-deny immutable
+tables persist Graph, Node, dependency Edge, Join, Join upstream and exact
+per-node Specialist Tool-grant snapshots. Their foreign keys bind existing
+Run/Task/model Result/RuntimePolicy/OutputContract/role-grant identities;
+neither Control nor Worker LOGIN has direct table access. The sole atomic
+admission command is the next unfinished P2 slice. The staged TODO is tracked in
 [`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
 P2 now adds atomic fan-out, followed by parallel scheduling, explicit fan-in
 policies, bounded iterative research, DAG Trace/UI, and concurrency/failure

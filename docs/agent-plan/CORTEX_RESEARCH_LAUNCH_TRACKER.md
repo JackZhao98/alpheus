@@ -96,7 +96,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | 顺序 | 工作项 | 完成条件 | 状态 |
 |---:|---|---|---|
 | P1 | 冻结 TaskGraph / dependency / join 契约 | 计划可表达多个并行子 Task、依赖边、最大并发、deadline、预算及不可变输出契约；模型不能自行扩大权限 | 已完成：独立 frozen v1 契约、Schema、golden、DAG/Join/权限/预算校验全部通过 |
-| P2 | Control 批量 admission 与 fan-out | 一次已验证计划原子创建多个独立子 Task；每个分支绑定唯一角色、Tool grant、预算和父 Run | 待开始 |
+| P2 | Control 批量 admission 与 fan-out | 一次已验证计划原子创建多个独立子 Task；每个分支绑定唯一角色、Tool grant、预算和父 Run | 进行中：不可变 Graph/Node/Edge/Join/Tool-grant 存储已迁移；原子 admission 命令待接 |
 | P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 待开始 |
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、超时、取消和部分失败；Join 只读取已提交 Artifact/Receipt | 待开始 |
 | P5 | 多阶段自适应研究 | Desk 可根据第一批 Artifact 的明确缺口提出下一批有界子链路；受最大轮次、Task 数和预算限制 | 待开始 |
