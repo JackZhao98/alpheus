@@ -100,7 +100,7 @@
           <span>多 Agent 执行图</span>
           <strong id="task-graph-status">未启动</strong>
         </summary>
-        <p class="field-note">这里展示 Cortex 实际持久化的并行分支、汇合屏障和最终 Decision Desk，不根据回答文本猜测。</p>
+        <p class="field-note">这里按轮次展示 Cortex 实际持久化的并行分支、汇合屏障和 Decision Desk；下一轮只来自模型发起且通过 Control 边界的核验请求。</p>
         <div id="task-graph" class="task-graph" aria-live="polite"></div>
       </details>
       <div class="result-head"><span>运行 Trace（调试）</span><strong id="trace-status">NO JOB</strong></div>

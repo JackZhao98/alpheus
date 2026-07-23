@@ -56,6 +56,9 @@ main { width:min(760px,calc(100% - 32px)); margin:56px auto; }
 .task-graph-panel > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 0; color:#d9f4e8; font-weight:850; cursor:pointer; }
 .task-graph-panel > summary strong { color:#72dfb4; font-size:12px; letter-spacing:.04em; }
 .task-graph { display:grid; gap:12px; margin-top:12px; }
+.task-graph-round { display:grid; gap:12px; padding:12px; border:1px solid #21483b; border-radius:13px; background:rgba(4,15,12,.52); }
+.task-graph-transition { display:flex; align-items:center; justify-content:center; gap:9px; color:#72dfb4; font-size:12px; font-weight:800; }
+.task-graph-transition::before,.task-graph-transition::after { content:""; height:1px; flex:1; background:#315e50; }
 .task-graph-meta { display:flex; flex-wrap:wrap; gap:8px; }
 .task-graph-chip { padding:5px 8px; border:1px solid #315e50; border-radius:999px; color:#a6beb4; background:#0a1b16; font-size:11px; }
 .task-graph-lanes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }

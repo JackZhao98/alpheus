@@ -490,6 +490,7 @@ type CortexTraceEvent struct {
 	ReasonCode        string            `json:"reason_code,omitempty"`
 	ArtifactID        string            `json:"artifact_id,omitempty"`
 	Round             int64             `json:"round,omitempty"`
+	NextRound         int64             `json:"next_round,omitempty"`
 	MaxRounds         int64             `json:"max_rounds,omitempty"`
 	MaxParallelism    int64             `json:"max_parallelism,omitempty"`
 	TaskCount         int64             `json:"task_count,omitempty"`

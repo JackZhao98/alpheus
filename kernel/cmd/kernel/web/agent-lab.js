@@ -276,6 +276,25 @@ async function restoreConversation() {
   renderConversation();
 }
 
+async function restoreRun() {
+  const runID = new URL(window.location.href).searchParams.get("run");
+  if (!/^[0-9a-f-]{36}$/.test(runID || "")) return;
+  const job = await request(
+    `/agent/cortex-runs/${encodeURIComponent(runID)}`);
+  renderTrace(job);
+  if (job.status === "succeeded" && job.result) {
+    byId("result").textContent = JSON.stringify(job.result, null, 2);
+    byId("status").textContent =
+      `COMPLETE · ${String(job.result.model || "OPENAI").toUpperCase()} · NO OPERATION`;
+  } else if (job.status === "failed") {
+    byId("result").textContent = "No result returned.";
+    byId("status").textContent = "FAILED CLOSED";
+  } else {
+    byId("result").textContent = "This Cortex Run is still in progress.";
+    byId("status").textContent = "AGENTS WORKING";
+  }
+}
+
 function renderTrace(job) {
   const trace = Array.isArray(job?.trace) ? job.trace : [];
   byId("trace-status").textContent = job?.id
@@ -305,6 +324,7 @@ function renderTrace(job) {
       outcome: event.outcome,
       artifact_id: event.artifact_id,
       round: event.round,
+      next_round: event.next_round,
       max_rounds: event.max_rounds,
       max_parallelism: event.max_parallelism,
       task_count: event.task_count,
@@ -368,22 +388,12 @@ function makeGraphNode(node, trace) {
   return card;
 }
 
-function renderTaskGraph(trace) {
-  const panel = byId("task-graph-panel");
-  const target = byId("task-graph");
-  const admitted = trace.find((event) => event.stage === "task_graph_admitted");
-  if (!admitted || !Array.isArray(admitted.nodes)) {
-    panel.hidden = true;
-    target.replaceChildren();
-    return;
-  }
-  panel.hidden = false;
-  const succeeded = trace.some((event) => event.stage === "task_graph_succeeded");
-  const failed = trace.some((event) => event.stage === "task_graph_join_failed");
-  byId("task-graph-status").textContent = succeeded
-    ? "已完成"
-    : failed ? "汇合失败" : "运行中";
-
+function makeTaskGraphRound(admitted, trace) {
+  const roundTrace = trace.filter((event) =>
+    event.graph_id === admitted.graph_id ||
+    admitted.nodes.some((node) => node.task_id === event.task_id));
+  const wrapper = document.createElement("section");
+  wrapper.className = "task-graph-round";
   const meta = document.createElement("div");
   meta.className = "task-graph-meta";
   for (const text of [
@@ -406,9 +416,10 @@ function renderTaskGraph(trace) {
   const arrowOne = document.createElement("div");
   arrowOne.className = "task-graph-arrow";
   arrowOne.textContent = "↓";
-  const joinEvent = [...trace].reverse().find((event) =>
-    event.stage === "task_graph_join_ready" ||
-    event.stage === "task_graph_join_failed");
+  const joinEvent = [...roundTrace].reverse().find((event) =>
+    (event.stage === "task_graph_join_ready" ||
+      event.stage === "task_graph_join_failed") &&
+    event.graph_id === admitted.graph_id);
   const join = document.createElement("div");
   join.className = "task-graph-join " +
     (joinEvent?.stage === "task_graph_join_ready"
@@ -429,6 +440,43 @@ function renderTaskGraph(trace) {
     arrowTwo.textContent = "↓";
     nodes.push(arrowTwo, makeGraphNode(desk, trace));
   }
+  wrapper.append(...nodes);
+  return wrapper;
+}
+
+function renderTaskGraph(trace) {
+  const panel = byId("task-graph-panel");
+  const target = byId("task-graph");
+  const admittedRounds = trace.filter((event) =>
+    event.stage === "task_graph_admitted" &&
+    Array.isArray(event.nodes));
+  if (!admittedRounds.length) {
+    panel.hidden = true;
+    target.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  const succeeded = trace.some((event) => event.stage === "task_graph_succeeded");
+  const failed = trace.some((event) => event.stage === "task_graph_join_failed");
+  byId("task-graph-status").textContent = succeeded
+    ? `已完成 · ${admittedRounds.length} 轮`
+    : failed ? "汇合失败" : `运行中 · 第 ${admittedRounds.length} 轮`;
+
+  const nodes = [];
+  admittedRounds.forEach((admitted, index) => {
+    if (index > 0) {
+      const transition = trace.find((event) =>
+        event.stage === "task_graph_round_continued" &&
+        event.next_round === admitted.round);
+      const divider = document.createElement("div");
+      divider.className = "task-graph-transition";
+      divider.textContent = transition
+        ? `Decision Desk 发起第 ${admitted.round} 轮核验`
+        : `进入第 ${admitted.round} 轮`;
+      nodes.push(divider);
+    }
+    nodes.push(makeTaskGraphRound(admitted, trace));
+  });
   target.replaceChildren(...nodes);
 }
 
@@ -438,6 +486,7 @@ async function restoreSession() {
     await refreshCredentialStatus();
 	  await refreshRobinhoodConnection();
     await restoreConversation();
+    await restoreRun();
   } catch (error) {
     byId("query-error").textContent = formatError(error);
   }
