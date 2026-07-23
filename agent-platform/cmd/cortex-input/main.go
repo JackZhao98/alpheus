@@ -416,6 +416,41 @@ func run() error {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded"})
 	})
+	mux.HandleFunc("POST /internal/v1/task-graphs", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string `json:"source_call_id"`
+			AttemptID       string `json:"attempt_id"`
+			LeaseGeneration int64  `json:"lease_generation"`
+			LeaseToken      string `json:"lease_token"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 8<<10,
+		))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid TaskGraph proposal", http.StatusBadRequest)
+			return
+		}
+		admission, err := adapter.AdmitTaskGraphProposal(
+			request.Context(), strings.TrimSpace(body.SourceCallID),
+			strings.TrimSpace(body.AttemptID), body.LeaseGeneration,
+			strings.TrimSpace(body.LeaseToken),
+		)
+		if err != nil {
+			log.Printf("Cortex TaskGraph proposal admission failed: %v", err)
+			http.Error(w, "TaskGraph proposal admission denied",
+				http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(admission)
+	})
 	mux.HandleFunc("POST /internal/v1/tool-calls/web-fetch", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

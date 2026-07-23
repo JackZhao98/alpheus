@@ -20,6 +20,8 @@ import (
 	"alpheus/agentplatform/inputcontract"
 	"alpheus/agentplatform/outputcontract"
 	"alpheus/agentplatform/taskgraphcontract"
+	"alpheus/agentplatform/taskgraphplanner"
+	"alpheus/agentplatform/taskgraphproposal"
 )
 
 const (
@@ -395,6 +397,22 @@ type TaskGraphAdmission struct {
 	TaskIDs         []string `json:"task_ids"`
 	TaskCount       int64    `json:"task_count"`
 	ParentTaskState string   `json:"parent_task_state"`
+}
+
+type taskGraphProposalContext struct {
+	Status                    string                `json:"status"`
+	RunID                     string                `json:"run_id"`
+	ParentTaskID              string                `json:"parent_task_id"`
+	RunStateGeneration        int64                 `json:"run_state_generation"`
+	ParentTaskStateGeneration int64                 `json:"parent_task_state_generation"`
+	SourceResult              contracts.RecordRef   `json:"source_result"`
+	RuntimePolicy             contracts.RevisionRef `json:"runtime_policy"`
+	SpecialistOutputContract  contracts.RevisionRef `json:"specialist_output_contract"`
+	AnswerOutputContract      contracts.RevisionRef `json:"answer_output_contract"`
+	ProposalOutput            blob.BlobRef          `json:"proposal_output"`
+	ProposalOutputBindingID   string                `json:"proposal_output_binding_id"`
+	RawInput                  blob.BlobRef          `json:"raw_input"`
+	DeadlineAt                time.Time             `json:"deadline_at"`
 }
 
 type TaskGraphJoinReconciliation struct {
@@ -1423,6 +1441,137 @@ func (adapter *PostgresAdapter) AdmitAndPrepareTaskGraph(
 		}
 	}
 	return admission, nil
+}
+
+// AdmitTaskGraphProposal reads the exact validated model output selected by a
+// live Worker lease, then performs every authority-bearing expansion inside
+// Control. The caller supplies no Run identity, policy, budget, role revision,
+// Tool revision, topology, output contract, objective Blob, or deadline.
+func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
+	ctx context.Context,
+	sourceCallID string,
+	attemptID string,
+	leaseGeneration int64,
+	leaseToken string,
+) (TaskGraphAdmission, error) {
+	if adapter == nil || adapter.db == nil ||
+		strings.TrimSpace(sourceCallID) == "" ||
+		strings.TrimSpace(attemptID) == "" ||
+		leaseGeneration < 1 || strings.TrimSpace(leaseToken) == "" {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"invalid TaskGraph proposal admission")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.get_cortex_task_graph_proposal_context(
+				$1,$2,$3,$4::UUID
+			)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken,
+		).Scan(&raw)
+	})
+	if err != nil {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"read TaskGraph proposal context: %w", err)
+	}
+	var prepared taskGraphProposalContext
+	if json.Unmarshal(raw, &prepared) != nil ||
+		prepared.Status != "ready" || prepared.RunID == "" ||
+		prepared.ParentTaskID == "" || prepared.RunStateGeneration < 1 ||
+		prepared.ParentTaskStateGeneration < 1 ||
+		prepared.SourceResult.Validate() != nil ||
+		prepared.RuntimePolicy.Validate() != nil ||
+		prepared.SpecialistOutputContract.Validate() != nil ||
+		prepared.AnswerOutputContract.Validate() != nil ||
+		prepared.ProposalOutput.Validate() != nil ||
+		prepared.ProposalOutputBindingID == "" ||
+		prepared.RawInput.Validate() != nil ||
+		prepared.DeadlineAt.IsZero() {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"invalid TaskGraph proposal context response")
+	}
+	proposalRaw, err := adapter.readConversationBlob(
+		ctx, prepared.ProposalOutput,
+		prepared.ProposalOutputBindingID,
+		prepared.ProposalOutput.Origin,
+	)
+	if err != nil {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"read TaskGraph proposal output: %w", err)
+	}
+	proposal, err := taskgraphproposal.DecodeStrict(proposalRaw)
+	if err != nil {
+		return TaskGraphAdmission{}, err
+	}
+
+	objectives := make([]blob.BlobRef, 0, len(proposal.Branches)+1)
+	for index, branch := range proposal.Branches {
+		recordID := fmt.Sprintf(
+			"%s-branch-%02d", prepared.SourceResult.RecordID, index+1,
+		)
+		objective, err := adapter.CommitControlJSON(
+			ctx, "task_objective", recordID,
+			"agent-platform.contract.task_graph_branch_objective.v1",
+			struct {
+				SchemaRevision uint16              `json:"schema_revision"`
+				SourceResult   contracts.RecordRef `json:"source_result"`
+				RoleID         string              `json:"role_id"`
+				Objective      string              `json:"objective"`
+			}{
+				SchemaRevision: 1, SourceResult: prepared.SourceResult,
+				RoleID: branch.RoleID, Objective: branch.Objective,
+			},
+		)
+		if err != nil {
+			return TaskGraphAdmission{}, fmt.Errorf(
+				"commit TaskGraph branch objective: %w", err)
+		}
+		objectives = append(objectives, objective)
+	}
+	deskObjective, err := adapter.CommitControlJSON(
+		ctx, "task_objective",
+		prepared.SourceResult.RecordID+"-decision-desk",
+		"agent-platform.contract.task_graph_desk_objective.v1",
+		struct {
+			SchemaRevision uint16              `json:"schema_revision"`
+			SourceResult   contracts.RecordRef `json:"source_result"`
+			Objective      string              `json:"objective"`
+		}{
+			SchemaRevision: 1, SourceResult: prepared.SourceResult,
+			Objective: "Synthesize the admitted Specialist memos. " +
+				proposal.Rationale,
+		},
+	)
+	if err != nil {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"commit TaskGraph Decision Desk objective: %w", err)
+	}
+	objectives = append(objectives, deskObjective)
+	command, err := taskgraphplanner.Build(
+		proposal,
+		taskgraphplanner.Context{
+			RunID: prepared.RunID, ParentTaskID: prepared.ParentTaskID,
+			ExpectedRunStateGeneration:    prepared.RunStateGeneration,
+			ExpectedParentStateGeneration: prepared.ParentTaskStateGeneration,
+			SourceResult:                  prepared.SourceResult,
+			RuntimePolicy:                 prepared.RuntimePolicy,
+			SpecialistOutputContract:      prepared.SpecialistOutputContract,
+			AnswerOutputContract:          prepared.AnswerOutputContract,
+			Actor: contracts.AuditActor{
+				PrincipalID: adapter.principal,
+				Kind:        contracts.PrincipalWorkload,
+				Audience:    contracts.AudienceControlAPI,
+			},
+			DeadlineAt: prepared.DeadlineAt.UTC(),
+		},
+		objectives,
+	)
+	if err != nil {
+		return TaskGraphAdmission{}, fmt.Errorf(
+			"expand TaskGraph proposal: %w", err)
+	}
+	return adapter.AdmitAndPrepareTaskGraph(ctx, command, prepared.RawInput)
 }
 
 // ReconcileTaskGraphJoins advances only database-proven terminal Join state.
