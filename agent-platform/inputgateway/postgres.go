@@ -431,14 +431,38 @@ type CortexRunResult struct {
 }
 
 type CortexTraceEvent struct {
-	Sequence   int64  `json:"sequence"`
-	CreatedAt  string `json:"created_at"`
-	Stage      string `json:"stage"`
-	State      string `json:"state,omitempty"`
-	TargetRole string `json:"target_role,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	ToolID     string `json:"tool_id,omitempty"`
-	ReceiptID  string `json:"receipt_id,omitempty"`
+	Sequence          int64             `json:"sequence"`
+	CreatedAt         string            `json:"created_at"`
+	Stage             string            `json:"stage"`
+	State             string            `json:"state,omitempty"`
+	TargetRole        string            `json:"target_role,omitempty"`
+	GraphID           string            `json:"graph_id,omitempty"`
+	ParentTaskID      string            `json:"parent_task_id,omitempty"`
+	TaskID            string            `json:"task_id,omitempty"`
+	TurnID            string            `json:"turn_id,omitempty"`
+	RoleID            string            `json:"role_id,omitempty"`
+	JoinID            string            `json:"join_id,omitempty"`
+	JoinPolicy        string            `json:"join_policy,omitempty"`
+	Outcome           string            `json:"outcome,omitempty"`
+	ArtifactID        string            `json:"artifact_id,omitempty"`
+	Round             int64             `json:"round,omitempty"`
+	MaxRounds         int64             `json:"max_rounds,omitempty"`
+	MaxParallelism    int64             `json:"max_parallelism,omitempty"`
+	TaskCount         int64             `json:"task_count,omitempty"`
+	MinimumSuccess    int64             `json:"minimum_success,omitempty"`
+	Nodes             []CortexTraceNode `json:"nodes,omitempty"`
+	SuccessfulTaskIDs []string          `json:"successful_task_ids,omitempty"`
+	FailedTaskIDs     []string          `json:"failed_task_ids,omitempty"`
+	ToolCallID        string            `json:"tool_call_id,omitempty"`
+	ToolID            string            `json:"tool_id,omitempty"`
+	ReceiptID         string            `json:"receipt_id,omitempty"`
+}
+
+type CortexTraceNode struct {
+	TaskID string `json:"task_id"`
+	RoleID string `json:"role_id"`
+	Depth  int64  `json:"depth"`
+	ToolID string `json:"tool_id,omitempty"`
 }
 
 // WebFetchAuthorization is the only external-read Tool authorization enabled
