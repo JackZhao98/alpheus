@@ -19,8 +19,8 @@ func TestCatalogIsCompleteReviewedInventory(t *testing.T) {
 			}
 		}
 	}
-	if active != 36 {
-		t.Fatalf("active tools = %d, want 36", active)
+	if active != 37 {
+		t.Fatalf("active tools = %d, want 37", active)
 	}
 	if robinhoodCandidates != 0 {
 		t.Fatalf("Robinhood candidates = %d, want 0", robinhoodCandidates)

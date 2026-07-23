@@ -29,6 +29,7 @@ type ToolID string
 const (
 	ToolResearchWebFetch   ToolID = "research_web_fetch"
 	ToolResearchGEXBOTAsOf ToolID = "research_gexbot_as_of"
+	ToolMarketGEXBOTLive   ToolID = "market_gexbot_live"
 
 	// ToolKernelEarningsResults is intentionally only a catalog candidate until
 	// R2 installs its authorization, Kernel bridge, receipt, and role-grant
@@ -54,6 +55,11 @@ type GEXBOTAsOfRequest struct {
 	Symbol   string    `json:"symbol"`
 	Category string    `json:"category"`
 	AsOf     time.Time `json:"as_of"`
+}
+
+type GEXBOTLiveRequest struct {
+	Symbol   string `json:"symbol"`
+	Category string `json:"category"`
 }
 
 // KernelEarningsResultsRequest is one explicit equity symbol. It is not a
@@ -115,6 +121,13 @@ func (value WebFetchRequest) Validate() error {
 
 func (value GEXBOTAsOfRequest) Validate() error {
 	if !gexbotSymbol(value.Symbol) || !gexbotCategory(value.Category) || !validUTC(value.AsOf) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
+func (value GEXBOTLiveRequest) Validate() error {
+	if value.Symbol != "SPX" || !gexbotCategory(value.Category) {
 		return ErrInvalidCapability
 	}
 	return nil
@@ -214,6 +227,38 @@ type GEXBOTToolReceipt struct {
 	CompletedAt    time.Time            `json:"completed_at"`
 }
 
+// GEXBOTLiveEvidence proves an on-demand official API read. SourceTimestamp is
+// the provider data timestamp and can be older than FetchedAt (for example
+// after market close); callers must never describe FetchedAt as market time.
+type GEXBOTLiveEvidence struct {
+	SchemaRevision    uint16            `json:"schema_revision"`
+	EvidenceID        string            `json:"evidence_id"`
+	ToolCallID        string            `json:"tool_call_id"`
+	Provider          string            `json:"provider"`
+	Symbol            string            `json:"symbol"`
+	Category          string            `json:"category"`
+	ObservationID     string            `json:"observation_id"`
+	ObservationDigest string            `json:"observation_digest"`
+	SourceTimestamp   time.Time         `json:"source_timestamp"`
+	ObservedAt        time.Time         `json:"observed_at"`
+	FetchedAt         time.Time         `json:"fetched_at"`
+	AvailableAt       time.Time         `json:"available_at"`
+	Metrics           GEXBOTMetrics     `json:"metrics"`
+	Raw               GEXBOTRawMetadata `json:"raw"`
+}
+
+type GEXBOTLiveToolReceipt struct {
+	SchemaRevision uint16               `json:"schema_revision"`
+	ReceiptID      string               `json:"receipt_id"`
+	ToolCallID     string               `json:"tool_call_id"`
+	ToolID         ToolID               `json:"tool_id"`
+	RequestDigest  string               `json:"request_digest"`
+	State          ReceiptState         `json:"state"`
+	Evidence       contracts.RecordRef  `json:"evidence"`
+	Executor       contracts.AuditActor `json:"executor"`
+	CompletedAt    time.Time            `json:"completed_at"`
+}
+
 // KernelEarningsObservation is the bounded fact returned by Kernel's narrow
 // bridge. It excludes the upstream MCP guide and raw response envelope.
 type KernelEarningsObservation struct {
@@ -302,6 +347,31 @@ func (value GEXBOTToolReceipt) Validate() error {
 		value.Evidence.Validate() != nil || value.Evidence.Owner != contracts.OwnerResearchGateway ||
 		value.Evidence.RecordType != "gexbot_as_of_evidence" || value.Executor.Validate() != nil ||
 		value.Executor.Kind != contracts.PrincipalWorkload || value.Executor.Audience != contracts.AudienceResearchGateway || !validUTC(value.CompletedAt) {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
+func (value GEXBOTLiveEvidence) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.EvidenceID) || !validID(value.ToolCallID) ||
+		value.Provider != "gexbot_classic" || value.Symbol != "SPX" || !gexbotCategory(value.Category) ||
+		!validUUID(value.ObservationID) || !validDigest(value.ObservationDigest) ||
+		!validUTC(value.SourceTimestamp) || !validUTC(value.ObservedAt) || !validUTC(value.FetchedAt) || !validUTC(value.AvailableAt) ||
+		value.FetchedAt.Before(value.ObservedAt) || value.AvailableAt.Before(value.FetchedAt) ||
+		!value.Metrics.valid() || !validUUID(value.Raw.BlobID) || !validDigest(value.Raw.ContentDigest) ||
+		value.Raw.SizeBytes < 1 || value.Raw.SizeBytes > 2<<20 {
+		return ErrInvalidCapability
+	}
+	return nil
+}
+
+func (value GEXBOTLiveToolReceipt) Validate() error {
+	if value.SchemaRevision != SchemaRevisionV1 || !validID(value.ReceiptID) || !validID(value.ToolCallID) ||
+		value.ToolID != ToolMarketGEXBOTLive || !validDigest(value.RequestDigest) || value.State != ReceiptSucceeded ||
+		value.Evidence.Validate() != nil || value.Evidence.Owner != contracts.OwnerResearchGateway ||
+		value.Evidence.RecordType != "gexbot_live_evidence" || value.Executor.Validate() != nil ||
+		value.Executor.Kind != contracts.PrincipalWorkload || value.Executor.Audience != contracts.AudienceResearchGateway ||
+		!validUTC(value.CompletedAt) {
 		return ErrInvalidCapability
 	}
 	return nil

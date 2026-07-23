@@ -38,6 +38,11 @@ var toolCatalog = []ToolDescriptor{
 		Effect: "read_only", TargetRoles: []string{"options_scout", "decision_desk"}, State: CatalogStateActive,
 	},
 	{
+		ID: ToolMarketGEXBOTLive, Revision: 1, Provider: "gexbot_provider", SourceTool: "gexbot-live",
+		Category: "market_options", Description: "Fetch one current official SPX GEX API response and preserve both source and fetch times.",
+		Effect: "read_only", TargetRoles: []string{"options_scout"}, State: CatalogStateActive,
+	},
+	{
 		ID: "kernel_accounts", Revision: 1, Provider: "kernel_robinhood_mcp", SourceTool: "get_accounts",
 		Category: "portfolio", Description: "Read identity and account facts only for the bound brokerage account.",
 		Effect: "read_only", TargetRoles: []string{"position_manager"}, State: CatalogStateActive,
