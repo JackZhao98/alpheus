@@ -828,7 +828,8 @@ func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) 
 }
 
 func (adapter *PostgresAdapter) RecordHandoff(ctx context.Context, callID, target, objective, rationale string) error {
-	if callID == "" || (target != "desk" && target != "scout") || objective == "" || rationale == "" {
+	_, specialist := capability.LookupAgentRole(capability.AgentRoleID(target))
+	if callID == "" || (target != "desk" && target != "scout" && !specialist) || objective == "" || rationale == "" {
 		return fmt.Errorf("invalid Cortex handoff")
 	}
 	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
