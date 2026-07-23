@@ -479,6 +479,56 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+	mux.HandleFunc("POST /internal/v1/tool-calls/gexbot-live", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, workerToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			SourceCallID    string `json:"source_call_id"`
+			AttemptID       string `json:"attempt_id"`
+			LeaseGeneration int64  `json:"lease_generation"`
+			LeaseToken      string `json:"lease_token"`
+			Symbol          string `json:"symbol"`
+			Category        string `json:"category"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid tool call", http.StatusBadRequest)
+			return
+		}
+		toolRequest := capability.GEXBOTLiveRequest{
+			Symbol: strings.ToUpper(strings.TrimSpace(body.Symbol)), Category: strings.TrimSpace(body.Category),
+		}
+		authorization, err := adapter.AuthorizeGEXBOTLive(request.Context(), strings.TrimSpace(body.SourceCallID),
+			strings.TrimSpace(body.AttemptID), body.LeaseGeneration, strings.TrimSpace(body.LeaseToken), toolRequest)
+		if err != nil {
+			log.Printf("Cortex GEXBOT live authorization failed: %v", err)
+			http.Error(w, "tool authorization denied", http.StatusForbidden)
+			return
+		}
+		result, err := invokeResearchGEXBOTLive(request.Context(), researchHTTP, researchURL, researchToken, authorization.ToolCallID)
+		if err != nil {
+			log.Printf("Research GEXBOT live failed for %s: %v", authorization.ToolCallID, err)
+			http.Error(w, "research tool unavailable", http.StatusBadGateway)
+			return
+		}
+		if result.Receipt.ToolCallID != authorization.ToolCallID || result.Receipt.ToolID != capability.ToolMarketGEXBOTLive ||
+			result.Receipt.RequestDigest != authorization.RequestDigest || result.Evidence.ToolCallID != authorization.ToolCallID ||
+			result.Evidence.Symbol != authorization.Symbol || result.Evidence.Category != authorization.Category {
+			http.Error(w, "research tool response invalid", http.StatusBadGateway)
+			return
+		}
+		if err := adapter.RecordGEXBOTLiveReceipt(request.Context(), result); err != nil {
+			log.Printf("Cortex GEXBOT live receipt recording failed: %v", err)
+			http.Error(w, "research receipt unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("POST /internal/v1/tool-calls/kernel-earnings-results", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -658,6 +708,38 @@ func invokeResearchGEXBOTAsOf(ctx context.Context, client *http.Client, baseURL,
 	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
 		result.Receipt.ToolCallID != result.Evidence.ToolCallID || result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID {
 		return inputgateway.CortexGEXBOTAsOfResult{}, fmt.Errorf("Research GEXBOT Tool returned an invalid receipt")
+	}
+	return result, nil
+}
+
+func invokeResearchGEXBOTLive(ctx context.Context, client *http.Client, baseURL, token, toolCallID string) (inputgateway.CortexGEXBOTLiveResult, error) {
+	if client == nil || baseURL == "" || token == "" || toolCallID == "" {
+		return inputgateway.CortexGEXBOTLiveResult{}, fmt.Errorf("Research GEXBOT live Tool is unavailable")
+	}
+	body, _ := json.Marshal(map[string]string{"tool_call_id": toolCallID})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/internal/v1/cortex-tools/gexbot-live", bytes.NewReader(body))
+	if err != nil {
+		return inputgateway.CortexGEXBOTLiveResult{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return inputgateway.CortexGEXBOTLiveResult{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil || len(raw) == 0 || len(raw) >= 64<<10 || response.StatusCode != http.StatusOK {
+		return inputgateway.CortexGEXBOTLiveResult{}, fmt.Errorf("Research GEXBOT live Tool HTTP %d", response.StatusCode)
+	}
+	var result inputgateway.CortexGEXBOTLiveResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != result.Evidence.ToolCallID ||
+		result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID {
+		return inputgateway.CortexGEXBOTLiveResult{}, fmt.Errorf("Research GEXBOT live Tool returned an invalid receipt")
 	}
 	return result, nil
 }

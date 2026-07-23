@@ -440,6 +440,20 @@ type CortexGEXBOTAsOfResult struct {
 	Evidence capability.GEXBOTAsOfEvidence `json:"evidence"`
 }
 
+type GEXBOTLiveAuthorization struct {
+	Status        string `json:"status"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolID        string `json:"tool_id"`
+	RequestDigest string `json:"request_digest"`
+	Symbol        string `json:"symbol"`
+	Category      string `json:"category"`
+}
+
+type CortexGEXBOTLiveResult struct {
+	Receipt  capability.GEXBOTLiveToolReceipt `json:"receipt"`
+	Evidence capability.GEXBOTLiveEvidence    `json:"evidence"`
+}
+
 // KernelEarningsAuthorization is the Control-owned permission to obtain one
 // published Kernel fact. It cannot carry a generic MCP tool name or account.
 type KernelEarningsAuthorization struct {
@@ -653,6 +667,59 @@ func (adapter *PostgresAdapter) RecordGEXBOTAsOfReceipt(ctx context.Context, res
 		if json.Unmarshal(raw, &response) != nil || response.Status != "recorded" || response.ReceiptID != result.Receipt.ReceiptID ||
 			response.EvidenceID != result.Evidence.EvidenceID {
 			return fmt.Errorf("Research GEXBOT receipt acknowledgement mismatch")
+		}
+		return nil
+	})
+}
+
+func (adapter *PostgresAdapter) AuthorizeGEXBOTLive(ctx context.Context, sourceCallID, attemptID string, leaseGeneration int64, leaseToken string, request capability.GEXBOTLiveRequest) (GEXBOTLiveAuthorization, error) {
+	if adapter == nil || adapter.db == nil || sourceCallID == "" || attemptID == "" || leaseGeneration < 1 ||
+		leaseToken == "" || request.Validate() != nil {
+		return GEXBOTLiveAuthorization{}, fmt.Errorf("invalid Cortex GEXBOT live authorization")
+	}
+	var raw []byte
+	err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT agent_control.authorize_cortex_gexbot_live($1,$2,$3,$4::UUID,$5,$6)::TEXT`,
+			sourceCallID, attemptID, leaseGeneration, leaseToken, request.Symbol, request.Category).Scan(&raw)
+	})
+	if err != nil {
+		return GEXBOTLiveAuthorization{}, fmt.Errorf("authorize Cortex GEXBOT live: %w", err)
+	}
+	var result GEXBOTLiveAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Status != "authorized" ||
+		result.ToolCallID == "" || result.ToolID != string(capability.ToolMarketGEXBOTLive) || result.RequestDigest == "" ||
+		result.Symbol != request.Symbol || result.Category != request.Category {
+		return GEXBOTLiveAuthorization{}, fmt.Errorf("Cortex GEXBOT live authorization was denied or mismatched")
+	}
+	return result, nil
+}
+
+func (adapter *PostgresAdapter) RecordGEXBOTLiveReceipt(ctx context.Context, result CortexGEXBOTLiveResult) error {
+	if adapter == nil || adapter.db == nil || result.Receipt.Validate() != nil || result.Evidence.Validate() != nil ||
+		result.Receipt.ToolCallID != result.Evidence.ToolCallID ||
+		result.Receipt.Evidence.RecordID != result.Evidence.EvidenceID || result.Receipt.Evidence.RecordDigest == "" {
+		return fmt.Errorf("invalid Research GEXBOT live receipt")
+	}
+	receiptRaw, err := json.Marshal(result.Receipt)
+	if err != nil {
+		return err
+	}
+	return adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		var raw []byte
+		if err := tx.QueryRowContext(ctx, `SELECT agent_control.record_cortex_gexbot_live_receipt($1,$2::JSONB)::TEXT`,
+			result.Receipt.ToolCallID, string(receiptRaw)).Scan(&raw); err != nil {
+			return err
+		}
+		var response struct {
+			Status     string `json:"status"`
+			ReceiptID  string `json:"receipt_id"`
+			EvidenceID string `json:"evidence_id"`
+		}
+		if json.Unmarshal(raw, &response) != nil || response.Status != "recorded" ||
+			response.ReceiptID != result.Receipt.ReceiptID || response.EvidenceID != result.Evidence.EvidenceID {
+			return fmt.Errorf("Research GEXBOT live receipt acknowledgement mismatch")
 		}
 		return nil
 	})
