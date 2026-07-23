@@ -65,6 +65,8 @@ type gateway struct {
 	cortexToken string
 	db          *sql.DB
 	principal   string
+	gexbotURL   string
+	gexbotToken string
 }
 
 func main() {
@@ -82,6 +84,9 @@ func run() error {
 	if err := g.configureCortexTool(); err != nil {
 		return err
 	}
+	if err := g.configureGEXBOTProvider(); err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -90,6 +95,9 @@ func run() error {
 	mux.HandleFunc("POST /v1/web/search", g.webSearch)
 	mux.HandleFunc("POST /v1/web/fetch", g.webFetch)
 	mux.HandleFunc("POST /internal/v1/cortex-tools/web-fetch", g.cortexWebFetch)
+	mux.HandleFunc("POST /internal/v1/gexbot/as-of", g.cortexGEXBOTAsOf)
+	mux.HandleFunc("POST /internal/v1/gexbot/replays", g.cortexGEXBOTReplay)
+	mux.HandleFunc("POST /internal/v1/gexbot/replays/{id}/next", g.cortexGEXBOTReplayNext)
 	log.Printf("research-gateway listening on :8300")
 	return http.ListenAndServe(":8300", mux)
 }

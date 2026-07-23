@@ -59,10 +59,13 @@ services:
       CORTEX_RESEARCH_TOKEN_FILE: /run/secrets/cortex/research-tool-token
       RESEARCH_DATABASE_URL_FILE: /run/secrets/cortex/research-database-url
       RESEARCH_PRINCIPAL_ID: research-gateway-1
+      GEXBOT_PROVIDER_URL: http://gexbot-provider:8500
+      GEXBOT_PROVIDER_READ_TOKEN_FILE: /run/secrets/cortex/gexbot-provider-read-token
     volumes:
       - ./.secrets/cortex:/run/secrets/cortex:ro
     depends_on:
       cortex-research-login: { condition: service_completed_successfully }
+      gexbot-provider: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8300/health >/dev/null"]
       interval: 3s
@@ -117,6 +120,97 @@ services:
     entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-research-login.sh"]
     depends_on:
       agent-platform-migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  # GEXBOT owns its own Research Plane database login and tokens. The token
+  # files are host-persistent secrets, never compose environment values.
+  gexbot-provider-secrets:
+    image: alpine:3.20
+    environment:
+      GEXBOT_PROVIDER_SECRET_DIR: /run/secrets/cortex
+    volumes:
+      - ./.secrets/cortex:/run/secrets/cortex
+      - ./:/workspace:ro
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-gexbot-provider-secrets.sh"]
+    restart: "no"
+
+  gexbot-provider-login:
+    image: postgres:16-alpine
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      GEXBOT_PROVIDER_DATABASE_PASSWORD_FILE: /run/secrets/cortex/gexbot-provider-database-password
+      GEXBOT_PROVIDER_DATABASE_URL_FILE: /run/secrets/cortex/gexbot-provider-database-url
+      AGENT_PLATFORM_ROOT: /workspace
+    volumes:
+      - ./:/workspace:ro
+      - ./.secrets/cortex:/run/secrets/cortex
+    entrypoint: ["/bin/sh", "/workspace/agent-platform/provision-gexbot-provider-login.sh"]
+    depends_on:
+      agent-platform-migrate: { condition: service_completed_successfully }
+      gexbot-provider-secrets: { condition: service_completed_successfully }
+    restart: "no"
+
+  # This one-way compatibility bridge decrypts the existing Kernel-held GEXBOT
+  # key only into the Provider's private secret file. Kernel itself no longer
+  # runs a collector or uses that credential at request time.
+  gexbot-provider-secret-export:
+    build: ./kernel
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      AGENT_WEB_SESSION_KEY: ${AGENT_WEB_SESSION_KEY:-}
+      AGENT_SECRET_NAME: gexbot
+      AGENT_SECRET_TARGET_FILE: /run/secrets/cortex/gexbot-api-key
+      AGENT_SECRET_OPTIONAL: "true"
+    volumes:
+      - ./.secrets/cortex:/run/secrets/cortex
+    entrypoint: ["/export-agent-secret"]
+    depends_on:
+      db: { condition: service_healthy }
+      gexbot-provider-secrets: { condition: service_completed_successfully }
+    restart: "no"
+
+  gexbot-provider:
+    build:
+      context: .
+      dockerfile: agent-platform/Dockerfile.gexbot-provider
+    environment:
+      GEXBOT_PROVIDER_PRINCIPAL_ID: gexbot-provider-1
+      GEXBOT_PROVIDER_DATABASE_URL_FILE: /run/secrets/cortex/gexbot-provider-database-url
+      GEXBOT_PROVIDER_INGEST_TOKEN_FILE: /run/secrets/cortex/gexbot-provider-ingest-token
+      GEXBOT_PROVIDER_READ_TOKEN_FILE: /run/secrets/cortex/gexbot-provider-read-token
+      GEXBOT_API_KEY_FILE: /run/secrets/cortex/gexbot-api-key
+      GEXBOT_BLOB_ROOT: /var/lib/alpheus/cortex-blobs
+      GEXBOT_PROVIDER_ADDR: :8500
+    ports: ["127.0.0.1:8500:8500"]
+    volumes:
+      - cortex_blobdata:/var/lib/alpheus/cortex-blobs
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8500/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      gexbot-provider-login: { condition: service_completed_successfully }
+      gexbot-provider-secret-export: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  # A root-only, idempotent import keeps the old dashboard history readable
+  # while moving every raw payload into Provider-owned Blob retention. It has
+  # no runtime dependency and may be removed after the migration window.
+  gexbot-legacy-import:
+    build:
+      context: .
+      dockerfile: agent-platform/Dockerfile.gexbot-legacy-import
+    environment:
+      DATABASE_URL: postgresql://alpheus:alpheus@db:5432/alpheus?sslmode=disable
+      GEXBOT_PROVIDER_URL: http://gexbot-provider:8500
+      GEXBOT_PROVIDER_INGEST_TOKEN_FILE: /run/secrets/cortex/gexbot-provider-ingest-token
+      GEXBOT_LEGACY_IMPORT_LIMIT: ${GEXBOT_LEGACY_IMPORT_LIMIT:-50000}
+    volumes:
+      - ./.secrets/cortex:/run/secrets/cortex:ro
+    depends_on:
+      gexbot-provider: { condition: service_healthy }
     restart: "no"
 
   cortex-activator-login:

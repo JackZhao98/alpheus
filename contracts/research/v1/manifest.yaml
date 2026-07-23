@@ -1,0 +1,22 @@
+schema_revision: 1
+owner: research_plane
+lifecycle: active
+compatibility: additive_only
+records:
+  - gexbot_observation
+  - gexbot_replay_session
+commands:
+  - record_gexbot_observation
+  - create_gexbot_replay
+  - consume_gexbot_replay
+queries:
+  - gexbot_as_of
+retention:
+  raw_blob: 5y
+  observation: 5y
+  replay_session: 30d
+principles:
+  - GEXBOT is a read-only Research Plane provider; it has no Kernel or broker authority.
+  - An as_of result may contain only observations whose available_at is at or before as_of.
+  - Raw provider bytes are retained through the AP0 BlobStore and are never returned in a Cortex prompt.
+  - Replay advances one immutable observation at a time using a fenced monotonic cursor.

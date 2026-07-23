@@ -1,0 +1,9 @@
+raw_blob:
+  retention: 5y
+  access: provider_private
+observation:
+  retention: 5y
+  mutation: append_only
+replay_session:
+  retention: 30d
+  mutation: fenced_cursor_only

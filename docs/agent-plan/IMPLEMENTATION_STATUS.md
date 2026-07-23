@@ -53,6 +53,18 @@
   remains compatibility-only and must be retired rather than extended into a
   Cortex workflow owner. See
   [`CORTEX_RESEARCH_BOUNDARY.md`](CORTEX_RESEARCH_BOUNDARY.md).
+- GEXBot is now the first deployed independent Research Plane Provider. The
+  `gexbot-provider` has its own NOINHERIT database LOGIN, provider-only
+  ingestion/read tokens, immutable `research.gexbot_observation` records,
+  AP0 Blob-backed raw payloads, `available_at`-correct `as_of`, and
+  generation-fenced replay cursors. `research-gateway` holds only the Provider
+  read token and exposes the bounded internal read/replay façade; it never sees
+  the GEXBot upstream credential or raw payload. The existing 4,215 historical
+  Kernel observations were imported one-for-one with the original collector
+  availability time and Provider-owned Blob references. Kernel no longer starts
+  a GEXBot collector. This is a Research Data Plane foundation, not an active
+  Cortex GEX Tool/Capability Registry entry, a Scout grant, or an options
+  execution feature.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record

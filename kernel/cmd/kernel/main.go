@@ -273,9 +273,9 @@ func main() {
 	if err := startAgentQueryRecovery(s); err != nil {
 		log.Fatalf("agent query recovery startup: %v", err)
 	}
-	if err := startGEXBotCollector(s); err != nil {
-		log.Fatalf("GEXBot collector startup: %v", err)
-	}
+	// GEXBOT collection moved to the credential-isolated Research Plane
+	// Provider. Kernel keeps the old dashboard's historical read model only;
+	// it no longer schedules external GEXBOT requests or owns fresh snapshots.
 	st.Event("kernel_start", map[string]any{
 		"broker": os.Getenv("BROKER"), "mode": mode.TradingMode,
 		"kernel_policy": map[string]any{

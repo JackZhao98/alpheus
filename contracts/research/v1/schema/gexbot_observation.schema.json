@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GEXBOT Research Observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_revision", "observation_id", "provider", "provider_revision", "source_kind", "symbol", "category", "source_timestamp", "observed_at", "fetched_at", "available_at", "ingested_at", "raw", "metrics", "quality_state", "record_digest"],
+  "properties": {
+    "schema_revision": {"const": 1},
+    "observation_id": {"type": "string", "format": "uuid"},
+    "provider": {"const": "gexbot_classic"},
+    "provider_revision": {"const": "gexbot_classic_v1"},
+    "source_kind": {"enum": ["provider_poll", "collector_push", "legacy_kernel_import"]},
+    "symbol": {"type": "string", "pattern": "^[A-Z0-9._-]{1,16}$"},
+    "category": {"enum": ["gex_full", "gex_zero", "gex_one"]},
+    "source_timestamp": {"type": "string", "format": "date-time"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "fetched_at": {"type": "string", "format": "date-time"},
+    "available_at": {"type": "string", "format": "date-time"},
+    "ingested_at": {"type": "string", "format": "date-time"},
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blob_id", "content_digest", "size_bytes"],
+      "properties": {
+        "blob_id": {"type": "string", "format": "uuid"},
+        "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 2097152}
+      }
+    },
+    "metrics": {"type": "object"},
+    "quality_state": {"const": "accepted"},
+    "record_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

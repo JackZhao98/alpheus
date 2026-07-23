@@ -28,6 +28,7 @@ const (
 	OwnerPlatformGovernance Owner = "platform_governance"
 	OwnerBlob               Owner = "blob"
 	OwnerResearchGateway    Owner = "research_gateway"
+	OwnerGEXBOTProvider     Owner = "gexbot_provider"
 	OwnerGrace              Owner = "grace"
 	OwnerDelegation         Owner = "delegation"
 	OwnerKernel             Owner = "kernel"
@@ -445,7 +446,7 @@ func orderedUTC(values ...time.Time) bool {
 func knownOwner(value Owner) bool {
 	switch value {
 	case OwnerAgentControl, OwnerWorker, OwnerPlatformGovernance, OwnerBlob,
-		OwnerResearchGateway, OwnerGrace, OwnerDelegation, OwnerKernel:
+		OwnerResearchGateway, OwnerGEXBOTProvider, OwnerGrace, OwnerDelegation, OwnerKernel:
 		return true
 	default:
 		return false

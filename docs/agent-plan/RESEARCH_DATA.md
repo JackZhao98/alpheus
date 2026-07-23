@@ -186,20 +186,21 @@ versioned decision.
 
 GEXBot Classic is a **read-only market-data Plugin** direction, initially for a
 two-week options-data collection window and later as research evidence for a
-single-day options strategy. A GEXBot-specific interim collector already stores
-raw SPX snapshots on a fixed policy: every 30 seconds on market weekdays from
-09:00 until 16:00 America/New_York, for `gex_full`, `gex_zero` (0DTE), and
-`gex_one` (1DTE). Its public `/gex` dashboard is read-only and exposes only
-stored market observations; the credential remains encrypted in the database
-and is never readable from that page. It is not a general Data Plane yet.
+single-day options strategy. As of 2026-07-22 its collector/archive path is a
+separate `gexbot-provider` Research Plane service: it samples SPX on the fixed
+30-second, 09:00–16:00 America/New_York weekday policy for `gex_full`,
+`gex_zero` (0DTE), and `gex_one` (1DTE); keeps raw responses through the AP0
+BlobStore; assigns `available_at` itself; and exposes bounded `as_of` and
+generation-fenced replay APIs only through `research-gateway`. The former
+Kernel table remains a read-only historical source during the one-way import,
+but Kernel no longer schedules GEXBot requests or owns fresh snapshots.
 Neither form is a Kernel Provider, an execution Plugin, or an authority to
 permit an order.
 
-The generalized registration belongs in AP3's Capability Registry; its
-collector, raw retention, normalization, and point-in-time query path belong in
-AP4. The interim collector must remain read-only until that migration. The
-Plugin must have a credential-isolated connector and expose one or more
-versioned read capabilities. It must not receive a Robinhood mutation
+The generalized registration still belongs in AP3's Capability Registry; the
+Provider foundation does not itself activate a Cortex Tool or grant it to a
+Scout. The Plugin must have a credential-isolated connector and expose one or
+more versioned read capabilities. It must not receive a Robinhood mutation
 credential, a Kernel mutation path, or a Delegation grant.
 
 Each collection result must preserve:

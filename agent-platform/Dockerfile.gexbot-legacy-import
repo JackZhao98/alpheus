@@ -1,0 +1,11 @@
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY agent-platform/go.mod agent-platform/go.sum ./
+RUN go mod download
+COPY agent-platform/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /bin/gexbot-legacy-import ./cmd/gexbot-legacy-import
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /bin/gexbot-legacy-import /usr/local/bin/gexbot-legacy-import
+ENTRYPOINT ["/usr/local/bin/gexbot-legacy-import"]
