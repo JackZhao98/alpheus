@@ -86,3 +86,23 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | `POST :8300/internal/v1/moody-blues/providers/gexbot-classic/replays/{id}/next` | 消费下一条历史观察值 | Cortex 内部令牌；只读 |
 
 旧 `/internal/v1/gexbot/*` 路径会暂时保留为兼容别名，直到所有内部调用迁移。
+
+## 下一阶段 TODO：并行多 Agent TaskGraph
+
+> 当前已上线流程仍是受控单链：一次 Intent 最多选择一个 Tool / Specialist，
+> 或创建一个开放 Scout 子 Task。下面是下一阶段最高优先级，不计入上面的
+> 37 Tool 上线完成度。
+
+| 顺序 | 工作项 | 完成条件 | 状态 |
+|---:|---|---|---|
+| P1 | 冻结 TaskGraph / dependency / join 契约 | 计划可表达多个并行子 Task、依赖边、最大并发、deadline、预算及不可变输出契约；模型不能自行扩大权限 | 待开始 |
+| P2 | Control 批量 admission 与 fan-out | 一次已验证计划原子创建多个独立子 Task；每个分支绑定唯一角色、Tool grant、预算和父 Run | 待开始 |
+| P3 | Scheduler 并行调度 | 不同 Specialist 可同时 claim/执行；同一 Task 仍只有一个有效 lease，重复投递不重复调用 Tool | 待开始 |
+| P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、超时、取消和部分失败；Join 只读取已提交 Artifact/Receipt | 待开始 |
+| P5 | 多阶段自适应研究 | Desk 可根据第一批 Artifact 的明确缺口提出下一批有界子链路；受最大轮次、Task 数和预算限制 | 待开始 |
+| P6 | DAG Trace 与 Agent Lab | 网页显示真实分叉、并行运行、等待、失败、汇合和下一轮，而不是伪造线性 Trace | 待开始 |
+| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 待开始 |
+
+下一项实际开发任务是 **P1：冻结 TaskGraph 和 Join 契约**。在 P1 通过前，
+不会直接把现有 Worker 改成无边界 fan-out，也不会让模型决定并发数、预算或
+Tool 权限。

@@ -217,6 +217,14 @@ path succeeded.” from the canonical Run. Old queue rows remain only as
 read-only historical audit records; no production path can create or execute
 another one.
 
+The next highest-priority Cortex milestone is parallel multi-Agent TaskGraph
+execution. It is not implemented by the current single-Tool/Specialist chain.
+The staged TODO is tracked in
+[`CORTEX_RESEARCH_LAUNCH_TRACKER.md`](CORTEX_RESEARCH_LAUNCH_TRACKER.md):
+freeze the graph/dependency/join contract first, then add atomic fan-out,
+parallel scheduling, explicit fan-in policies, bounded iterative research,
+DAG Trace/UI, and concurrency/failure acceptance.
+
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the
 120-second lease, and close known invalid-output or Control-publication
