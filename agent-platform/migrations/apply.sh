@@ -204,5 +204,6 @@ run_sql agent-platform/migrations/0121_cortex_paper_effect_projection.sql 0121_c
 run_sql agent-platform/migrations/0122_cortex_candidate_intermediate_contract.sql 0122_cortex_candidate_intermediate_contract
 run_sql agent-platform/migrations/0123_cortex_paper_decimal_digest.sql 0123_cortex_paper_decimal_digest
 run_sql agent-platform/migrations/0124_cortex_paper_sha256.sql 0124_cortex_paper_sha256
+run_sql agent-platform/migrations/0125_cortex_paper_effect_trace.sql 0125_cortex_paper_effect_trace
 
 echo "agent-platform migration bootstrap complete"
