@@ -16,26 +16,41 @@ import (
 )
 
 type cortexPaperOrderCommand struct {
-	SchemaRevision uint16    `json:"schema_revision"`
-	EffectID       string    `json:"effect_id"`
-	RunID          string    `json:"run_id"`
-	TaskID         string    `json:"task_id"`
-	Symbol         string    `json:"symbol"`
-	Kind           string    `json:"kind"`
-	Side           string    `json:"side"`
-	Multiplier     int64     `json:"multiplier"`
-	Qty            units.Qty `json:"qty"`
+	SchemaRevision      uint16    `json:"schema_revision"`
+	AuthorizationID     string    `json:"authorization_id"`
+	AuthorizationKind   string    `json:"authorization_kind"`
+	AuthorizationDigest string    `json:"authorization_digest"`
+	CandidateID         string    `json:"candidate_id"`
+	EffectID            string    `json:"effect_id"`
+	RunID               string    `json:"run_id"`
+	TaskID              string    `json:"task_id"`
+	Symbol              string    `json:"symbol"`
+	Kind                string    `json:"kind"`
+	Side                string    `json:"side"`
+	Multiplier          int64     `json:"multiplier"`
+	Qty                 units.Qty `json:"qty"`
 }
 
 type cortexPaperOrderResponse struct {
-	SchemaRevision uint16                `json:"schema_revision"`
-	EffectID       string                `json:"effect_id"`
-	RunID          string                `json:"run_id"`
-	TaskID         string                `json:"task_id"`
-	Environment    string                `json:"environment"`
-	Order          store.AgentPaperOrder `json:"order"`
-	Idempotent     bool                  `json:"idempotent_replay"`
-	AvailableAt    time.Time             `json:"available_at"`
+	SchemaRevision    uint16                `json:"schema_revision"`
+	AuthorizationID   string                `json:"authorization_id"`
+	AuthorizationKind string                `json:"authorization_kind"`
+	CandidateID       string                `json:"candidate_id"`
+	EffectID          string                `json:"effect_id"`
+	RunID             string                `json:"run_id"`
+	TaskID            string                `json:"task_id"`
+	Environment       string                `json:"environment"`
+	Order             store.AgentPaperOrder `json:"order"`
+	Idempotent        bool                  `json:"idempotent_replay"`
+	AvailableAt       time.Time             `json:"available_at"`
+}
+
+type cortexPaperModeResponse struct {
+	SchemaRevision uint16    `json:"schema_revision"`
+	Environment    string    `json:"environment"`
+	Mode           string    `json:"mode"`
+	Generation     int64     `json:"generation"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (s *server) postCortexPaperOrder(
@@ -61,9 +76,9 @@ func (s *server) postCortexPaperOrder(
 			map[string]string{"error": "Paper autonomy unavailable"})
 		return
 	}
-	if autonomy.Mode != "agentic" {
+	if autonomy.Mode != command.AuthorizationKind {
 		writeJSON(w, http.StatusConflict,
-			map[string]string{"error": "Paper Agentic mode is not active"})
+			map[string]string{"error": "Paper authorization mode is not active"})
 		return
 	}
 	provider := s.marketProvider()
@@ -117,7 +132,9 @@ func (s *server) postCortexPaperOrder(
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, cortexPaperOrderResponse{
-		SchemaRevision: 1, EffectID: command.EffectID,
+		SchemaRevision: 1, AuthorizationID: command.AuthorizationID,
+		AuthorizationKind: command.AuthorizationKind,
+		CandidateID:       command.CandidateID, EffectID: command.EffectID,
 		RunID: command.RunID, TaskID: command.TaskID,
 		Environment: "paper", Order: result.Order,
 		Idempotent: result.Replay, AvailableAt: time.Now().UTC(),
@@ -126,6 +143,11 @@ func (s *server) postCortexPaperOrder(
 
 func validCortexPaperOrderCommand(command cortexPaperOrderCommand) bool {
 	return command.SchemaRevision == 1 &&
+		validCortexBridgeIdentifier(command.AuthorizationID) &&
+		(command.AuthorizationKind == "copilot" ||
+			command.AuthorizationKind == "agentic") &&
+		validCortexBridgeDigest(command.AuthorizationDigest) &&
+		validCortexBridgeIdentifier(command.CandidateID) &&
 		validCortexBridgeIdentifier(command.EffectID) &&
 		validCortexBridgeIdentifier(command.RunID) &&
 		validCortexBridgeIdentifier(command.TaskID) &&
@@ -134,6 +156,29 @@ func validCortexPaperOrderCommand(command cortexPaperOrderCommand) bool {
 		command.Kind == "equity" &&
 		(command.Side == "buy" || command.Side == "sell") &&
 		command.Multiplier == 1 && command.Qty > 0
+}
+
+func (s *server) getCortexPaperMode(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if !s.authorizeCortexPaperEffect(w, r) {
+		return
+	}
+	autonomy, err := s.store.AgentAutonomyProfile("paper")
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "Paper autonomy unavailable"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, cortexPaperModeResponse{
+		SchemaRevision: 1,
+		Environment:    "paper",
+		Mode:           autonomy.Mode,
+		Generation:     autonomy.Generation,
+		UpdatedAt:      autonomy.UpdatedAt.UTC(),
+	})
 }
 
 func (s *server) authorizeCortexPaperEffect(

@@ -39,7 +39,11 @@ func TestCortexPaperOrderIsAgenticServerPricedAndIdempotent(t *testing.T) {
 		mode: protectedMode(config.ModeReadOnly), broker: fake, store: st,
 		cortexPaperEffectTokenFile: tokenPath, limits: dualLedgerLimits(),
 	}
-	body := `{"schema_revision":1,"effect_id":"effect-1",` +
+	body := `{"schema_revision":1,` +
+		`"authorization_id":"authorization-1",` +
+		`"authorization_kind":"agentic",` +
+		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
 		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
 		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`
 	first := postCortexPaperEffect(t, server, body, "paper-effect-test-token")
@@ -68,14 +72,18 @@ func TestCortexPaperOrderFailsClosed(t *testing.T) {
 		store: newMemoryStore(), cortexPaperEffectTokenFile: tokenPath,
 		limits: dualLedgerLimits(),
 	}
-	valid := `{"schema_revision":1,"effect_id":"effect-1",` +
+	valid := `{"schema_revision":1,` +
+		`"authorization_id":"authorization-1",` +
+		`"authorization_kind":"agentic",` +
+		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
 		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
 		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`
 	observe := postCortexPaperEffect(
 		t, server, valid, "paper-effect-test-token",
 	)
 	if observe.Code != http.StatusConflict ||
-		!strings.Contains(observe.Body.String(), "Agentic") {
+		!strings.Contains(observe.Body.String(), "authorization mode") {
 		t.Fatalf("status=%d body=%s", observe.Code, observe.Body.String())
 	}
 	unauthorized := postCortexPaperEffect(t, server, valid, "wrong")
@@ -91,6 +99,54 @@ func TestCortexPaperOrderFailsClosed(t *testing.T) {
 	if rejected.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s",
 			rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestCortexPaperModeAndAuthorizationKindAreBound(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "paper-effect-token")
+	if err := os.WriteFile(
+		tokenPath, []byte("paper-effect-test-token"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	st := newMemoryStore()
+	if _, err := st.SetAgentAutonomy(
+		"paper", "copilot", 1, "test",
+	); err != nil {
+		t.Fatal(err)
+	}
+	server := &server{
+		mode: protectedMode(config.ModeReadOnly), broker: newFake("300"),
+		store: st, cortexPaperEffectTokenFile: tokenPath,
+		limits: dualLedgerLimits(),
+	}
+	modeRequest := httptest.NewRequest(
+		http.MethodGet, "/internal/v1/cortex-effects/paper-mode", nil,
+	)
+	modeRequest.Header.Set(
+		"Authorization", "Bearer paper-effect-test-token",
+	)
+	mode := httptest.NewRecorder()
+	server.routes().ServeHTTP(mode, modeRequest)
+	if mode.Code != http.StatusOK ||
+		!strings.Contains(mode.Body.String(), `"mode":"copilot"`) ||
+		!strings.Contains(mode.Body.String(), `"generation":2`) {
+		t.Fatalf("mode status=%d body=%s", mode.Code, mode.Body.String())
+	}
+	mismatch := `{"schema_revision":1,` +
+		`"authorization_id":"authorization-1",` +
+		`"authorization_kind":"agentic",` +
+		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
+		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
+		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`
+	response := postCortexPaperEffect(
+		t, server, mismatch, "paper-effect-test-token",
+	)
+	if response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "authorization mode") {
+		t.Fatalf("status=%d body=%s",
+			response.Code, response.Body.String())
 	}
 }
 

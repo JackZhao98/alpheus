@@ -83,6 +83,7 @@ func (s *server) routes() http.Handler {
 	// Paper effects use a separate credential and a narrow server-priced
 	// contract. This endpoint cannot select a brokerage account or reach Live.
 	mux.HandleFunc("POST /internal/v1/cortex-effects/paper-order", s.postCortexPaperOrder)
+	mux.HandleFunc("GET /internal/v1/cortex-effects/paper-mode", s.getCortexPaperMode)
 	// Historical agent_query_job rows remain readable for audit/migration, but
 	// the legacy write path is retired. New requests enter Cortex directly.
 	mux.HandleFunc("POST /agent/query", s.authorizeAgentWeb(legacyAgentQueryGone))
