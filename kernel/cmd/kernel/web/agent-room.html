@@ -31,7 +31,8 @@
       </div>
       <nav id="room-list" class="room-list" aria-live="polite"></nav>
       <div class="rail-footer">
-        <a href="/cockpit">Trading Cockpit</a>
+        <a href="/agent/console">Command Console <span>控制台</span></a>
+        <a href="/cockpit">Legacy Cockpit</a>
         <a href="/agent-lab">Agent Lab <span>诊断</span></a>
       </div>
     </aside>
@@ -56,39 +57,39 @@
       <section id="new-room-view" class="new-room-view">
         <div class="welcome-copy">
           <span class="overline">CORTEX AGENT WORKSPACE</span>
-          <h2>你想让 Agent<br>研究什么？</h2>
-          <p>先选择一种工作模式。每个 Room 都会持久保存，并在后续问题中延续同一个上下文。</p>
+          <h2>你想和 Agent<br>推进什么？</h2>
+          <p>先选择交互与决策方式；Cortex 再根据目标决定 Agent、工具和策略。Gamma 只是可插拔策略之一。</p>
         </div>
-        <div class="mode-grid" aria-label="Agent mode">
+        <div class="mode-grid" aria-label="Agent interaction mode">
           <button class="mode-card selected" type="button" data-mode="research">
             <span class="mode-index">01</span>
             <span class="mode-card-copy">
-              <strong>Research</strong>
-              <small>开放研究与专业 Agent 协作</small>
+              <strong>Research Room</strong>
+              <small>有来有回的研究、分析与专业 Agent 协作</small>
             </span>
             <span class="mode-state available">AVAILABLE</span>
           </button>
-          <button class="mode-card" type="button" data-mode="spx_gamma" disabled>
+          <button class="mode-card" type="button" data-mode="continuous_monitor" disabled>
             <span class="mode-index">02</span>
             <span class="mode-card-copy">
-              <strong>SPX Gamma</strong>
-              <small>数据流驱动的盘中模拟</small>
+              <strong>Monitor Session</strong>
+              <small>数据流、数学触发器与持续决策循环</small>
             </span>
             <span class="mode-state">NEXT PHASE</span>
           </button>
-          <button class="mode-card" type="button" data-mode="equity_discovery" disabled>
+          <button class="mode-card" type="button" data-mode="copilot" disabled>
             <span class="mode-index">03</span>
             <span class="mode-card-copy">
-              <strong>Equity Discovery</strong>
-              <small>发现股票与 ETF 机会</small>
+              <strong>Copilot Session</strong>
+              <small>Agent 提议，人类确认后执行</small>
             </span>
             <span class="mode-state">NEXT PHASE</span>
           </button>
-          <button class="mode-card" type="button" data-mode="watchlist_monitor" disabled>
+          <button class="mode-card" type="button" data-mode="agentic" disabled>
             <span class="mode-index">04</span>
             <span class="mode-card-copy">
-              <strong>Watchlist Monitor</strong>
-              <small>新闻、价格与事件监控</small>
+              <strong>Agentic Session</strong>
+              <small>在预授权风险边界内自主决策</small>
             </span>
             <span class="mode-state">NEXT PHASE</span>
           </button>
@@ -98,6 +99,7 @@
           <div id="starter-list" class="starter-list">
             <button type="button">分析今天最值得关注的市场变化</button>
             <button type="button">检查我的持仓，找出最需要验证的风险</button>
+            <button type="button">使用 Gamma 策略分析今天的 SPX 机会</button>
             <button type="button">研究一家公司最近的财报与关键催化剂</button>
           </div>
         </div>

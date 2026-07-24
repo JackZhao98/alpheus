@@ -20,6 +20,17 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 	}
 }
 
+func TestAgentRoomLinksConsoleAndKeepsStrategiesBelowInteractionMode(t *testing.T) {
+	s := &server{}
+	response := routeRequest(s.routes(), http.MethodGet, "/agent", "", "")
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `href="/agent/console"`) ||
+		!strings.Contains(response.Body.String(), "Monitor Session") ||
+		strings.Contains(response.Body.String(), `data-mode="spx_gamma"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestAgentConsoleSnapshotProjectsRealKernelState(t *testing.T) {
 	venue := newFake("300")
 	st := newMemoryStore()
