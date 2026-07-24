@@ -26,7 +26,8 @@ type moodyBluesReplayCreateRequest struct {
 }
 
 type moodyBluesReplayStepRequest struct {
-	Generation int64 `json:"generation"`
+	Generation  int64    `json:"generation"`
+	DetectorIDs []string `json:"detector_ids"`
 }
 
 type moodyBluesReplayTriggerStore interface {
@@ -132,7 +133,8 @@ func registerMoodyBluesStreamHandlers(
 				return
 			}
 			if !validMoodyBluesReplayID(replayID) ||
-				input.Generation < 1 {
+				input.Generation < 1 ||
+				!validMoodyBluesDetectorIDs(input.DetectorIDs) {
 				writeMoodyBluesStreamError(
 					w, http.StatusBadRequest, "moody_blues_cursor_invalid",
 				)
@@ -151,7 +153,7 @@ func registerMoodyBluesStreamHandlers(
 				evaluations, err :=
 					evaluateMoodyBluesReplayFrame(
 						r.Context(), triggerStore, subjectID,
-						replayID, raw,
+						replayID, input.DetectorIDs, raw,
 					)
 				if err != nil {
 					log.Printf(
@@ -321,6 +323,7 @@ func evaluateMoodyBluesReplayFrame(
 	store moodyBluesReplayTriggerStore,
 	subjectID string,
 	replayID string,
+	detectorIDs []string,
 	raw []byte,
 ) ([]moodyBluesReplayTriggerEvaluation, error) {
 	var envelope moodyBluesReplayEnvelope
@@ -373,7 +376,16 @@ func evaluateMoodyBluesReplayFrame(
 		return nil, err
 	}
 	evaluations := make([]moodyBluesReplayTriggerEvaluation, 0)
+	selected := make(map[string]struct{}, len(detectorIDs))
+	for _, detectorID := range detectorIDs {
+		selected[detectorID] = struct{}{}
+	}
 	for _, trigger := range triggers {
+		if len(selected) > 0 {
+			if _, included := selected[trigger.TriggerID]; !included {
+				continue
+			}
+		}
 		if !trigger.Enabled ||
 			trigger.DataSource != "moody_blues_replay" ||
 			trigger.Symbol != observation.Symbol {
@@ -420,6 +432,24 @@ func evaluateMoodyBluesReplayFrame(
 		evaluations = append(evaluations, evaluation)
 	}
 	return evaluations, nil
+}
+
+func validMoodyBluesDetectorIDs(values []string) bool {
+	if len(values) > 32 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 200 {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
 }
 
 func validCortexReplayGEX(value cortexMonitorGEX) bool {

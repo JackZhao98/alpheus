@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	cortexDecisionTriggerInterval = 15 * time.Second
+	cortexDecisionTriggerInterval = time.Second
 	cortexDecisionTriggerLimit    = 100
 )
 

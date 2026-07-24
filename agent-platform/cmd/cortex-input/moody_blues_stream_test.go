@@ -248,6 +248,7 @@ func TestMoodyBluesReplayFrameNormalizesAndWakesCortex(t *testing.T) {
 		replayTriggerStoreStub{t: t, trigger: trigger},
 		"owner-1",
 		"11111111-1111-4111-8111-111111111111",
+		[]string{trigger.TriggerID},
 		raw,
 	)
 	if err != nil {
@@ -260,5 +261,16 @@ func TestMoodyBluesReplayFrameNormalizesAndWakesCortex(t *testing.T) {
 		evaluations[0].Wake == nil ||
 		evaluations[0].Wake.RunID == "" {
 		t.Fatalf("evaluations=%+v", evaluations)
+	}
+	excluded, err := evaluateMoodyBluesReplayFrame(
+		context.Background(),
+		replayTriggerStoreStub{t: t, trigger: trigger},
+		"owner-1",
+		"11111111-1111-4111-8111-111111111111",
+		[]string{"another-detector"},
+		raw,
+	)
+	if err != nil || len(excluded) != 0 {
+		t.Fatalf("excluded evaluations=%+v err=%v", excluded, err)
 	}
 }
