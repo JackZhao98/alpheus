@@ -105,6 +105,8 @@ type memoryStore struct {
 	agentSecrets             map[string][]byte
 	robinhoodOAuthFlows      map[string]store.RobinhoodOAuthFlow
 	robinhoodOAuthConsumed   map[string]bool
+	agentAutonomyMu          sync.Mutex
+	agentAutonomy            map[string]store.AgentAutonomyProfile
 }
 
 func (m *memoryStore) AgentPaperPortfolio(
@@ -125,6 +127,37 @@ func (m *memoryStore) ListAgentPaperOrders(
 	_ int,
 ) ([]store.AgentPaperOrder, error) {
 	return []store.AgentPaperOrder{}, nil
+}
+
+func (m *memoryStore) AgentAutonomyProfile(
+	environment string,
+) (store.AgentAutonomyProfile, error) {
+	m.agentAutonomyMu.Lock()
+	defer m.agentAutonomyMu.Unlock()
+	return m.agentAutonomy[environment], nil
+}
+
+func (m *memoryStore) SetAgentAutonomy(
+	environment string,
+	mode string,
+	expectedGeneration int64,
+	updatedBy string,
+) (store.AgentAutonomyProfile, error) {
+	m.agentAutonomyMu.Lock()
+	defer m.agentAutonomyMu.Unlock()
+	profile := m.agentAutonomy[environment]
+	if profile.Generation != expectedGeneration {
+		return store.AgentAutonomyProfile{},
+			store.ErrAgentAutonomyGenerationConflict
+	}
+	if profile.Mode != mode {
+		profile.Mode = mode
+		profile.Generation++
+		profile.UpdatedBy = updatedBy
+		profile.UpdatedAt = time.Now().UTC()
+		m.agentAutonomy[environment] = profile
+	}
+	return profile, nil
 }
 
 func newMemoryStore() *memoryStore {
@@ -172,9 +205,19 @@ func newMemoryStore() *memoryStore {
 		agentSecrets:             map[string][]byte{},
 		robinhoodOAuthFlows:      map[string]store.RobinhoodOAuthFlow{},
 		robinhoodOAuthConsumed:   map[string]bool{},
-		eventPayloads:            map[string][]any{},
-		dayOpenEquity:            map[string]units.Micros{},
-		realizedPnL:              map[string]units.Micros{},
+		agentAutonomy: map[string]store.AgentAutonomyProfile{
+			"paper": {
+				Environment: "paper", Mode: "observe", Generation: 1,
+				UpdatedBy: "system-bootstrap", CreatedAt: now, UpdatedAt: now,
+			},
+			"live": {
+				Environment: "live", Mode: "observe", Generation: 1,
+				UpdatedBy: "system-bootstrap", CreatedAt: now, UpdatedAt: now,
+			},
+		},
+		eventPayloads: map[string][]any{},
+		dayOpenEquity: map[string]units.Micros{},
+		realizedPnL:   map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},

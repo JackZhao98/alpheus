@@ -12,6 +12,7 @@ const state = {
   pollToken:0,
   sending:false,
   environment:"",
+  autonomy:null,
 };
 
 async function request(path,options = {}) {
@@ -57,6 +58,8 @@ function showError(error) {
     portfolio_unavailable:"账户数据暂时不可用。",
     cortex_unavailable:"Cortex 暂时无法连接。",
     agent_room_paused:"这个对话已暂停，请在完整对话界面恢复。",
+    autonomy_generation_conflict:"自治模式刚被其他操作修改，已重新读取最新状态。",
+    live_autonomy_locked:"Live 环境目前仍强制 Observe。",
   };
   text("console-error",known[error?.code] || error?.message || "请求失败");
 }
@@ -67,6 +70,7 @@ function clearError() {
 
 function renderEnvironment(environment,autonomy) {
   state.environment = environment.selected;
+  state.autonomy = autonomy;
   for (const button of byId("environment-switch").querySelectorAll("button")) {
     const value = button.dataset.environment;
     button.classList.toggle("active",value === environment.selected);
@@ -627,6 +631,28 @@ for (const button of byId("environment-switch").querySelectorAll("button")) {
       await loadSnapshot();
     } catch (error) {
       showError(error);
+    }
+  });
+}
+for (const button of byId("autonomy-switch").querySelectorAll("button")) {
+  button.addEventListener("click",async () => {
+    const mode = button.dataset.autonomy;
+    if (button.disabled || mode === state.autonomy?.selected ||
+        !state.environment || !state.autonomy?.generation) return;
+    clearError();
+    try {
+      await request(`/agent/console/autonomy/${encodeURIComponent(state.environment)}`,{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          expected_generation:state.autonomy.generation,
+          mode,
+        }),
+      });
+      await loadSnapshot();
+    } catch (error) {
+      showError(error);
+      await loadSnapshot().catch(() => {});
     }
   });
 }

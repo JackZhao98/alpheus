@@ -23,6 +23,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /assets/agent-console.css", serveCockpitFile("agent-console.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /assets/agent-console.js", serveCockpitFile("agent-console.js", "application/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /agent/console/snapshot", s.authorizeAgentWeb(s.getAgentConsoleSnapshot))
+	mux.HandleFunc("PUT /agent/console/autonomy/{environment}", s.authorizeAgentWeb(s.putAgentConsoleAutonomy))
 	mux.HandleFunc("GET /agent/console/triggers", s.authorizeAgentWeb(s.getAgentConsoleTriggers))
 	mux.HandleFunc("PUT /agent/console/triggers/{id}", s.authorizeAgentWeb(s.putAgentConsoleTrigger))
 	mux.HandleFunc("GET /agent/console/market/quote/{symbol}", s.authorizeAgentWeb(s.getMarketQuote))

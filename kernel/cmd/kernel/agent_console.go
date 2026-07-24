@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -25,8 +26,12 @@ type agentConsoleEnvironment struct {
 }
 
 type agentConsoleAutonomy struct {
-	Selected  string   `json:"selected"`
-	Available []string `json:"available"`
+	Environment string    `json:"environment"`
+	Selected    string    `json:"selected"`
+	Available   []string  `json:"available"`
+	Generation  int64     `json:"generation"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+	ErrorCode   string    `json:"error_code,omitempty"`
 }
 
 type agentConsolePortfolio struct {
@@ -58,6 +63,11 @@ type agentConsoleTriggerCommand struct {
 	CooldownSeconds    int64       `json:"cooldown_seconds"`
 	Objective          string      `json:"objective"`
 	Enabled            bool        `json:"enabled"`
+}
+
+type agentConsoleAutonomyCommand struct {
+	ExpectedGeneration int64  `json:"expected_generation"`
+	Mode               string `json:"mode"`
 }
 
 func (s *server) agentConsoleEnvironment(
@@ -134,11 +144,9 @@ func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"environment": environment,
-		"autonomy": agentConsoleAutonomy{
-			Selected: "observe", Available: []string{"observe"},
-		},
-		"portfolio": portfolio,
-		"activity":  activity,
+		"autonomy":    s.agentConsoleAutonomy(environment.Selected),
+		"portfolio":   portfolio,
+		"activity":    activity,
 		"triggers": map[string]any{
 			"available": false,
 			"items":     []any{},
@@ -146,6 +154,79 @@ func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request)
 		},
 		"generated_at": time.Now().UTC(),
 		"source":       "kernel_console_projection",
+	})
+}
+
+func (s *server) agentConsoleAutonomy(
+	environment string,
+) agentConsoleAutonomy {
+	autonomy := agentConsoleAutonomy{
+		Environment: environment,
+		Selected:    "observe",
+		Available:   []string{},
+	}
+	profile, err := s.store.AgentAutonomyProfile(environment)
+	if err != nil {
+		autonomy.ErrorCode = "autonomy_profile_unavailable"
+		return autonomy
+	}
+	autonomy.Selected = profile.Mode
+	autonomy.Generation = profile.Generation
+	autonomy.UpdatedAt = profile.UpdatedAt.UTC()
+	autonomy.Available = []string{"observe"}
+	if environment == "paper" {
+		autonomy.Available = []string{"observe", "copilot", "agentic"}
+	}
+	return autonomy
+}
+
+func (s *server) putAgentConsoleAutonomy(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	environment := strings.TrimSpace(r.PathValue("environment"))
+	var input agentConsoleAutonomyCommand
+	if !decodeJSONBody(w, r, &input) {
+		return
+	}
+	input.Mode = strings.TrimSpace(input.Mode)
+	if environment != "paper" && environment != "live" ||
+		input.ExpectedGeneration < 1 ||
+		input.Mode != "observe" && input.Mode != "copilot" &&
+			input.Mode != "agentic" {
+		writeAgentQueryError(w, http.StatusBadRequest,
+			"autonomy_transition_invalid",
+			"Autonomy transition is invalid")
+		return
+	}
+	if environment == "live" && input.Mode != "observe" {
+		writeAgentQueryError(w, http.StatusConflict,
+			"live_autonomy_locked",
+			"Live autonomy remains locked to Observe")
+		return
+	}
+	profile, err := s.store.SetAgentAutonomy(
+		environment, input.Mode, input.ExpectedGeneration,
+		authenticatedSubject(r),
+	)
+	if errors.Is(err, store.ErrAgentAutonomyGenerationConflict) {
+		writeAgentQueryError(w, http.StatusConflict,
+			"autonomy_generation_conflict",
+			"Autonomy setting changed; reload before retrying")
+		return
+	}
+	if err != nil {
+		writeInternalError(w, "set Agent autonomy", err)
+		return
+	}
+	available := []string{"observe"}
+	if environment == "paper" {
+		available = []string{"observe", "copilot", "agentic"}
+	}
+	writeJSON(w, http.StatusOK, agentConsoleAutonomy{
+		Environment: profile.Environment,
+		Selected:    profile.Mode, Available: available,
+		Generation: profile.Generation, UpdatedAt: profile.UpdatedAt.UTC(),
 	})
 }
 

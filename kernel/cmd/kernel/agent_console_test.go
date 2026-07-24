@@ -78,7 +78,9 @@ func TestAgentConsoleSnapshotProjectsRealKernelState(t *testing.T) {
 		body.Environment.LiveAvailable || !body.Environment.ExecutionEnabled {
 		t.Fatalf("environment=%+v", body.Environment)
 	}
-	if body.Autonomy.Selected != "observe" || len(body.Autonomy.Available) != 1 {
+	if body.Autonomy.Selected != "observe" ||
+		len(body.Autonomy.Available) != 3 ||
+		body.Autonomy.Generation != 1 {
 		t.Fatalf("autonomy=%+v", body.Autonomy)
 	}
 	if !body.Portfolio.Available ||
@@ -87,6 +89,64 @@ func TestAgentConsoleSnapshotProjectsRealKernelState(t *testing.T) {
 	}
 	if !body.Activity.Available || body.Activity.Operations == nil {
 		t.Fatalf("activity=%+v", body.Activity)
+	}
+}
+
+func TestAgentConsolePaperAutonomyIsDurableAndGenerationGuarded(
+	t *testing.T,
+) {
+	s := &server{
+		mode: config.ModeConfig{
+			TradingMode:      config.ModeReadOnly,
+			AgentWebAuthMode: config.AgentWebAuthLocal,
+		},
+		store:  newMemoryStore(),
+		limits: dualLedgerLimits(),
+	}
+	first := routeRequest(
+		s.routes(), http.MethodPut, "/agent/console/autonomy/paper",
+		`{"expected_generation":1,"mode":"copilot"}`, "",
+	)
+	if first.Code != http.StatusOK ||
+		!strings.Contains(first.Body.String(), `"selected":"copilot"`) ||
+		!strings.Contains(first.Body.String(), `"generation":2`) {
+		t.Fatalf("status=%d body=%s", first.Code, first.Body.String())
+	}
+	snapshot := routeRequest(
+		s.routes(), http.MethodGet,
+		"/agent/console/snapshot?environment=paper", "", "",
+	)
+	if snapshot.Code != http.StatusOK ||
+		!strings.Contains(snapshot.Body.String(), `"selected":"copilot"`) {
+		t.Fatalf("status=%d body=%s", snapshot.Code, snapshot.Body.String())
+	}
+	stale := routeRequest(
+		s.routes(), http.MethodPut, "/agent/console/autonomy/paper",
+		`{"expected_generation":1,"mode":"agentic"}`, "",
+	)
+	if stale.Code != http.StatusConflict ||
+		!strings.Contains(stale.Body.String(),
+			`"error_code":"autonomy_generation_conflict"`) {
+		t.Fatalf("status=%d body=%s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestAgentConsoleLiveAutonomyFailsClosed(t *testing.T) {
+	s := &server{
+		mode: config.ModeConfig{
+			TradingMode:      config.ModeReadOnly,
+			AgentWebAuthMode: config.AgentWebAuthLocal,
+		},
+		store: newMemoryStore(),
+	}
+	response := routeRequest(
+		s.routes(), http.MethodPut, "/agent/console/autonomy/live",
+		`{"expected_generation":1,"mode":"agentic"}`, "",
+	)
+	if response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(),
+			`"error_code":"live_autonomy_locked"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
