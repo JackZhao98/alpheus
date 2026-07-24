@@ -1214,10 +1214,11 @@ func taskGraphToolTokenLimits(item workItem) (int64, int64, error) {
 
 func taskGraphToolPlannerRequest(
 	model, prompt, role, objective, toolID string,
+	requestTime time.Time,
 	maxOutputTokens int64,
 ) map[string]any {
 	descriptor, found := capability.LookupTool(capability.ToolID(toolID))
-	if !found || maxOutputTokens < 1 {
+	if !found || requestTime.IsZero() || maxOutputTokens < 1 {
 		return nil
 	}
 	guide := descriptor.Description
@@ -1231,6 +1232,9 @@ func taskGraphToolPlannerRequest(
 	})
 	instructions := "You are the bounded parameter planner for one already-authorized Cortex TaskGraph Tool. " +
 		"The immutable identity is " + string(identity) +
+		". The frozen UserRequest time is " +
+		requestTime.UTC().Format(time.RFC3339Nano) +
+		"; resolve words such as today, current, 今天 and 今日 from this timestamp, never from model memory. " +
 		". You may propose only that exact Tool and may not substitute, delegate, or add another action. " +
 		"Tool contract: " + guide + ". "
 	switch capability.ToolID(toolID) {
@@ -1262,12 +1266,13 @@ func taskGraphToolPlannerRequest(
 
 func taskGraphToolCorrectionRequest(
 	model, prompt, role, objective, toolID string,
-	invalid workflowOutput, issue string, maxOutputTokens int64,
+	requestTime time.Time, invalid workflowOutput, issue string,
+	maxOutputTokens int64,
 ) map[string]any {
 	spec, found := capability.KernelReadToolSpecForID(
 		capability.ToolID(toolID),
 	)
-	if !found || issue == "" || maxOutputTokens < 1 {
+	if !found || requestTime.IsZero() || issue == "" || maxOutputTokens < 1 {
 		return nil
 	}
 	identity, _ := json.Marshal(map[string]string{
@@ -1281,6 +1286,9 @@ func taskGraphToolCorrectionRequest(
 	})
 	instructions := "You are the one permitted argument corrector for an already-frozen Cortex TaskGraph Tool. " +
 		"The immutable identity is " + string(identity) +
+		". The frozen UserRequest time is " +
+		requestTime.UTC().Format(time.RFC3339Nano) +
+		"; resolve relative dates from this timestamp, never from model memory. " +
 		". The first parameter plan was rejected locally before Tool authorization. " +
 		"The bounded rejection is " + string(observation) +
 		". Correct only the arguments using this exact contract: " +
@@ -2204,7 +2212,7 @@ func (w *worker) executeTaskGraphToolNode(
 		ctx, item, claim, attemptGeneration,
 		taskGraphToolPlannerRequest(
 			w.model, prompt, item.Role, objective,
-			item.TaskGraphToolID, plannerTokens,
+			item.TaskGraphToolID, item.Raw.CommittedAt, plannerTokens,
 		),
 		func(raw []byte) (workflowOutput, error) {
 			return parseWorkflowOutput(
@@ -2222,12 +2230,14 @@ func (w *worker) executeTaskGraphToolNode(
 	}
 	if issue := taskGraphKernelPlannerIssue(
 		planner.Workflow, capability.ToolID(item.TaskGraphToolID),
+		prompt, item.Raw.CommittedAt,
 	); issue != "" {
 		corrected, correctionErr := w.executeModelTurnWithContract(
 			ctx, item, claim, attemptGeneration,
 			taskGraphToolCorrectionRequest(
 				w.model, prompt, item.Role, objective,
-				item.TaskGraphToolID, planner.Workflow, issue, plannerTokens,
+				item.TaskGraphToolID, item.Raw.CommittedAt,
+				planner.Workflow, issue, plannerTokens,
 			),
 			func(raw []byte) (workflowOutput, error) {
 				return parseWorkflowOutput(
@@ -2246,6 +2256,7 @@ func (w *worker) executeTaskGraphToolNode(
 		}
 		if remaining := taskGraphKernelPlannerIssue(
 			planner.Workflow, capability.ToolID(item.TaskGraphToolID),
+			prompt, item.Raw.CommittedAt,
 		); remaining != "" {
 			failure := contracts.Failure{
 				Code:      remaining,
@@ -2290,6 +2301,7 @@ func (w *worker) executeTaskGraphToolNode(
 
 func taskGraphKernelPlannerIssue(
 	output workflowOutput, expected capability.ToolID,
+	prompt string, requestTime time.Time,
 ) string {
 	if _, kernelTool := capability.KernelReadToolSpecForID(expected); !kernelTool {
 		return ""
@@ -2307,7 +2319,31 @@ func taskGraphKernelPlannerIssue(
 	if !found || request.ToolID != expected {
 		return "kernel_tool_identity_invalid"
 	}
+	if request.ToolID == "kernel_equity_historicals" &&
+		relativeMarketTimeRequested(prompt) {
+		start, _ := time.Parse(
+			time.RFC3339Nano, request.Arguments["start_time"].(string),
+		)
+		reference := requestTime.UTC()
+		if reference.IsZero() ||
+			start.Before(reference.Add(-7*24*time.Hour)) ||
+			start.After(reference.Add(24*time.Hour)) {
+			return "kernel_tool_time_range_stale"
+		}
+	}
 	return ""
+}
+
+func relativeMarketTimeRequested(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	for _, marker := range []string{
+		"today", "current session", "this session", "今天", "今日", "当日",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *worker) executeTaskGraphGrantedTool(

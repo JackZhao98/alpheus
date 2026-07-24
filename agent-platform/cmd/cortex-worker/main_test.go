@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"alpheus/agentplatform/capability"
 )
@@ -237,7 +238,8 @@ func TestTaskGraphProposalTokenLimitIsBounded(t *testing.T) {
 func TestTaskGraphToolPlannerNamesOnlyFrozenTool(t *testing.T) {
 	request := taskGraphToolPlannerRequest(
 		"model", "prompt", "market_scout", "read current quote",
-		"kernel_equity_quotes", 700,
+		"kernel_equity_quotes",
+		time.Date(2026, 7, 24, 4, 0, 0, 0, time.UTC), 700,
 	)
 	instructions, ok := request["instructions"].(string)
 	if !ok ||
@@ -273,13 +275,16 @@ func TestTaskGraphToolCorrectionIsBoundedToFrozenTool(t *testing.T) {
 		KernelArguments: `{"query":"SPCX","asset_type":"equity"}`,
 	}
 	if issue := taskGraphKernelPlannerIssue(
-		invalid, "kernel_search",
+		invalid, "kernel_search", "resolve SPCX",
+		time.Date(2026, 7, 24, 4, 0, 0, 0, time.UTC),
 	); issue != "kernel_tool_asset_type_invalid" {
 		t.Fatalf("planner issue = %q", issue)
 	}
 	request := taskGraphToolCorrectionRequest(
 		"model", "prompt", "discovery_scout", "resolve SPCX",
-		"kernel_search", invalid, "kernel_tool_asset_type_invalid", 500,
+		"kernel_search",
+		time.Date(2026, 7, 24, 4, 0, 0, 0, time.UTC),
+		invalid, "kernel_tool_asset_type_invalid", 500,
 	)
 	instructions, ok := request["instructions"].(string)
 	if !ok ||
@@ -294,9 +299,41 @@ func TestTaskGraphToolCorrectionIsBoundedToFrozenTool(t *testing.T) {
 	invalid.KernelArguments = `{"symbols":["TSLA"],"start_time":"2026-07-20T00:00:00Z","interval":"1h"}`
 	invalid.KernelToolID = "kernel_equity_historicals"
 	if issue := taskGraphKernelPlannerIssue(
-		invalid, "kernel_equity_historicals",
+		invalid, "kernel_equity_historicals", "TSLA today",
+		time.Date(2026, 7, 24, 4, 0, 0, 0, time.UTC),
 	); issue != "kernel_tool_interval_invalid" {
 		t.Fatalf("historicals planner issue = %q", issue)
+	}
+}
+
+func TestTaskGraphToolPlannerRejectsStaleRelativeMarketTime(t *testing.T) {
+	output := workflowOutput{
+		Kind: "handoff", Target: "market_scout",
+		GEXBOTAction: "none", EarningsAction: "none",
+		KernelAction: "read", KernelToolID: "kernel_equity_historicals",
+		KernelArguments: `{"symbols":["TSLA"],"start_time":"2025-03-10T00:00:00Z","interval":"5minute","bounds":"extended","adjustment_type":"all"}`,
+	}
+	requestTime := time.Date(2026, 7, 24, 4, 55, 0, 0, time.UTC)
+	if issue := taskGraphKernelPlannerIssue(
+		output, "kernel_equity_historicals",
+		"分析 TSLA 今天为什么跌", requestTime,
+	); issue != "kernel_tool_time_range_stale" {
+		t.Fatalf("stale relative range issue = %q", issue)
+	}
+	output.KernelArguments = `{"symbols":["TSLA"],"start_time":"2026-07-23T00:00:00Z","end_time":"2026-07-24T00:00:00Z","interval":"hour","bounds":"extended","adjustment_type":"split"}`
+	if issue := taskGraphKernelPlannerIssue(
+		output, "kernel_equity_historicals",
+		"分析 TSLA 今天为什么跌", requestTime,
+	); issue != "" {
+		t.Fatalf("current relative range rejected: %q", issue)
+	}
+	// An explicitly requested historical date is allowed to be old.
+	output.KernelArguments = `{"symbols":["TSLA"],"start_time":"2025-03-10T00:00:00Z","interval":"day","bounds":"regular","adjustment_type":"split"}`
+	if issue := taskGraphKernelPlannerIssue(
+		output, "kernel_equity_historicals",
+		"分析 TSLA 在 2025-03-10 的走势", requestTime,
+	); issue != "" {
+		t.Fatalf("explicit historical range rejected: %q", issue)
 	}
 }
 
