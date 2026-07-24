@@ -11,6 +11,7 @@ const state = {
   runID:null,
   pollToken:0,
   sending:false,
+  environment:"",
 };
 
 async function request(path,options = {}) {
@@ -65,6 +66,7 @@ function clearError() {
 }
 
 function renderEnvironment(environment,autonomy) {
+  state.environment = environment.selected;
   for (const button of byId("environment-switch").querySelectorAll("button")) {
     const value = button.dataset.environment;
     button.classList.toggle("active",value === environment.selected);
@@ -365,7 +367,9 @@ async function selectSymbol(symbol) {
 
 async function loadSnapshot() {
   clearError();
-  const snapshot = await request("/agent/console/snapshot");
+  const suffix = state.environment ?
+    `?environment=${encodeURIComponent(state.environment)}` : "";
+  const snapshot = await request(`/agent/console/snapshot${suffix}`);
   state.snapshot = snapshot;
   renderEnvironment(snapshot.environment,snapshot.autonomy);
   renderPortfolio(snapshot.portfolio);
@@ -594,6 +598,18 @@ byId("chat-symbol").addEventListener("input",(event) => {
   event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9.^_-]/g,"");
 });
 byId("refresh-console").addEventListener("click",() => Promise.allSettled([loadSnapshot(),loadTriggers(),loadHealth(),loadMarket()]));
+for (const button of byId("environment-switch").querySelectorAll("button")) {
+  button.addEventListener("click",async () => {
+    if (button.disabled || button.dataset.environment === state.environment) return;
+    state.environment = button.dataset.environment;
+    clearError();
+    try {
+      await loadSnapshot();
+    } catch (error) {
+      showError(error);
+    }
+  });
+}
 byId("room-select").addEventListener("change",(event) => selectRoom(event.target.value).catch(showError));
 byId("new-room").addEventListener("click",() => selectRoom(""));
 byId("composer").addEventListener("submit",submitMessage);

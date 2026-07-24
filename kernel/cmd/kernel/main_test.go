@@ -107,6 +107,19 @@ type memoryStore struct {
 	robinhoodOAuthConsumed   map[string]bool
 }
 
+func (m *memoryStore) AgentPaperPortfolio(
+	accountID string,
+) (store.AgentPaperAccount, []store.AgentPaperPosition, error) {
+	now := time.Now().UTC()
+	return store.AgentPaperAccount{
+		AccountID: accountID, AccountType: "paper",
+		StartingCash: units.MustMicros("100000"),
+		Cash:         units.MustMicros("100000"),
+		BuyingPower:  units.MustMicros("100000"),
+		Generation:   1, CreatedAt: now, UpdatedAt: now,
+	}, []store.AgentPaperPosition{}, nil
+}
+
 func newMemoryStore() *memoryStore {
 	now := time.Now().UTC()
 	testPolicy := dualLedgerLimits()

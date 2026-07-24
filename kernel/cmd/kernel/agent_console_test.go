@@ -81,7 +81,8 @@ func TestAgentConsoleSnapshotProjectsRealKernelState(t *testing.T) {
 	if body.Autonomy.Selected != "observe" || len(body.Autonomy.Available) != 1 {
 		t.Fatalf("autonomy=%+v", body.Autonomy)
 	}
-	if !body.Portfolio.Available || body.Portfolio.Account.BuyingPower != 300 {
+	if !body.Portfolio.Available ||
+		body.Portfolio.Account.BuyingPower != 100000 {
 		t.Fatalf("portfolio=%+v", body.Portfolio)
 	}
 	if !body.Activity.Available || body.Activity.Operations == nil {
@@ -94,11 +95,41 @@ func TestAgentConsoleSnapshotShowsLiveDataWithoutClaimingExecution(t *testing.T)
 		mode:             config.ModeConfig{TradingMode: config.ModeReadOnly},
 		robinhoodEnabled: true,
 	}
-	environment := s.agentConsoleEnvironment()
+	environment := s.agentConsoleEnvironment("")
 	if environment.Selected != "live" || environment.DataScope != "live" ||
-		!environment.LiveAvailable || environment.PaperAvailable ||
+		!environment.LiveAvailable || !environment.PaperAvailable ||
 		environment.ExecutionEnabled {
 		t.Fatalf("environment=%+v", environment)
+	}
+	paper := s.agentConsoleEnvironment("paper")
+	if paper.Selected != "paper" || paper.DataScope != "paper" ||
+		!paper.PaperAvailable || !paper.LiveAvailable ||
+		paper.ExecutionEnabled {
+		t.Fatalf("paper environment=%+v", paper)
+	}
+}
+
+func TestAgentConsolePaperPortfolioIsIndependentAndDurable(t *testing.T) {
+	s := &server{
+		mode: config.ModeConfig{
+			TradingMode:      config.ModeReadOnly,
+			AgentWebAuthMode: config.AgentWebAuthLocal,
+		},
+		robinhoodEnabled: true,
+		store:            newMemoryStore(),
+		limits:           dualLedgerLimits(),
+	}
+	response := routeRequest(
+		s.routes(), http.MethodGet,
+		"/agent/console/snapshot?environment=paper", "", "",
+	)
+	body := response.Body.String()
+	if response.Code != http.StatusOK ||
+		!strings.Contains(body, `"selected":"paper"`) ||
+		!strings.Contains(body, `"source":"agent-paper-ledger"`) ||
+		!strings.Contains(body, `"equity":100000`) ||
+		strings.Contains(body, "robinhood-mcp") {
+		t.Fatalf("status=%d body=%s", response.Code, body)
 	}
 }
 

@@ -87,6 +87,9 @@ type storeAPI interface {
 	SetOperationStatus(id, status string, verdict any) error
 	GetOperation(id string) (*store.OperationRow, error)
 	ListOperations(status string, limit int, cursor *store.OperationCursor) ([]store.OperationRow, error)
+	AgentPaperPortfolio(string) (
+		store.AgentPaperAccount, []store.AgentPaperPosition, error,
+	)
 	ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
 	TopLessons(limit int) ([]store.Lesson, error)

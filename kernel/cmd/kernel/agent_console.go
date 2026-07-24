@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
+	"alpheus/kernel/internal/broker"
 	"alpheus/kernel/internal/config"
 	"alpheus/kernel/internal/store"
+	"alpheus/kernel/internal/units"
 )
 
 const agentConsoleOperationLimit = 20
@@ -56,49 +59,72 @@ type agentConsoleTriggerCommand struct {
 	Enabled            bool        `json:"enabled"`
 }
 
-func (s *server) agentConsoleEnvironment() agentConsoleEnvironment {
+func (s *server) agentConsoleEnvironment(
+	requested string,
+) agentConsoleEnvironment {
 	mode := s.tradingMode()
-	paper := mode == config.ModeSim || mode == config.ModeShadow
+	paper := true
 	live := s.robinhoodEnabled
 	selected := "paper"
 	dataScope := "paper"
-	if live {
+	if requested == "live" && live ||
+		requested == "" && live {
 		selected = "live"
 		dataScope = "live"
 	}
+	executionEnabled := selected == "live" && mode == config.ModeLive ||
+		selected == "paper" &&
+			(mode == config.ModeSim || mode == config.ModeShadow)
 	return agentConsoleEnvironment{
 		Selected:         selected,
 		DataScope:        dataScope,
 		KernelMode:       mode,
 		PaperAvailable:   paper,
 		LiveAvailable:    live,
-		ExecutionEnabled: mode == config.ModeLive || mode == config.ModeSim || mode == config.ModeShadow,
+		ExecutionEnabled: executionEnabled,
 	}
 }
 
 func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
-	portfolio := agentConsolePortfolio{}
-	if snapshot, err := s.captureProviderSnapshot(r.Context(), "read_model"); err != nil {
-		portfolio.ErrorCode = "portfolio_unavailable"
+	environment := s.agentConsoleEnvironment(
+		strings.TrimSpace(r.URL.Query().Get("environment")),
+	)
+	var portfolio agentConsolePortfolio
+	if environment.Selected == "paper" {
+		portfolio = s.agentPaperConsolePortfolio(r.Context())
 	} else {
-		portfolio.Available = true
-		portfolio.Account = snapshot.Account
-		portfolio.Positions = snapshot.Positions
-		portfolio.Orders = snapshot.Orders
-		portfolio.AsOf = snapshot.Observation.CompletedAt
-		portfolio.Source = snapshot.Observation.Source
+		if snapshot, err := s.captureProviderSnapshot(
+			r.Context(), "read_model",
+		); err != nil {
+			portfolio.ErrorCode = "portfolio_unavailable"
+		} else {
+			portfolio.Available = true
+			portfolio.Account = snapshot.Account
+			portfolio.Positions = snapshot.Positions
+			portfolio.Orders = snapshot.Orders
+			portfolio.AsOf = snapshot.Observation.CompletedAt
+			portfolio.Source = snapshot.Observation.Source
+		}
 	}
 
 	activity := agentConsoleActivity{Operations: []store.OperationRow{}}
-	if operations, err := s.store.ListOperations("", agentConsoleOperationLimit, nil); err != nil {
-		activity.ErrorCode = "operations_unavailable"
-	} else {
+	if environment.Selected == "paper" {
+		// Paper events are independent from legacy/live Kernel operations.
+		// Until the Paper execution slice lands there are truthfully no trades.
 		activity.Available = true
-		activity.Operations = operations
+	} else {
+		if operations, err := s.store.ListOperations(
+			"", agentConsoleOperationLimit, nil,
+		); err != nil {
+			activity.ErrorCode = "operations_unavailable"
+		} else {
+			activity.Available = true
+			activity.Operations = operations
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"environment": s.agentConsoleEnvironment(),
+		"environment": environment,
 		"autonomy": agentConsoleAutonomy{
 			Selected: "observe", Available: []string{"observe"},
 		},
@@ -112,6 +138,73 @@ func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request)
 		"generated_at": time.Now().UTC(),
 		"source":       "kernel_console_projection",
 	})
+}
+
+func (s *server) agentPaperConsolePortfolio(
+	ctx context.Context,
+) agentConsolePortfolio {
+	account, storedPositions, err := s.store.AgentPaperPortfolio(
+		"agent-default",
+	)
+	if err != nil {
+		return agentConsolePortfolio{ErrorCode: "paper_portfolio_unavailable"}
+	}
+	equity := account.Cash
+	positions := make([]broker.Position, 0, len(storedPositions))
+	asOf := account.UpdatedAt.UTC()
+	for _, stored := range storedPositions {
+		provider := s.marketProvider()
+		if provider == nil {
+			return agentConsolePortfolio{
+				ErrorCode: "paper_mark_unavailable",
+			}
+		}
+		quote, quoteErr := provider.Quote(ctx, stored.Symbol)
+		if quoteErr != nil ||
+			!quote.Usable(s.limits.QuoteMaxAgeSec, time.Now().UTC()) {
+			return agentConsolePortfolio{
+				ErrorCode: "paper_mark_unavailable",
+			}
+		}
+		marketValue, valueErr := units.MulQtyPrice(
+			stored.Qty, quote.Bid, stored.Multiplier, false,
+		)
+		if valueErr != nil {
+			return agentConsolePortfolio{
+				ErrorCode: "paper_mark_unavailable",
+			}
+		}
+		equity, err = units.Add(equity, marketValue)
+		if err != nil {
+			return agentConsolePortfolio{
+				ErrorCode: "paper_mark_unavailable",
+			}
+		}
+		if stored.UpdatedAt.After(asOf) {
+			asOf = stored.UpdatedAt.UTC()
+		}
+		positions = append(positions, broker.Position{
+			PositionID:   "paper:" + stored.Symbol,
+			InstrumentID: "paper:" + stored.Symbol,
+			Symbol:       stored.Symbol, Qty: stored.Qty,
+			AvgPrice: stored.AvgPrice, AvgPriceKnown: true,
+			Kind: stored.Kind, Multiplier: stored.Multiplier,
+			Source: "agent-paper-ledger", AsOf: stored.UpdatedAt.UTC(),
+		})
+	}
+	return agentConsolePortfolio{
+		Available: true,
+		Account: broker.AccountState{
+			AccountType: "paper", BuyingPower: account.BuyingPower,
+			Equity: equity, EquityKnown: true,
+			Cash: account.Cash, CashKnown: true,
+			Source: "agent-paper-ledger", AsOf: asOf,
+		},
+		Positions: positions,
+		Orders:    []any{},
+		AsOf:      asOf,
+		Source:    "agent-paper-ledger",
+	}
 }
 
 func (s *server) getAgentConsoleTriggers(w http.ResponseWriter, r *http.Request) {
