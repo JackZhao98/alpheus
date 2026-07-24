@@ -388,6 +388,43 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+	mux.HandleFunc("GET /v1/operations/overview", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		cortex, err := adapter.GetOperationsHealth(request.Context())
+		if err != nil {
+			log.Printf("Cortex operations overview read failed: %v", err)
+			http.Error(w, "operations overview unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		now := time.Now().UTC()
+		research, researchErr := getMoodyBluesResearchHealth(
+			request.Context(), researchHTTP, researchURL, researchToken, now)
+		if researchErr != nil {
+			log.Printf("Moody Blues operations health read failed: %v", researchErr)
+			research = moodyBluesResearchHealth{
+				Status:          "unavailable",
+				Provider:        "gexbot_classic",
+				FreshnessPolicy: moodyBluesFreshnessPolicy,
+				Series:          []moodyBluesSeriesHealth{},
+			}
+		}
+		status := "healthy"
+		if cortex.Status != "healthy" || research.Status != "healthy" {
+			status = "degraded"
+		}
+		result := cortexOperationsOverview{
+			GeneratedAt: now.Format(time.RFC3339Nano),
+			Status:      status,
+			Cortex:      cortex,
+			Research:    research,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("POST /internal/v1/model-outputs", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, workerToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

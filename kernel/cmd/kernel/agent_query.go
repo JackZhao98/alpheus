@@ -100,6 +100,18 @@ func (s *server) getCortexConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"conversation_id": conversationID, "entries": entries})
 }
 
+func (s *server) getCortexOperations(w http.ResponseWriter, r *http.Request) {
+	raw, code := s.fetchCortexOperations(r.Context())
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable, code,
+			"Cortex operations overview is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(raw)
+}
+
 func (s *server) cortexToken() (string, error) {
 	raw, err := os.ReadFile(s.cortexTokenFile)
 	if err != nil {
@@ -111,6 +123,58 @@ func (s *server) cortexToken() (string, error) {
 	}
 	return token, nil
 }
+
+func (s *server) fetchCortexOperations(ctx context.Context) (json.RawMessage, string) {
+	token, err := s.cortexToken()
+	if err != nil {
+		return nil, "cortex_credential_unavailable"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(s.cortexURL, "/")+"/v1/operations/overview", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "cortex_unavailable"
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(
+		resp.Body, maxAgentQueryResponseBytes+1))
+	if err != nil || int64(len(raw)) > maxAgentQueryResponseBytes {
+		return nil, "cortex_response_invalid"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "cortex_operations_unavailable"
+	}
+	var overview struct {
+		GeneratedAt string `json:"generated_at"`
+		Status      string `json:"status"`
+		Cortex      struct {
+			Status string `json:"status"`
+		} `json:"cortex"`
+		Research struct {
+			Status string `json:"status"`
+		} `json:"research"`
+	}
+	if json.Unmarshal(raw, &overview) != nil ||
+		(overview.Status != "healthy" && overview.Status != "degraded") ||
+		(overview.Cortex.Status != "healthy" &&
+			overview.Cortex.Status != "degraded") ||
+		(overview.Research.Status != "healthy" &&
+			overview.Research.Status != "degraded" &&
+			overview.Research.Status != "unavailable") {
+		return nil, "cortex_response_invalid"
+	}
+	generatedAt, err := time.Parse(time.RFC3339Nano, overview.GeneratedAt)
+	if err != nil || generatedAt.Location() != time.UTC {
+		return nil, "cortex_response_invalid"
+	}
+	return json.RawMessage(raw), ""
+}
+
 func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (cortexSubmission, string) {
 	token, err := s.cortexToken()
 	if err != nil {

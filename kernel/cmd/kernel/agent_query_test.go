@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"alpheus/kernel/internal/config"
@@ -29,5 +33,36 @@ func TestCortexConversationIDRejectsURLSyntax(t *testing.T) {
 	}
 	if !validCortexConversationID("agent-lab-7deed53d-d45f-4b2d-a12b-b1e4bf3306e8") {
 		t.Fatal("valid Conversation ID rejected")
+	}
+}
+
+func TestFetchCortexOperationsAcceptsBoundedOverview(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/operations/overview" ||
+			r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("unexpected upstream request: %s auth=%q",
+				r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"generated_at":"2026-07-23T23:00:00Z",
+			"status":"degraded",
+			"cortex":{"status":"healthy"},
+			"research":{"status":"degraded"}
+		}`))
+	}))
+	defer upstream.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cortex-token")
+	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{
+		cortexURL:       upstream.URL,
+		cortexTokenFile: tokenPath,
+		runtimeHTTP:     upstream.Client(),
+	}
+	raw, code := s.fetchCortexOperations(context.Background())
+	if code != "" || len(raw) == 0 {
+		t.Fatalf("raw=%s code=%s", raw, code)
 	}
 }

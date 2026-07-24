@@ -480,9 +480,126 @@ function renderTaskGraph(trace) {
   target.replaceChildren(...nodes);
 }
 
+function operationsItem(label, value, tone = "") {
+  const row = document.createElement("div");
+  row.className = `operations-item ${tone}`.trim();
+  const left = document.createElement("span");
+  left.textContent = label;
+  const right = document.createElement("span");
+  right.textContent = value;
+  row.append(left, right);
+  return row;
+}
+
+function operationsMetric(value, label) {
+  const node = document.createElement("div");
+  node.className = "operations-metric";
+  const count = document.createElement("strong");
+  count.textContent = String(value ?? 0);
+  const name = document.createElement("span");
+  name.textContent = label;
+  node.append(count, name);
+  return node;
+}
+
+function formatOperationsTime(value) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? "时间不可用"
+    : parsed.toLocaleString("zh-CN", {hour12:false});
+}
+
+function formatLag(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  if (value < 60) return `${value} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${(value / 3600).toFixed(1)} 小时`;
+}
+
+function renderOperations(overview) {
+  const status = byId("operations-status");
+  status.className = overview?.status === "healthy" ? "" : "degraded";
+  status.textContent = overview?.status === "healthy" ? "正常"
+    : overview?.status === "degraded" ? "需要关注" : "不可用";
+  byId("operations-generated").textContent =
+    `快照时间：${formatOperationsTime(overview?.generated_at)} · 仅显示受控聚合状态。`;
+
+  const cortex = overview?.cortex || {};
+  const runs = cortex.runs || {};
+  const tools = cortex.tools || {};
+  byId("operations-metrics").replaceChildren(
+    operationsMetric(runs.active, "活跃 Run"),
+    operationsMetric(runs.succeeded, "24h 成功"),
+    operationsMetric(runs.dead_lettered, "24h 终止"),
+    operationsMetric(tools.acknowledged, "24h Tool 收据"),
+  );
+
+  const risks = cortex.risks || {};
+  const riskRows = [
+    ["卡住的 Run", risks.stalled_runs],
+    ["超过 deadline 的 Run", risks.expired_runs],
+    ["过期 Worker lease", risks.expired_attempt_leases],
+    ["当前无收据 Tool 调用", risks.unacknowledged_tool_calls],
+    ["终态 Run 的开放 Session", risks.terminal_open_sessions],
+    ["终态 Task 的并发槽泄漏", risks.terminal_slot_leaks],
+  ].map(([label, value]) =>
+    operationsItem(label, String(value ?? 0), Number(value) ? "bad" : "good"));
+  byId("operations-risks").replaceChildren(...riskRows);
+
+  const research = overview?.research || {};
+  const researchRows = (research.series || []).map((series) =>
+    operationsItem(
+      `${series.symbol} · ${series.category}`,
+      series.available
+        ? `${series.fresh ? "新鲜" : `落后 ${formatLag(series.lag_seconds)}`} · ${formatOperationsTime(series.latest_available_at)}`
+        : "没有可用观察值",
+      series.fresh ? "good" : "warn",
+    ));
+  if (!researchRows.length) {
+    researchRows.push(operationsItem("GEXBOT Provider", "状态不可用", "bad"));
+  }
+  byId("operations-research").replaceChildren(...researchRows);
+
+  const historyRows = [];
+  for (const run of cortex.active_runs || []) {
+    historyRows.push(operationsItem(
+      `活跃 · ${run.run_id}`,
+      `${run.state} · 更新于 ${formatOperationsTime(run.updated_at)}`,
+      run.stale ? "bad" : "good",
+    ));
+  }
+  for (const run of cortex.recent_failures || []) {
+    historyRows.push(operationsItem(
+      `终态 · ${run.run_id}`,
+      `${run.reason_code} · ${formatOperationsTime(run.terminal_at)}`,
+      "warn",
+    ));
+  }
+  if (!historyRows.length) {
+    historyRows.push(operationsItem("记录", "没有活跃或近期失败 Run", "good"));
+  }
+  byId("operations-history").replaceChildren(...historyRows);
+}
+
+async function refreshOperations() {
+  const button = byId("refresh-operations");
+  button.disabled = true;
+  try {
+    renderOperations(await request("/agent/cortex-operations"));
+  } catch (error) {
+    const status = byId("operations-status");
+    status.className = "unavailable";
+    status.textContent = "不可用";
+    byId("operations-generated").textContent = formatError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function restoreSession() {
   try {
     await request("/agent/auth/session");
+    await refreshOperations();
     await refreshCredentialStatus();
 	  await refreshRobinhoodConnection();
     await restoreConversation();
@@ -491,6 +608,8 @@ async function restoreSession() {
     byId("query-error").textContent = formatError(error);
   }
 }
+
+byId("refresh-operations").addEventListener("click", refreshOperations);
 
 byId("new-conversation").addEventListener("click", () => {
   currentConversation = null;

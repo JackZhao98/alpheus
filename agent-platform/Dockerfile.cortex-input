@@ -6,7 +6,7 @@ COPY agent-platform/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /bin/cortex-input ./cmd/cortex-input
 
 FROM alpine:3.20
-RUN apk add --no-cache su-exec \
+RUN apk add --no-cache su-exec tzdata \
     && addgroup -S cortex && adduser -S -G cortex cortex \
     && mkdir -p /var/lib/alpheus/cortex-blobs \
     && chown -R cortex:cortex /var/lib/alpheus
