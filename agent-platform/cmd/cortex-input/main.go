@@ -424,6 +424,30 @@ func run() error {
 			"items":     triggers,
 		})
 	})
+	mux.HandleFunc("GET /v1/paper-candidates", func(
+		w http.ResponseWriter,
+		request *http.Request,
+	) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		candidates, err := adapter.ListPaperCandidates(
+			request.Context(), subject.PrincipalID, 50,
+		)
+		if err != nil {
+			log.Printf("Cortex Paper Candidate list failed: %v", err)
+			http.Error(w, "Paper Candidates unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"available": true,
+			"items":     candidates,
+		})
+	})
 	mux.HandleFunc("PUT /v1/decision-triggers/{id}", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

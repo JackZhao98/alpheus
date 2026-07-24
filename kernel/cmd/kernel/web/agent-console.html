@@ -171,11 +171,24 @@
         <article class="panel decisions-panel">
           <header class="panel-header">
             <div>
-              <span class="eyebrow">AGENT ACTIVITY</span>
+              <span class="eyebrow">CORTEX DECISIONS</span>
               <h2>决策与买卖</h2>
             </div>
             <span id="activity-count" class="status-label">0 EVENTS</span>
           </header>
+          <section class="candidate-section">
+            <div class="subsection-title">
+              <span>ORDER CANDIDATES</span>
+              <strong id="candidate-count">0 PROPOSED</strong>
+            </div>
+            <div id="candidate-list" class="candidate-list">
+              <div class="candidate-empty">正在读取 Cortex 候选交易…</div>
+            </div>
+          </section>
+          <div class="subsection-title activity-title">
+            <span>EXECUTION LEDGER</span>
+            <strong>PAPER / LIVE</strong>
+          </div>
           <div id="operation-list" class="operation-list">
             <div class="table-empty">正在读取 Kernel 操作记录…</div>
           </div>

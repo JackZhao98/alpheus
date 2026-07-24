@@ -57,6 +57,7 @@ function showError(error) {
   const known = {
     portfolio_unavailable:"账户数据暂时不可用。",
     cortex_unavailable:"Cortex 暂时无法连接。",
+    cortex_paper_candidates_unavailable:"Cortex 候选交易暂时不可用。",
     agent_room_paused:"这个对话已暂停，请在完整对话界面恢复。",
     autonomy_generation_conflict:"自治模式刚被其他操作修改，已重新读取最新状态。",
     live_autonomy_locked:"Live 环境目前仍强制 Observe。",
@@ -193,6 +194,55 @@ function renderActivity(activity) {
     const status = document.createElement("span");
     status.className = "operation-state";
     status.textContent = (operation.status || "UNKNOWN").replaceAll("_"," ").toUpperCase();
+    item.append(copy,status);
+    list.append(item);
+  }
+}
+
+function renderCandidates(payload) {
+  const items = payload?.available && Array.isArray(payload.items) ?
+    payload.items : [];
+  const proposed = items.filter((item) =>
+    item.status === "proposed" && item.eligible);
+  text("candidate-count",`${proposed.length} PROPOSED`);
+  const list = byId("candidate-list");
+  list.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "candidate-empty";
+    empty.textContent = state.environment === "live"
+      ? "Live 环境不接收 Paper Candidate。"
+      : payload?.available
+        ? "目前没有 Cortex 候选交易。"
+        : "Cortex 候选交易暂时不可用。";
+    list.append(empty);
+    return;
+  }
+  for (const candidate of items.slice(0,5)) {
+    const proposal = candidate.proposal || {};
+    const item = document.createElement("div");
+    item.className = `candidate-item ${candidate.status || ""}`;
+    item.append(document.createElement("i"));
+    const copy = document.createElement("div");
+    copy.className = "candidate-copy";
+    const title = document.createElement("strong");
+    title.textContent = `${String(proposal.side || "review").toUpperCase()} ${proposal.symbol || "—"} × ${proposal.qty ?? "—"}`;
+    const meta = document.createElement("span");
+    const confidence = Number(proposal.confidence_bps);
+    const confidenceText = Number.isFinite(confidence)
+      ? `${(confidence / 100).toFixed(2)}% confidence`
+      : "confidence unknown";
+    meta.textContent = `${proposal.strategy_id || "strategy"} · ${confidenceText} · ${when(candidate.proposed_at,true)} · RUN ${String(candidate.run_id || "—").slice(0,8)}`;
+    const thesis = document.createElement("span");
+    thesis.className = "candidate-thesis";
+    thesis.textContent = `THESIS ${proposal.thesis || "—"}`;
+    const invalidation = document.createElement("span");
+    invalidation.className = "candidate-thesis";
+    invalidation.textContent = `INVALIDATION ${proposal.invalidation || "—"}`;
+    copy.append(title,meta,thesis,invalidation);
+    const status = document.createElement("span");
+    status.className = "candidate-state";
+    status.textContent = candidate.eligible ? "REVIEW" : "INVALID";
     item.append(copy,status);
     list.append(item);
   }
@@ -414,6 +464,19 @@ async function loadTriggers() {
   }
 }
 
+async function loadCandidates() {
+  try {
+    const environment = state.environment || "paper";
+    const candidates = await request(
+      `/agent/console/candidates?environment=${encodeURIComponent(environment)}`,
+    );
+    renderCandidates(candidates);
+  } catch (error) {
+    renderCandidates({available:false,items:[]});
+    throw error;
+  }
+}
+
 function roomRunning(room) {
   return ["queued","running","waiting","canceling"].includes(room?.last_run_state);
 }
@@ -604,7 +667,10 @@ async function restore() {
     return;
   }
   byId("login-screen").hidden = true;
-  const results = await Promise.allSettled([loadSnapshot(),loadTriggers(),loadRooms(),loadHealth(),loadMarket()]);
+  const results = await Promise.allSettled([
+    loadSnapshot().then(loadCandidates),
+    loadTriggers(),loadRooms(),loadHealth(),loadMarket(),
+  ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) showError(failure.reason);
   if (state.rooms.length) await selectRoom(state.rooms[0].conversation_id);
@@ -621,7 +687,9 @@ byId("symbol-input").addEventListener("input",(event) => {
 byId("chat-symbol").addEventListener("input",(event) => {
   event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9.^_-]/g,"");
 });
-byId("refresh-console").addEventListener("click",() => Promise.allSettled([loadSnapshot(),loadTriggers(),loadHealth(),loadMarket()]));
+byId("refresh-console").addEventListener("click",() => Promise.allSettled([
+  loadSnapshot().then(loadCandidates),loadTriggers(),loadHealth(),loadMarket(),
+]));
 for (const button of byId("environment-switch").querySelectorAll("button")) {
   button.addEventListener("click",async () => {
     if (button.disabled || button.dataset.environment === state.environment) return;
@@ -629,6 +697,7 @@ for (const button of byId("environment-switch").querySelectorAll("button")) {
     clearError();
     try {
       await loadSnapshot();
+      await loadCandidates();
     } catch (error) {
       showError(error);
     }
@@ -688,6 +757,6 @@ byId("login-form").addEventListener("submit",async (event) => {
 restore();
 setInterval(() => {
   if (byId("login-screen").hidden) {
-    Promise.allSettled([loadTriggers(),loadHealth(),loadMarket()]);
+    Promise.allSettled([loadCandidates(),loadTriggers(),loadHealth(),loadMarket()]);
   }
 },15000);

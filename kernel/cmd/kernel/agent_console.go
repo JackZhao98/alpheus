@@ -309,6 +309,29 @@ func (s *server) getAgentConsoleTriggers(w http.ResponseWriter, r *http.Request)
 	writeAgentConsoleUpstream(w, raw, status)
 }
 
+func (s *server) getAgentConsoleCandidates(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if strings.TrimSpace(r.URL.Query().Get("environment")) == "live" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": true,
+			"items":     []any{},
+			"reason":    "paper_candidates_hidden_in_live",
+		})
+		return
+	}
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodGet, "/v1/paper-candidates", nil)
+	if code != "" || status != http.StatusOK {
+		writeAgentQueryError(w, http.StatusServiceUnavailable,
+			"cortex_paper_candidates_unavailable",
+			"Paper Candidates are unavailable")
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
 func (s *server) putAgentConsoleTrigger(w http.ResponseWriter, r *http.Request) {
 	triggerID := strings.TrimSpace(r.PathValue("id"))
 	var input agentConsoleTriggerCommand

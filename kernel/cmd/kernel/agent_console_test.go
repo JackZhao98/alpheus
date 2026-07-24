@@ -26,6 +26,8 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 	if script.Code != http.StatusOK ||
 		!strings.Contains(script.Body.String(),
 			`request("/agent/console/triggers")`) ||
+		!strings.Contains(script.Body.String(),
+			"`/agent/console/candidates?environment=${encodeURIComponent(environment)}`") ||
 		!strings.Contains(script.Body.String(), "trigger.last_value") ||
 		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
 		t.Fatalf("script status=%d body=%s",
@@ -284,5 +286,63 @@ func TestAgentConsoleTriggerRegistryUsesCortexAuthority(t *testing.T) {
 		!strings.Contains(putResponse.Body.String(), `"status":"registered"`) {
 		t.Fatalf("PUT status=%d body=%s",
 			putResponse.Code, putResponse.Body.String())
+	}
+}
+
+func TestAgentConsoleCandidatesUseCortexAuthorityAndHideInLive(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			if r.Method != http.MethodGet ||
+				r.URL.Path != "/v1/paper-candidates" ||
+				r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("unexpected upstream request: %s %s auth=%q",
+					r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"available": true,
+				"items": []any{map[string]any{
+					"candidate_id": "candidate-1",
+					"status":       "proposed",
+					"eligible":     true,
+					"proposal": map[string]any{
+						"symbol": "SPY",
+						"side":   "buy",
+						"qty":    0.25,
+					},
+				}},
+			})
+		}))
+	defer upstream.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cortex-token")
+	if err := os.WriteFile(
+		tokenPath, []byte("test-token"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{
+		cortexURL:       upstream.URL,
+		cortexTokenFile: tokenPath,
+		runtimeHTTP:     upstream.Client(),
+	}
+	paper := httptest.NewRecorder()
+	s.getAgentConsoleCandidates(paper, httptest.NewRequest(
+		http.MethodGet, "/agent/console/candidates?environment=paper", nil,
+	))
+	if paper.Code != http.StatusOK ||
+		!strings.Contains(paper.Body.String(), `"candidate_id":"candidate-1"`) {
+		t.Fatalf("paper status=%d body=%s", paper.Code, paper.Body.String())
+	}
+	live := httptest.NewRecorder()
+	s.getAgentConsoleCandidates(live, httptest.NewRequest(
+		http.MethodGet, "/agent/console/candidates?environment=live", nil,
+	))
+	if live.Code != http.StatusOK ||
+		!strings.Contains(live.Body.String(),
+			`"reason":"paper_candidates_hidden_in_live"`) ||
+		requests != 1 {
+		t.Fatalf("live status=%d body=%s requests=%d",
+			live.Code, live.Body.String(), requests)
 	}
 }
