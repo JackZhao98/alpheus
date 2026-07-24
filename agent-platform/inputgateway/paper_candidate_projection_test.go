@@ -87,3 +87,32 @@ func TestPaperCandidateReviewValidationSeparatesDecisionFromConflict(
 		t.Fatal("invented review conflict was accepted")
 	}
 }
+
+func TestPaperCandidateExecutionProjectionRequiresReceiptForOutcome(
+	t *testing.T,
+) {
+	value := validPaperCandidateViewFixture()
+	value.Execution = &PaperCandidateExecution{
+		AuthorizationID:      "44444444-4444-4444-8444-444444444444",
+		AuthorizationKind:    "agentic",
+		AuthorizationDigest:  strings.Repeat("c", 64),
+		EffectID:             "55555555-5555-4555-8555-555555555555",
+		KernelModeGeneration: 2,
+		AuthorizedAt:         "2026-07-24T08:00:00Z",
+	}
+	if err := validatePaperCandidateView(value); err != nil {
+		t.Fatal(err)
+	}
+	value.Execution.Outcome = "succeeded"
+	if err := validatePaperCandidateView(value); err == nil {
+		t.Fatal("successful outcome without receipt was accepted")
+	}
+	value.Execution.ReceiptID =
+		"66666666-6666-4666-8666-666666666666"
+	value.Execution.HTTPStatus = 200
+	value.Execution.RecordedAt = "2026-07-24T08:01:00Z"
+	value.Execution.Order = json.RawMessage(`{"state":"filled"}`)
+	if err := validatePaperCandidateView(value); err != nil {
+		t.Fatal(err)
+	}
+}

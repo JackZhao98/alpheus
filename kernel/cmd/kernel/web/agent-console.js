@@ -225,7 +225,8 @@ function renderCandidates(payload) {
   for (const candidate of items.slice(0,5)) {
     const proposal = candidate.proposal || {};
     const item = document.createElement("div");
-    item.className = `candidate-item ${candidate.status || ""}`;
+    const execution = candidate.execution || null;
+    item.className = `candidate-item ${candidate.status || ""} ${execution?.outcome || ""}`;
     item.append(document.createElement("i"));
     const copy = document.createElement("div");
     copy.className = "candidate-copy";
@@ -244,7 +245,20 @@ function renderCandidates(payload) {
     invalidation.className = "candidate-thesis";
     invalidation.textContent = `INVALIDATION ${proposal.invalidation || "—"}`;
     copy.append(title,meta,thesis,invalidation);
+    if (execution) {
+      const executionMeta = document.createElement("span");
+      executionMeta.className = "candidate-execution";
+      if (execution.outcome === "succeeded") {
+        executionMeta.textContent = `FILLED ${String(execution.authorization_kind || "").toUpperCase()} · ${money(execution.order?.fill_price)} · ${when(execution.recorded_at,true)}`;
+      } else if (execution.outcome === "failed") {
+        executionMeta.textContent = `FAILED ${execution.failure_code || "unknown"} · HTTP ${execution.http_status || "—"} · ${when(execution.recorded_at,true)}`;
+      } else {
+        executionMeta.textContent = `AUTHORIZED ${String(execution.authorization_kind || "").toUpperCase()} · waiting for receipt`;
+      }
+      copy.append(executionMeta);
+    }
     if (candidate.status === "proposed" && candidate.eligible &&
+        !execution &&
         state.environment === "paper" &&
         state.autonomy?.selected === "copilot") {
       const actions = document.createElement("div");
@@ -264,12 +278,14 @@ function renderCandidates(payload) {
     } else {
       const status = document.createElement("span");
       status.className = "candidate-state";
-      status.textContent = {
-        proposed:"REVIEW",
-        approved:"APPROVED",
-        rejected:"REJECTED",
-        source_not_committed:"INVALID",
-      }[candidate.status] || "UNKNOWN";
+      status.textContent = execution?.outcome === "succeeded" ? "FILLED" :
+        execution?.outcome === "failed" ? "FAILED" :
+        execution ? "AUTHORIZED" : ({
+          proposed:"REVIEW",
+          approved:"APPROVED",
+          rejected:"REJECTED",
+          source_not_committed:"INVALID",
+        }[candidate.status] || "UNKNOWN");
       item.append(copy,status);
     }
     list.append(item);

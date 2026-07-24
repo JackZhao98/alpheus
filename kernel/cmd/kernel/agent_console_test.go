@@ -119,7 +119,9 @@ func TestAgentConsolePaperAutonomyIsDurableAndGenerationGuarded(
 		"/agent/console/snapshot?environment=paper", "", "",
 	)
 	if snapshot.Code != http.StatusOK ||
-		!strings.Contains(snapshot.Body.String(), `"selected":"copilot"`) {
+		!strings.Contains(snapshot.Body.String(), `"selected":"copilot"`) ||
+		!strings.Contains(snapshot.Body.String(),
+			`"execution_enabled":true`) {
 		t.Fatalf("status=%d body=%s", snapshot.Code, snapshot.Body.String())
 	}
 	stale := routeRequest(

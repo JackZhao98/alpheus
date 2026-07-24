@@ -486,7 +486,7 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 		return err
 	}
 	if intent.Workflow.Kind == "handoff" {
-		if item.TaskGraphProposalDigest != "" {
+		if shouldAdmitTaskGraph(item) {
 			proposalTurn, err := w.executeModelTurnWithContract(
 				ctx, item, claim, started.AttemptGeneration,
 				taskGraphProposalRequest(
@@ -628,6 +628,16 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	return w.commitAttempt(ctx, item, claim, started.AttemptGeneration, intent)
 }
 
+// The current TaskGraph Decision Desk contract is intentionally effect-free
+// and answer-only. Candidate-enabled Runs therefore stay on the reviewed
+// linear Tool/Specialist/Decision Desk path until a candidate-aware TaskGraph
+// round contract is installed. This prevents a parallel answer contract from
+// silently discarding the final Paper Candidate.
+func shouldAdmitTaskGraph(item workItem) bool {
+	return item.TaskGraphProposalDigest != "" &&
+		!item.PaperCandidateEnabled
+}
+
 type workflowOutput struct {
 	Kind            string                   `json:"kind"`
 	Target          string                   `json:"target,omitempty"`
@@ -746,12 +756,24 @@ func (w *worker) executeModelTurnWithContract(
 }
 
 func (w *worker) commitAttempt(ctx context.Context, item workItem, claim claimResult, attemptGeneration int64, turn modelTurn) error {
+	var candidateAdmission *papercandidate.Admission
 	if turn.Workflow.PaperCandidate != nil {
-		if _, err := w.recordPaperCandidate(
+		admission, err := w.recordPaperCandidate(
 			ctx, turn.CallID, claim, *turn.Workflow.PaperCandidate,
-		); err != nil {
+		)
+		if err != nil {
+			failure := contracts.Failure{
+				Code:      "paper_candidate_admission_failed",
+				Message:   bounded(err.Error()),
+				Retryable: true,
+			}
+			_ = w.failAfterResolved(
+				ctx, item, claim, attemptGeneration,
+				runtimecontract.RetryInfrastructure, failure,
+			)
 			return err
 		}
+		candidateAdmission = &admission
 	}
 	commit := runtimecontract.CommitAttemptCommand{SchemaRevision: 1, Envelope: w.envelope("commit_attempt", turn.CallID+"-commit", item.Deadline), AttemptID: claim.AttemptID, ExpectedAttemptStateGeneration: attemptGeneration, LeaseGeneration: claim.LeaseGeneration, LeaseToken: claim.LeaseToken, Result: turn.ResultRef, Artifact: runtimecontract.ArtifactCandidate{ArtifactType: artifactTypeFor(item), OutputContractDigest: item.OutputDigest, EffectClass: contracts.EffectNone, Sections: []runtimecontract.ArtifactSection{{Name: "response", Required: true, Content: turn.OutputRef}}}}
 	var committed struct {
@@ -766,6 +788,16 @@ func (w *worker) commitAttempt(ctx context.Context, item workItem, claim claimRe
 		return fmt.Errorf("commit denied")
 	}
 	log.Printf("Cortex Task %s succeeded with Artifact %s", item.TaskID, committed.ArtifactID)
+	if candidateAdmission != nil {
+		if err := w.triggerAgenticPaperCandidate(
+			ctx, candidateAdmission.CandidateID,
+		); err != nil {
+			log.Printf(
+				"Cortex Paper Candidate %s execution trigger failed: %v",
+				candidateAdmission.CandidateID, err,
+			)
+		}
+	}
 	return nil
 }
 
@@ -2288,6 +2320,41 @@ func (w *worker) recordPaperCandidate(
 			fmt.Errorf("invalid Control Paper Candidate response")
 	}
 	return admission, nil
+}
+
+func (w *worker) triggerAgenticPaperCandidate(
+	ctx context.Context,
+	candidateID string,
+) error {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		w.controlURL+"/internal/v1/paper-candidates/"+
+			candidateID+"/execute-agentic",
+		http.NoBody,
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+w.controlToken)
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf(
+			"Control Paper execution status %d", resp.StatusCode,
+		)
+	}
+	var result map[string]any
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 64<<10))
+	if decoder.Decode(&result) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		(result["status"] != "skipped" &&
+			result["status"] != "executed") {
+		return fmt.Errorf("invalid Control Paper execution response")
+	}
+	return nil
 }
 
 type webFetchResult struct {

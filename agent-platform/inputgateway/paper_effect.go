@@ -81,11 +81,17 @@ func (adapter *PostgresAdapter) AuthorizePaperEffect(
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&authorization) != nil ||
-		decoder.Decode(&struct{}{}) != io.EOF ||
-		validatePaperEffectAuthorization(authorization) != nil {
+	if err := decoder.Decode(&authorization); err != nil {
 		return PaperEffectAuthorization{},
-			fmt.Errorf("invalid Paper effect authorization response")
+			fmt.Errorf("decode Paper effect authorization response: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return PaperEffectAuthorization{},
+			fmt.Errorf("Paper effect authorization response has trailing JSON")
+	}
+	if err := validatePaperEffectAuthorization(authorization); err != nil {
+		return PaperEffectAuthorization{},
+			fmt.Errorf("invalid Paper effect authorization response: %w", err)
 	}
 	return authorization, nil
 }
@@ -121,13 +127,17 @@ func (adapter *PostgresAdapter) RecordPaperEffectReceipt(
 	if err != nil {
 		return PaperEffectReceipt{}, err
 	}
+	var responseParameter any
+	if responseValue != nil {
+		responseParameter = string(responseJSON)
+	}
 	var raw []byte
 	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
 			`SELECT agent_control.record_cortex_paper_effect_receipt(
 				$1,$2,$3,$4::JSONB,$5
 			)::TEXT`,
-			authorizationID, outcome, httpStatus, string(responseJSON),
+			authorizationID, outcome, httpStatus, responseParameter,
 			nullablePaperEffectFailure(failureCode),
 		).Scan(&raw)
 	}); err != nil {
@@ -137,11 +147,17 @@ func (adapter *PostgresAdapter) RecordPaperEffectReceipt(
 	var receipt PaperEffectReceipt
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&receipt) != nil ||
-		decoder.Decode(&struct{}{}) != io.EOF ||
-		validatePaperEffectReceipt(receipt) != nil {
+	if err := decoder.Decode(&receipt); err != nil {
 		return PaperEffectReceipt{},
-			fmt.Errorf("invalid Paper effect receipt response")
+			fmt.Errorf("decode Paper effect receipt response: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return PaperEffectReceipt{},
+			fmt.Errorf("Paper effect receipt response has trailing JSON")
+	}
+	if err := validatePaperEffectReceipt(receipt); err != nil {
+		return PaperEffectReceipt{},
+			fmt.Errorf("invalid Paper effect receipt response: %w", err)
 	}
 	return receipt, nil
 }
@@ -152,21 +168,36 @@ func validatePaperEffectAuthorization(value PaperEffectAuthorization) error {
 	if value.AuthorizationKind == "copilot" {
 		expectedReview = 2
 	}
-	if value.SchemaRevision != 1 || value.Status != "authorized" ||
-		!validDecisionTriggerID(value.AuthorizationID) ||
-		!validDecisionTriggerID(value.CandidateID) ||
-		!validDecisionTriggerID(value.EffectID) ||
-		(value.AuthorizationKind != "copilot" &&
-			value.AuthorizationKind != "agentic") ||
-		value.ReviewGeneration != expectedReview ||
-		value.KernelModeGeneration < 1 ||
-		!validDecisionTriggerID(value.RunID) ||
-		!validDecisionTriggerID(value.TaskID) ||
-		value.Proposal.Validate() != nil ||
-		!decisionTriggerDigestPattern.MatchString(value.RecordDigest) ||
-		timeErr != nil || authorizedAt.IsZero() ||
-		authorizedAt.Location() != time.UTC {
-		return fmt.Errorf("invalid Paper effect authorization")
+	switch {
+	case value.SchemaRevision != 1:
+		return fmt.Errorf("schema revision")
+	case value.Status != "authorized":
+		return fmt.Errorf("status")
+	case !validDecisionTriggerID(value.AuthorizationID):
+		return fmt.Errorf("authorization id")
+	case !validDecisionTriggerID(value.CandidateID):
+		return fmt.Errorf("candidate id")
+	case !validDecisionTriggerID(value.EffectID):
+		return fmt.Errorf("effect id")
+	case value.AuthorizationKind != "copilot" &&
+		value.AuthorizationKind != "agentic":
+		return fmt.Errorf("authorization kind")
+	case value.ReviewGeneration != expectedReview:
+		return fmt.Errorf("review generation")
+	case value.KernelModeGeneration < 1:
+		return fmt.Errorf("Kernel mode generation")
+	case !validDecisionTriggerID(value.RunID):
+		return fmt.Errorf("Run id")
+	case !validDecisionTriggerID(value.TaskID):
+		return fmt.Errorf("Task id")
+	case value.Proposal.Validate() != nil:
+		return fmt.Errorf("proposal")
+	case !decisionTriggerDigestPattern.MatchString(value.RecordDigest):
+		return fmt.Errorf("record digest")
+	case timeErr != nil || authorizedAt.IsZero():
+		return fmt.Errorf("authorized time")
+	case authorizedAt.Location() != time.UTC:
+		return fmt.Errorf("authorized time zone")
 	}
 	return nil
 }
@@ -175,16 +206,29 @@ func validatePaperEffectReceipt(value PaperEffectReceipt) error {
 	recordedAt, timeErr := time.Parse(time.RFC3339Nano, value.RecordedAt)
 	validOutcome := value.Outcome == "succeeded" ||
 		value.Outcome == "failed"
-	if value.SchemaRevision != 1 || value.Status != "recorded" ||
-		!validDecisionTriggerID(value.ReceiptID) ||
-		!validDecisionTriggerID(value.AuthorizationID) ||
-		!validDecisionTriggerID(value.CandidateID) ||
-		!validDecisionTriggerID(value.EffectID) || !validOutcome ||
-		value.HTTPStatus < 100 || value.HTTPStatus > 599 ||
-		!decisionTriggerDigestPattern.MatchString(value.RecordDigest) ||
-		timeErr != nil || recordedAt.IsZero() ||
-		recordedAt.Location() != time.UTC {
-		return fmt.Errorf("invalid Paper effect receipt")
+	switch {
+	case value.SchemaRevision != 1:
+		return fmt.Errorf("schema revision")
+	case value.Status != "recorded":
+		return fmt.Errorf("status")
+	case !validDecisionTriggerID(value.ReceiptID):
+		return fmt.Errorf("receipt id")
+	case !validDecisionTriggerID(value.AuthorizationID):
+		return fmt.Errorf("authorization id")
+	case !validDecisionTriggerID(value.CandidateID):
+		return fmt.Errorf("candidate id")
+	case !validDecisionTriggerID(value.EffectID):
+		return fmt.Errorf("effect id")
+	case !validOutcome:
+		return fmt.Errorf("outcome")
+	case value.HTTPStatus < 100 || value.HTTPStatus > 599:
+		return fmt.Errorf("HTTP status")
+	case !decisionTriggerDigestPattern.MatchString(value.RecordDigest):
+		return fmt.Errorf("record digest")
+	case timeErr != nil || recordedAt.IsZero():
+		return fmt.Errorf("recorded time")
+	case recordedAt.Location() != time.UTC:
+		return fmt.Errorf("recorded time zone")
 	}
 	if value.Outcome == "succeeded" {
 		if value.HTTPStatus < 200 || value.HTTPStatus > 299 ||

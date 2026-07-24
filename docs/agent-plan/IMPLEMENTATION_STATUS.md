@@ -215,9 +215,10 @@
 | Observe / Copilot / Agentic | 状态层已部署 | 每个环境的模式和 generation 永久保存并有 append-only 事件。Paper 可切换三档；Live 强制锁在 Observe。模式切换本身不等于获得执行权限 |
 | Cortex Paper Effect Bridge | Kernel 入口已部署 | 独立 secret-file credential、只允许 `agent-default` Paper、只允许 equity、调用方不能指定成交价、Observe/Copilot 时 409 拒绝；无法选择或访问 Robinhood 账户 |
 | Cortex Candidate 生成、存储与投影 | 已部署 | Workflow v9 允许最终 Decision Desk 生成一个严格、effect-free 的 equity Paper Candidate；Intent 和 Specialist 只能返回 `null`。Candidate 永久绑定来源 Model Result、Run、Task、Attempt 和有效 Worker Lease；普通回答不产生 Candidate，任何写入失败都会阻止 Run 伪装成功。Console 已按用户隔离显示 Candidate 与来源 Run；Live 环境不显示 Paper Candidate |
-| Candidate 授权与执行收据契约 | 基础层已部署 | 每个 Candidate 最多一个 immutable Control Authorization 和一个 immutable Kernel Receipt；Authorization 固定 Copilot/Agentic、review generation、Kernel mode generation、effect ID 和 Candidate 摘要。Kernel Bridge 已拒绝旧裸请求，并要求授权类型与本地 Paper 自治模式精确匹配。下一步接 Control 编排与 Console 收据投影 |
+| Candidate 授权与执行收据契约 | 已部署 | 每个 Candidate 最多一个 immutable Control Authorization 和一个 immutable Kernel Receipt；Authorization 固定 Copilot/Agentic、review generation、Kernel mode generation、effect ID 和 Candidate 摘要。Control 负责授权、调用和崩溃恢复；Kernel 再次校验本地模式与 generation，并以 effect ID 幂等结算。Console 已显示 AUTHORIZED / FILLED / FAILED、HTTP 状态、稳定失败码和 Paper 成交 |
 | Copilot 人工确认 | 已部署 | Candidate 状态为 `proposed → approved/rejected`，只有 Paper + Copilot 显示批准/拒绝；Kernel 在 Observe/Agentic 拒绝人工审批。决定按 generation 防并发并支持同决定重放，Cortex 校验用户归属和来源 Run 已成功，审计事件 append-only。批准本身仍不成交 |
-| Agentic Paper 自动执行 | 待完成 | 只有 `paper + agentic` 且 Candidate/授权/限额全部通过时才调用 Effect Bridge；失败原因投影到 Console |
+| Agentic Paper 自动执行 | 已部署 | 只有 `paper + agentic` 且来源 Run 已成功、Candidate 合法、Control Authorization 与当前 Kernel mode generation 一致时才调用 Effect Bridge。已用 SPY 0.001 股完成真实 Paper 买入/卖出闭环并清仓；同时验收了一次行情不可用的 502 失败收据。Live 始终保持 Observe，未产生 Live 订单 |
+| Candidate + 并行 TaskGraph | 待升级 | 普通研究继续使用并行 TaskGraph；当前 Candidate Run 使用已验证的 Tool / Specialist → Decision Desk 路径，因为现有 TaskGraph 最终契约只允许 answer，不能携带 Candidate。下一步安装 candidate-aware TaskGraph round contract 后再开放并行候选决策 |
 | 数据流与日内循环 | 待完成 | Moody Blues replay/stream → 数学 Trigger → Cortex 决策 → Paper Candidate/成交 → Portfolio/活动更新；用户可在右侧对话中途参与 |
 | Live 执行 | 未开放 | 继续强制 Observe；必须在 Paper 日内循环验收、限额、Kill Switch、确认和收据链完整后单独启用，不由 UI 按钮自行放开 |
 

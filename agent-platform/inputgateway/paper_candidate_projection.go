@@ -13,17 +13,33 @@ import (
 )
 
 type PaperCandidateView struct {
-	SchemaRevision uint16                  `json:"schema_revision"`
-	CandidateID    string                  `json:"candidate_id"`
-	RunID          string                  `json:"run_id"`
-	TaskID         string                  `json:"task_id"`
-	Generation     int64                   `json:"generation"`
-	Status         string                  `json:"status"`
-	SourceRunState string                  `json:"source_run_state"`
-	Eligible       bool                    `json:"eligible"`
-	Proposal       papercandidate.Proposal `json:"proposal"`
-	RecordDigest   string                  `json:"record_digest"`
-	ProposedAt     string                  `json:"proposed_at"`
+	SchemaRevision uint16                   `json:"schema_revision"`
+	CandidateID    string                   `json:"candidate_id"`
+	RunID          string                   `json:"run_id"`
+	TaskID         string                   `json:"task_id"`
+	Generation     int64                    `json:"generation"`
+	Status         string                   `json:"status"`
+	SourceRunState string                   `json:"source_run_state"`
+	Eligible       bool                     `json:"eligible"`
+	Proposal       papercandidate.Proposal  `json:"proposal"`
+	RecordDigest   string                   `json:"record_digest"`
+	ProposedAt     string                   `json:"proposed_at"`
+	Execution      *PaperCandidateExecution `json:"execution"`
+}
+
+type PaperCandidateExecution struct {
+	AuthorizationID      string          `json:"authorization_id"`
+	AuthorizationKind    string          `json:"authorization_kind"`
+	AuthorizationDigest  string          `json:"authorization_digest"`
+	EffectID             string          `json:"effect_id"`
+	KernelModeGeneration int64           `json:"kernel_mode_generation"`
+	AuthorizedAt         string          `json:"authorized_at"`
+	ReceiptID            string          `json:"receipt_id"`
+	Outcome              string          `json:"outcome"`
+	HTTPStatus           int             `json:"http_status"`
+	FailureCode          string          `json:"failure_code"`
+	RecordedAt           string          `json:"recorded_at"`
+	Order                json.RawMessage `json:"order"`
 }
 
 type PaperCandidateReview struct {
@@ -97,6 +113,58 @@ func validatePaperCandidateView(value PaperCandidateView) error {
 		timeErr != nil || proposedAt.IsZero() ||
 		proposedAt.Location() != time.UTC {
 		return fmt.Errorf("invalid Paper Candidate projection")
+	}
+	if value.Execution != nil &&
+		validatePaperCandidateExecution(*value.Execution) != nil {
+		return fmt.Errorf("invalid Paper Candidate execution projection")
+	}
+	return nil
+}
+
+func validatePaperCandidateExecution(
+	value PaperCandidateExecution,
+) error {
+	authorizedAt, authorizedErr := time.Parse(
+		time.RFC3339Nano, value.AuthorizedAt,
+	)
+	if !validDecisionTriggerID(value.AuthorizationID) ||
+		(value.AuthorizationKind != "copilot" &&
+			value.AuthorizationKind != "agentic") ||
+		!decisionTriggerDigestPattern.MatchString(
+			value.AuthorizationDigest,
+		) ||
+		!validDecisionTriggerID(value.EffectID) ||
+		value.KernelModeGeneration < 1 ||
+		authorizedErr != nil || authorizedAt.IsZero() ||
+		authorizedAt.Location() != time.UTC {
+		return fmt.Errorf("invalid Paper Candidate authorization projection")
+	}
+	if value.Outcome == "" {
+		if value.ReceiptID != "" || value.HTTPStatus != 0 ||
+			value.FailureCode != "" || value.RecordedAt != "" ||
+			len(value.Order) != 0 && string(value.Order) != "null" {
+			return fmt.Errorf("invalid pending Paper Candidate execution")
+		}
+		return nil
+	}
+	recordedAt, recordedErr := time.Parse(
+		time.RFC3339Nano, value.RecordedAt,
+	)
+	if !validDecisionTriggerID(value.ReceiptID) ||
+		(value.Outcome != "succeeded" && value.Outcome != "failed") ||
+		value.HTTPStatus < 100 || value.HTTPStatus > 599 ||
+		recordedErr != nil || recordedAt.IsZero() ||
+		recordedAt.Location() != time.UTC {
+		return fmt.Errorf("invalid Paper Candidate receipt projection")
+	}
+	if value.Outcome == "succeeded" {
+		if value.HTTPStatus < 200 || value.HTTPStatus > 299 ||
+			!validJSONObject(value.Order) || value.FailureCode != "" {
+			return fmt.Errorf("invalid successful Candidate execution")
+		}
+	} else if value.HTTPStatus >= 200 && value.HTTPStatus <= 299 ||
+		!paperEffectFailurePattern.MatchString(value.FailureCode) {
+		return fmt.Errorf("invalid failed Candidate execution")
 	}
 	return nil
 }

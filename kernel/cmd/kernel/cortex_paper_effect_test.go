@@ -43,6 +43,7 @@ func TestCortexPaperOrderIsAgenticServerPricedAndIdempotent(t *testing.T) {
 		`"authorization_id":"authorization-1",` +
 		`"authorization_kind":"agentic",` +
 		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"kernel_mode_generation":2,` +
 		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
 		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
 		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`
@@ -76,6 +77,7 @@ func TestCortexPaperOrderFailsClosed(t *testing.T) {
 		`"authorization_id":"authorization-1",` +
 		`"authorization_kind":"agentic",` +
 		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"kernel_mode_generation":2,` +
 		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
 		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
 		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`
@@ -137,6 +139,7 @@ func TestCortexPaperModeAndAuthorizationKindAreBound(t *testing.T) {
 		`"authorization_id":"authorization-1",` +
 		`"authorization_kind":"agentic",` +
 		`"authorization_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"kernel_mode_generation":2,` +
 		`"candidate_id":"candidate-1","effect_id":"effect-1",` +
 		`"run_id":"run-1","task_id":"task-1","symbol":"SPY",` +
 		`"kind":"equity","side":"buy","multiplier":1,"qty":1}`

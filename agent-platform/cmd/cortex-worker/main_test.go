@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +13,33 @@ import (
 
 	"alpheus/agentplatform/capability"
 )
+
+func TestAgenticPaperCandidateTriggerUsesWorkerCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost ||
+				r.URL.Path != "/internal/v1/paper-candidates/candidate-1/execute-agentic" ||
+				r.Header.Get("Authorization") != "Bearer worker-token" {
+				t.Fatalf("unexpected request: %s %s auth=%q",
+					r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(
+				`{"status":"skipped","reason_code":"paper_mode_not_active","kernel_mode":"observe"}`,
+			))
+		},
+	))
+	defer server.Close()
+	w := &worker{
+		controlURL: server.URL, controlToken: "worker-token",
+		http: server.Client(),
+	}
+	if err := w.triggerAgenticPaperCandidate(
+		context.Background(), "candidate-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestConfiguredWorkerConcurrencyIsBounded(t *testing.T) {
 	for input, expected := range map[string]int{"": 4, "1": 1, "4": 4, "16": 16} {
@@ -619,5 +649,22 @@ func TestAmbiguousRecoveryTurnFailsClosedOnChangedIdentity(t *testing.T) {
 	}
 	if _, _, err := ambiguousRecoveryTurn(item, claimResult{Reclaimed: true, UnresolvedTurnID: "turn-1", UnresolvedState: "dispatched"}); err == nil {
 		t.Fatal("dispatched recovery Turn was accepted without unknown transition")
+	}
+}
+
+func TestShouldAdmitTaskGraph(t *testing.T) {
+	if !shouldAdmitTaskGraph(workItem{
+		TaskGraphProposalDigest: "proposal-digest",
+	}) {
+		t.Fatal("ordinary research Run should use TaskGraph")
+	}
+	if shouldAdmitTaskGraph(workItem{
+		TaskGraphProposalDigest: "proposal-digest",
+		PaperCandidateEnabled:   true,
+	}) {
+		t.Fatal("candidate Run cannot use answer-only TaskGraph contract")
+	}
+	if shouldAdmitTaskGraph(workItem{}) {
+		t.Fatal("Run without proposal contract cannot use TaskGraph")
 	}
 }

@@ -1,11 +1,17 @@
 package inputgateway
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"alpheus/agentplatform/papercandidate"
+	_ "github.com/lib/pq"
 )
 
 func validPaperEffectAuthorizationFixture() PaperEffectAuthorization {
@@ -48,6 +54,93 @@ func TestPaperEffectAuthorizationBindsModeToReviewGeneration(t *testing.T) {
 	value.ReviewGeneration = 2
 	if err := validatePaperEffectAuthorization(value); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPaperEffectAuthorizationDecodesDatabaseJSON(t *testing.T) {
+	raw := []byte(`{
+		"replay":false,
+		"run_id":"b9bc5325-e1c4-41ad-a984-8d2270d156b9",
+		"status":"authorized",
+		"task_id":"9fca0fdd-a6ff-467a-ad3a-225c14e54de1",
+		"proposal":{
+			"qty":0.001,"kind":"equity","side":"buy","symbol":"SPY",
+			"thesis":"bounded test","strategy_id":"system_acceptance",
+			"invalidation":"cancel the test","confidence_bps":7000,
+			"schema_revision":1
+		},
+		"effect_id":"637bf652-2a5a-48f3-b7cd-2bd74e03e0a6",
+		"candidate_id":"a7b9928c-a753-4f4f-ac37-4f6988572767",
+		"authorized_at":"2026-07-24T08:16:28.603966Z",
+		"record_digest":"7a24831c3b4a9641e4eba7988d4566c7b12b52b5e1c337aee3c6fdb4a98a9b9c",
+		"schema_revision":1,
+		"authorization_id":"6f7a095c-4b9e-44b0-9ec6-b61b8252e8ed",
+		"review_generation":1,
+		"authorization_kind":"agentic",
+		"kernel_mode_generation":12
+	}`)
+	var value PaperEffectAuthorization
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatalf("trailing JSON err=%v", err)
+	}
+	if err := validatePaperEffectAuthorization(value); err != nil {
+		t.Fatalf("value=%+v err=%v", value, err)
+	}
+}
+
+func TestPaperEffectAuthorizationDatabaseReplay(t *testing.T) {
+	databaseURL := os.Getenv("CORTEX_TEST_DATABASE_URL")
+	candidateID := os.Getenv("CORTEX_TEST_PAPER_CANDIDATE_ID")
+	if databaseURL == "" || candidateID == "" {
+		t.Skip("database replay fixture not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	adapter := &PostgresAdapter{db: db}
+	authorization, err := adapter.AuthorizePaperEffect(
+		context.Background(), "owner-1", candidateID, "agentic", 12,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authorization.Replay {
+		t.Fatal("existing authorization was not replayed")
+	}
+}
+
+func TestPaperEffectReceiptDatabaseReplay(t *testing.T) {
+	databaseURL := os.Getenv("CORTEX_TEST_DATABASE_URL")
+	authorizationID := os.Getenv(
+		"CORTEX_TEST_PAPER_AUTHORIZATION_ID",
+	)
+	if databaseURL == "" || authorizationID == "" {
+		t.Skip("database receipt replay fixture not configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	adapter := &PostgresAdapter{db: db}
+	receipt, err := adapter.RecordPaperEffectReceipt(
+		context.Background(), authorizationID, "failed", 502,
+		json.RawMessage(`{"error":"market data unavailable"}`),
+		"kernel_market_data_unavailable",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.Replay || receipt.Outcome != "failed" {
+		t.Fatalf("receipt=%+v", receipt)
 	}
 }
 

@@ -47,6 +47,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	paperEffectToken, err := loadSecretEnv(
+		"CORTEX_PAPER_EFFECT_TOKEN_FILE",
+	)
+	if err != nil {
+		return err
+	}
 	researchToken, err := loadSecretEnv("CORTEX_RESEARCH_TOKEN_FILE")
 	if err != nil {
 		return err
@@ -85,6 +91,10 @@ func run() error {
 	startCortexRunCancellationRecovery(recoveryContext, adapter)
 	startCortexDecisionTriggerEvaluator(
 		recoveryContext, adapter, kernelHTTP, kernelURL, serviceToken, subjectID,
+	)
+	startPaperCandidateExecutionRecovery(
+		recoveryContext, adapter, kernelHTTP, kernelURL,
+		paperEffectToken, subjectID,
 	)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -484,12 +494,59 @@ func run() error {
 		status := http.StatusOK
 		if review.Status == "conflict" {
 			status = http.StatusConflict
+		} else if review.State == "approved" {
+			executionContext, cancelExecution := context.WithTimeout(
+				request.Context(), 25*time.Second,
+			)
+			if _, executionErr := executePaperCandidate(
+				executionContext, adapter, kernelHTTP, kernelURL,
+				paperEffectToken, subject.PrincipalID,
+				review.CandidateID, "copilot",
+			); executionErr != nil {
+				log.Printf(
+					"Cortex Copilot Paper execution failed for %s: %v",
+					review.CandidateID, executionErr,
+				)
+			}
+			cancelExecution()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(review)
 	})
+	mux.HandleFunc(
+		"POST /internal/v1/paper-candidates/{id}/execute-agentic",
+		func(w http.ResponseWriter, request *http.Request) {
+			if !validBearer(request, workerToken) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			candidateID := strings.TrimSpace(request.PathValue("id"))
+			if candidateID == "" {
+				http.Error(w, "invalid Paper Candidate",
+					http.StatusBadRequest)
+				return
+			}
+			execution, executionErr := executePaperCandidate(
+				request.Context(), adapter, kernelHTTP, kernelURL,
+				paperEffectToken, subject.PrincipalID,
+				candidateID, "agentic",
+			)
+			if executionErr != nil {
+				log.Printf(
+					"Cortex Agentic Paper execution failed for %s: %v",
+					candidateID, executionErr,
+				)
+				http.Error(w, "Paper Candidate execution unavailable",
+					http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(execution)
+		},
+	)
 	mux.HandleFunc("PUT /v1/decision-triggers/{id}", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

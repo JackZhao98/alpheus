@@ -92,6 +92,12 @@ func (s *server) agentConsoleEnvironment(
 	executionEnabled := selected == "live" && mode == config.ModeLive ||
 		selected == "paper" &&
 			(mode == config.ModeSim || mode == config.ModeShadow)
+	if selected == "paper" && !executionEnabled && s.store != nil {
+		if autonomy, err := s.store.AgentAutonomyProfile("paper"); err == nil {
+			executionEnabled = autonomy.Mode == "copilot" ||
+				autonomy.Mode == "agentic"
+		}
+	}
 	return agentConsoleEnvironment{
 		Selected:         selected,
 		DataScope:        dataScope,

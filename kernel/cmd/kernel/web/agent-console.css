@@ -463,6 +463,13 @@ td:first-child { color:#c4ccc6; font-weight:800; }
   color:#7b887e;
   white-space:normal;
 }
+.candidate-copy .candidate-execution {
+  margin-top:7px;
+  color:var(--amber);
+  font-weight:800;
+  letter-spacing:.03em;
+  white-space:normal;
+}
 .candidate-state {
   color:var(--amber);
   font-size:7px;
@@ -491,6 +498,10 @@ td:first-child { color:#c4ccc6; font-weight:800; }
 .candidate-item.source_not_committed .candidate-state { color:var(--red); }
 .candidate-item.approved .candidate-state { color:var(--green); }
 .candidate-item.rejected .candidate-state { color:var(--red); }
+.candidate-item.succeeded .candidate-state,
+.candidate-item.succeeded .candidate-execution { color:var(--green-hot); }
+.candidate-item.failed .candidate-state,
+.candidate-item.failed .candidate-execution { color:var(--red); }
 .operation-list { display:grid; }
 .operation-item {
   display:grid;
