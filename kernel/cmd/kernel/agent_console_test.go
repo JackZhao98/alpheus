@@ -25,7 +25,9 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		"/assets/agent-console.js", "", "")
 	if script.Code != http.StatusOK ||
 		!strings.Contains(script.Body.String(),
-			`request("/agent/console/triggers")`) {
+			`request("/agent/console/triggers")`) ||
+		!strings.Contains(script.Body.String(), "trigger.last_value") ||
+		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
 		t.Fatalf("script status=%d body=%s",
 			script.Code, script.Body.String())
 	}

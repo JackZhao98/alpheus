@@ -174,7 +174,7 @@ function renderActivity(activity) {
 
 function renderTriggers(triggers) {
   const items = Array.isArray(triggers?.items) ? triggers.items : [];
-  text("trigger-count",`${items.length} ACTIVE`);
+  text("trigger-count",`${items.filter((item) => item.enabled).length} ACTIVE`);
   const list = byId("trigger-list");
   if (!items.length) {
     list.innerHTML = `
@@ -191,6 +191,7 @@ function renderTriggers(triggers) {
     row.className = "trigger-item";
     row.innerHTML = "<i></i>";
     const copy = document.createElement("div");
+    copy.className = "trigger-copy";
     const title = document.createElement("strong");
     title.textContent = trigger.title || trigger.strategy_id || "Trigger";
     const detail = document.createElement("span");
@@ -201,7 +202,21 @@ function renderTriggers(triggers) {
     detail.textContent = trigger.condition || trigger.description ||
       `${trigger.symbol || ""} · ${metric} ${comparator} ${trigger.threshold ?? "—"} · ${trigger.cooldown_seconds || 0}s cooldown`;
     copy.append(title,detail);
+    if (trigger.last_value != null && trigger.last_observed_at) {
+      const reason = {
+        threshold_not_met:"WAITING",
+        threshold_met:"THRESHOLD MET",
+        crossed:"CROSSED",
+        no_prior_sample:"BASELINE",
+        cooldown_suppressed:"COOLDOWN",
+      }[trigger.last_reason_code] || String(trigger.last_reason_code || "").toUpperCase();
+      const sample = document.createElement("span");
+      sample.className = `trigger-sample ${trigger.last_reason_code || ""}`;
+      sample.textContent = `CURRENT ${Number(trigger.last_value).toLocaleString("en-US",{maximumFractionDigits:4})} · ${when(trigger.last_observed_at)} · ${reason}`;
+      copy.append(sample);
+    }
     const stateLabel = document.createElement("span");
+    stateLabel.className = "trigger-state";
     stateLabel.textContent = (trigger.state || "ARMED").toUpperCase();
     row.append(copy,stateLabel);
     list.append(row);
@@ -609,3 +624,8 @@ byId("login-form").addEventListener("submit",async (event) => {
 });
 
 restore();
+setInterval(() => {
+  if (byId("login-screen").hidden) {
+    Promise.allSettled([loadTriggers(),loadHealth(),loadMarket()]);
+  }
+},15000);

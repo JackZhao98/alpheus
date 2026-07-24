@@ -76,6 +76,39 @@ func TestDecisionTriggerCommandPreservesNumericThreshold(t *testing.T) {
 	}
 }
 
+func TestDecisionTriggerValidationAcceptsLatestEvaluation(t *testing.T) {
+	value := validDecisionTriggerFixture()
+	last := json.Number("738.23000000")
+	value.LastValue = &last
+	value.LastObservedAt = "2026-07-24T06:34:07.409Z"
+	value.LastReasonCode = "threshold_not_met"
+	if err := validateDecisionTrigger(value); err != nil {
+		t.Fatal(err)
+	}
+	value.LastReasonCode = "invented"
+	if err := validateDecisionTrigger(value); err == nil {
+		t.Fatal("invented evaluation reason was accepted")
+	}
+}
+
+func TestDecisionTriggerSampleValidationEnforcesAuditInvariants(t *testing.T) {
+	value := DecisionTriggerSample{
+		SampleID:   "22222222-2222-4222-8222-222222222222",
+		TriggerID:  "11111111-1111-4111-8111-111111111111",
+		Generation: 1, Value: json.Number("729"),
+		ConditionMet: true, Fired: true, ReasonCode: "crossed",
+		ObservedAt:  "2026-07-24T06:34:07.409Z",
+		CommittedAt: "2026-07-24T06:34:07.410Z",
+	}
+	if err := validateDecisionTriggerSample(value); err != nil {
+		t.Fatal(err)
+	}
+	value.ConditionMet = false
+	if err := validateDecisionTriggerSample(value); err == nil {
+		t.Fatal("fired sample without a met condition was accepted")
+	}
+}
+
 func containsJSONNumber(raw []byte, expected string) bool {
 	for index := 0; index+len(expected) <= len(raw); index++ {
 		if string(raw[index:index+len(expected)]) == expected {

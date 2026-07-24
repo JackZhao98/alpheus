@@ -82,6 +82,9 @@ func run() error {
 	startCortexTaskGraphJoinRecovery(recoveryContext, adapter)
 	startCortexExpiredRunRecovery(recoveryContext, adapter)
 	startCortexRunCancellationRecovery(recoveryContext, adapter)
+	startCortexDecisionTriggerEvaluator(
+		recoveryContext, adapter, kernelHTTP, kernelURL, serviceToken, subjectID,
+	)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,

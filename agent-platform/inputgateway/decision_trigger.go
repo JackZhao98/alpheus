@@ -20,20 +20,24 @@ var (
 )
 
 type DecisionTrigger struct {
-	TriggerID       string      `json:"trigger_id"`
-	Generation      int64       `json:"generation"`
-	Title           string      `json:"title"`
-	StrategyID      string      `json:"strategy_id"`
-	DataSource      string      `json:"data_source"`
-	Symbol          string      `json:"symbol"`
-	Metric          string      `json:"metric"`
-	Comparator      string      `json:"comparator"`
-	Threshold       json.Number `json:"threshold"`
-	CooldownSeconds int64       `json:"cooldown_seconds"`
-	Objective       string      `json:"objective"`
-	Enabled         bool        `json:"enabled"`
-	State           string      `json:"state"`
-	UpdatedAt       string      `json:"updated_at"`
+	TriggerID       string       `json:"trigger_id"`
+	Generation      int64        `json:"generation"`
+	Title           string       `json:"title"`
+	StrategyID      string       `json:"strategy_id"`
+	DataSource      string       `json:"data_source"`
+	Symbol          string       `json:"symbol"`
+	Metric          string       `json:"metric"`
+	Comparator      string       `json:"comparator"`
+	Threshold       json.Number  `json:"threshold"`
+	CooldownSeconds int64        `json:"cooldown_seconds"`
+	Objective       string       `json:"objective"`
+	Enabled         bool         `json:"enabled"`
+	State           string       `json:"state"`
+	UpdatedAt       string       `json:"updated_at"`
+	LastValue       *json.Number `json:"last_value,omitempty"`
+	LastObservedAt  string       `json:"last_observed_at,omitempty"`
+	LastReasonCode  string       `json:"last_reason_code,omitempty"`
+	LastFiredAt     string       `json:"last_fired_at,omitempty"`
 }
 
 type DecisionTriggerCommand struct {
@@ -55,6 +59,19 @@ type DecisionTriggerMutation struct {
 	Status     string          `json:"status"`
 	ReasonCode string          `json:"reason_code,omitempty"`
 	Trigger    DecisionTrigger `json:"trigger,omitempty"`
+}
+
+type DecisionTriggerSample struct {
+	SampleID     string       `json:"sample_id"`
+	TriggerID    string       `json:"trigger_id"`
+	Generation   int64        `json:"generation"`
+	Value        json.Number  `json:"value"`
+	PriorValue   *json.Number `json:"prior_value,omitempty"`
+	ConditionMet bool         `json:"condition_met"`
+	Fired        bool         `json:"fired"`
+	ReasonCode   string       `json:"reason_code"`
+	ObservedAt   string       `json:"observed_at"`
+	CommittedAt  string       `json:"committed_at"`
 }
 
 func (adapter *PostgresAdapter) ListDecisionTriggers(
@@ -139,6 +156,45 @@ func (adapter *PostgresAdapter) RegisterDecisionTrigger(
 	return result, nil
 }
 
+func (adapter *PostgresAdapter) RecordDecisionTriggerSample(
+	ctx context.Context,
+	triggerID string,
+	value json.Number,
+	observedAt time.Time,
+) (DecisionTriggerSample, error) {
+	numeric, numericErr := strconv.ParseFloat(value.String(), 64)
+	if adapter == nil || adapter.db == nil ||
+		!validDecisionTriggerID(triggerID) || numericErr != nil ||
+		numeric < -1_000_000_000 || numeric > 1_000_000_000 ||
+		observedAt.IsZero() || observedAt.Location() != time.UTC {
+		return DecisionTriggerSample{},
+			fmt.Errorf("invalid decision Trigger sample")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.record_cortex_decision_trigger_sample(
+				$1,$2::NUMERIC,$3
+			)::TEXT`,
+			triggerID, value.String(), observedAt,
+		).Scan(&raw)
+	}); err != nil {
+		return DecisionTriggerSample{},
+			fmt.Errorf("record Cortex decision Trigger sample: %w", err)
+	}
+	var sample DecisionTriggerSample
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&sample) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		validateDecisionTriggerSample(sample) != nil {
+		return DecisionTriggerSample{},
+			fmt.Errorf("invalid decision Trigger sample response")
+	}
+	return sample, nil
+}
+
 func validateDecisionTriggerCommand(value DecisionTriggerCommand) error {
 	state := "paused"
 	if value.Enabled {
@@ -187,7 +243,74 @@ func validateDecisionTrigger(value DecisionTrigger) error {
 		updated.IsZero() || updated.Location() != time.UTC {
 		return fmt.Errorf("invalid decision Trigger")
 	}
+	if err := validateDecisionTriggerLatest(value); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateDecisionTriggerLatest(value DecisionTrigger) error {
+	if value.LastValue == nil {
+		if value.LastObservedAt != "" || value.LastReasonCode != "" ||
+			value.LastFiredAt != "" {
+			return fmt.Errorf("invalid decision Trigger latest sample")
+		}
+		return nil
+	}
+	numeric, numericErr := strconv.ParseFloat(value.LastValue.String(), 64)
+	observed, observedErr := time.Parse(time.RFC3339Nano, value.LastObservedAt)
+	if numericErr != nil || numeric < -1_000_000_000 ||
+		numeric > 1_000_000_000 || observedErr != nil ||
+		observed.IsZero() || observed.Location() != time.UTC ||
+		!validDecisionTriggerReason(value.LastReasonCode) {
+		return fmt.Errorf("invalid decision Trigger latest sample")
+	}
+	if value.LastFiredAt != "" {
+		fired, err := time.Parse(time.RFC3339Nano, value.LastFiredAt)
+		if err != nil || fired.IsZero() || fired.Location() != time.UTC ||
+			fired.After(observed) {
+			return fmt.Errorf("invalid decision Trigger latest firing")
+		}
+	}
+	return nil
+}
+
+func validateDecisionTriggerSample(value DecisionTriggerSample) error {
+	numeric, numericErr := strconv.ParseFloat(value.Value.String(), 64)
+	observed, observedErr := time.Parse(time.RFC3339Nano, value.ObservedAt)
+	committed, committedErr := time.Parse(time.RFC3339Nano, value.CommittedAt)
+	if !validDecisionTriggerID(value.SampleID) ||
+		!validDecisionTriggerID(value.TriggerID) || value.Generation < 1 ||
+		numericErr != nil || numeric < -1_000_000_000 ||
+		numeric > 1_000_000_000 ||
+		!validDecisionTriggerReason(value.ReasonCode) ||
+		value.Fired && !value.ConditionMet ||
+		(value.ReasonCode == "cooldown_suppressed" &&
+			(value.Fired || !value.ConditionMet)) ||
+		observedErr != nil || committedErr != nil ||
+		observed.IsZero() || committed.IsZero() ||
+		observed.Location() != time.UTC ||
+		committed.Location() != time.UTC || observed.After(committed) {
+		return fmt.Errorf("invalid decision Trigger sample")
+	}
+	if value.PriorValue != nil {
+		prior, err := strconv.ParseFloat(value.PriorValue.String(), 64)
+		if err != nil || prior < -1_000_000_000 ||
+			prior > 1_000_000_000 {
+			return fmt.Errorf("invalid decision Trigger prior sample")
+		}
+	}
+	return nil
+}
+
+func validDecisionTriggerReason(value string) bool {
+	switch value {
+	case "threshold_not_met", "threshold_met", "crossed",
+		"no_prior_sample", "cooldown_suppressed":
+		return true
+	default:
+		return false
+	}
 }
 
 func validDecisionTriggerID(value string) bool {

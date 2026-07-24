@@ -337,6 +337,22 @@ button { color:inherit; }
 .trigger-item i { width:7px; height:7px; margin-top:4px; border-radius:50%; background:var(--green); }
 .trigger-item strong { display:block; color:#bec7c0; font-size:10px; }
 .trigger-item span { display:block; margin-top:4px; color:#5e6961; font-size:8px; }
+.trigger-copy { min-width:0; }
+.trigger-item .trigger-sample {
+  width:max-content;
+  max-width:100%;
+  margin-top:9px;
+  padding:4px 6px;
+  border:1px solid #27322b;
+  border-radius:3px;
+  color:#829086;
+  font-size:7px;
+  font-weight:800;
+  letter-spacing:.05em;
+}
+.trigger-item .trigger-sample.crossed,
+.trigger-item .trigger-sample.threshold_met { border-color:#4a432e; color:var(--amber); }
+.trigger-item .trigger-state { margin-top:0; color:#768379; font-weight:900; letter-spacing:.08em; }
 .module-foot {
   display:flex;
   justify-content:space-between;
