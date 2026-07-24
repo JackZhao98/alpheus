@@ -28,6 +28,8 @@ func TestReconcileCortexExpiredRunsUsesOneBoundedControlCall(
 		value: inputgateway.ExpiredRunReconciliation{
 			Status:               "reconciled",
 			RecoveredRuns:        2,
+			ExpiredRuns:          1,
+			RevokedRuns:          1,
 			TerminalizedTurns:    1,
 			TerminalizedAttempts: 1,
 			ClosedSessions:       2,
@@ -39,7 +41,8 @@ func TestReconcileCortexExpiredRunsUsesOneBoundedControlCall(
 	)
 	if err != nil || probe.calls != 1 ||
 		probe.limit != cortexExpiredRunRecoveryLimit ||
-		result.RecoveredRuns != 2 || result.TerminalizedTasks != 4 {
+		result.RecoveredRuns != 2 || result.RevokedRuns != 1 ||
+		result.TerminalizedTasks != 4 {
 		t.Fatalf("expired Run cycle=%+v calls=%d limit=%d err=%v",
 			result, probe.calls, probe.limit, err)
 	}

@@ -33,8 +33,9 @@ func startCortexExpiredRunRecovery(
 				log.Printf("Cortex expired Run recovery cycle: %v", err)
 			} else if result.RecoveredRuns > 0 {
 				log.Printf(
-					"Cortex expired Run recovery: runs=%d turns=%d attempts=%d sessions=%d tasks=%d",
-					result.RecoveredRuns, result.TerminalizedTurns,
+					"Cortex terminal Run recovery: runs=%d expired=%d revoked=%d turns=%d attempts=%d sessions=%d tasks=%d",
+					result.RecoveredRuns, result.ExpiredRuns,
+					result.RevokedRuns, result.TerminalizedTurns,
 					result.TerminalizedAttempts, result.ClosedSessions,
 					result.TerminalizedTasks,
 				)

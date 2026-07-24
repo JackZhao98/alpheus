@@ -129,11 +129,14 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   页面显示 Wake Run `9c8a5503-58c1-4728-8376-b9e1a82d0080`。验收 Trigger
   已暂停，Paper / Observe / Execution Locked 已恢复，Effect Authorization
   数量为 0。
-- Agent Platform 的 `go test -race ./...` 与 `go vet ./...`、139 个 Agent
-  migration 文件对应 143 条 ledger 记录的幂等回放均通过。暂停验收 Trigger
-  会按设计立即撤销旧 generation 的 Runtime Authority；两个故意留在处理中
-  的验收 Run 因此停止领取后续分支并等待 deadline recovery。下一切片增加
-  authority-revoked Run 的即时收敛，避免 Worker 重试刷屏。
+- Agent Platform 的 `go test -race ./...` 与 `go vet ./...`、140 个 Agent
+  migration 文件对应 144 条 ledger 记录的幂等回放均通过。暂停验收 Trigger
+  会按设计立即撤销旧 generation 的 Runtime Authority；Control 恢复器现会在
+  一个周期内原子关闭旧 Run 的 Turn / Attempt / Session / Task，释放并发预算，
+  并以 `runtime_authority_not_current` 写入不可变 recovery 和用户可见 Trace。
+  验收 Run `f0013412-75af-4f19-97c2-483959f7762e` 与
+  `9c8a5503-58c1-4728-8376-b9e1a82d0080` 已即时收敛，开放会话、非终态任务和
+  持有的并发槽均为 0，Worker 不再重复领取。
 - `scripts/verify-cortex-research-operations.sh --restart` 已真实重启五个应用
   服务并通过：六个必需服务健康、旧写入口仍为 410、Cortex 六项当前风险为
   0、Research 三条序列新鲜、18 条过期 Run 恢复证据、14 条 Tool 恢复事件

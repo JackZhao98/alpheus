@@ -461,6 +461,8 @@ type TaskGraphJoinReconciliation struct {
 type ExpiredRunReconciliation struct {
 	Status               string `json:"status"`
 	RecoveredRuns        int64  `json:"recovered_runs"`
+	ExpiredRuns          int64  `json:"expired_runs"`
+	RevokedRuns          int64  `json:"revoked_runs"`
 	TerminalizedTurns    int64  `json:"terminalized_turns"`
 	TerminalizedAttempts int64  `json:"terminalized_attempts"`
 	ClosedSessions       int64  `json:"closed_sessions"`
@@ -2461,9 +2463,9 @@ func (adapter *PostgresAdapter) ReconcileTaskGraphJoins(
 }
 
 // ReconcileExpiredRuns atomically closes bounded Cortex execution trees whose
-// immutable Run deadline has passed. The database owns selection, locks,
-// accounting, terminal states and audit events; this adapter only schedules
-// the Control command.
+// immutable Run deadline has passed or whose bound authority is no longer
+// current. The database owns selection, locks, accounting, terminal states and
+// audit events; this adapter only schedules the Control command.
 func (adapter *PostgresAdapter) ReconcileExpiredRuns(
 	ctx context.Context, limit int,
 ) (ExpiredRunReconciliation, error) {
@@ -2486,6 +2488,8 @@ func (adapter *PostgresAdapter) ReconcileExpiredRuns(
 	var result ExpiredRunReconciliation
 	if json.Unmarshal(raw, &result) != nil || result.Status != "reconciled" ||
 		result.RecoveredRuns < 0 || result.RecoveredRuns > int64(limit) ||
+		result.ExpiredRuns < 0 || result.RevokedRuns < 0 ||
+		result.ExpiredRuns+result.RevokedRuns != result.RecoveredRuns ||
 		result.TerminalizedTurns < 0 || result.TerminalizedAttempts < 0 ||
 		result.ClosedSessions < 0 || result.TerminalizedTasks < 0 {
 		return ExpiredRunReconciliation{},
