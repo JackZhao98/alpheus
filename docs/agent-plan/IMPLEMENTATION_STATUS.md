@@ -199,6 +199,34 @@
   acceptance verifier. Since `714bee2` it reconstructs the protected source
   and seal from Git, while current-head AP1 gates remain a separate stage.
 
+## 交易控制台上线进度（中文）
+
+> 这里按“真实可运行、已测试、已部署”的口径记录，不把页面占位或仅有
+> Prompt 的能力算作完成。Gamma 只是可插拔 Strategy Module，不是 Agent
+> 的交互模式。
+
+| 模块 | 状态 | 已完成边界 / 下一道边界 |
+|---|---|---|
+| Command Console | 已部署 | `/agent/console` 是控制台主界面；右侧保留弱化的持久化 Agent 对话。行情、真实 Robinhood 账户、持仓、活动、Trigger 和系统状态均来自后端，不使用浏览器伪数据 |
+| Decision Trigger Registry | 已部署 | immutable generation、确定性采样、cross/threshold/cooldown、Occurrence、外部事件 Run/Task/Attempt 唤醒和崩溃恢复均已完成；当前 Effect Ceiling 仍为 `none` |
+| Paper / Live 双环境 | 已部署 | Paper 是独立永久数据库账本，初始资金 $100,000；不复用 Robinhood、旧 shadow ledger 或浏览器状态。Live 仍只投影真实 Robinhood 账户 |
+| Paper 成交账本 | 已部署 | 订单按 Kernel 当场 quote 的 buy=ask / sell=bid 成交；现金、持仓、成本、订单、事件在一个 PostgreSQL 事务内结算；幂等冲突拒绝；订单和事件不可篡改 |
+| Paper 活动投影 | 已部署 | Console 会显示真实 Paper 成交的 actor、方向、数量、价格、行情来源和时间；当前无成交时明确显示 0，不造测试成交 |
+| Observe / Copilot / Agentic | 状态层已部署 | 每个环境的模式和 generation 永久保存并有 append-only 事件。Paper 可切换三档；Live 强制锁在 Observe。模式切换本身不等于获得执行权限 |
+| Cortex Paper Effect Bridge | Kernel 入口已部署 | 独立 secret-file credential、只允许 `agent-default` Paper、只允许 equity、调用方不能指定成交价、Observe/Copilot 时 409 拒绝；无法选择或访问 Robinhood 账户 |
+| Cortex Candidate 契约与授权收据 | **下一步** | 增加结构化 Paper Candidate、来源 Model Result/Run/Task/Lease 绑定、Control 授权、Kernel 执行收据和 Trace；完成前不会把 Effect Tool 标成可调用 |
+| Copilot 人工确认 | 待完成 | Candidate 可见、可追问、可批准/拒绝；批准动作必须 generation-fenced 且精确幂等 |
+| Agentic Paper 自动执行 | 待完成 | 只有 `paper + agentic` 且 Candidate/授权/限额全部通过时才调用 Effect Bridge；失败原因投影到 Console |
+| 数据流与日内循环 | 待完成 | Moody Blues replay/stream → 数学 Trigger → Cortex 决策 → Paper Candidate/成交 → Portfolio/活动更新；用户可在右侧对话中途参与 |
+| Live 执行 | 未开放 | 继续强制 Observe；必须在 Paper 日内循环验收、限额、Kill Switch、确认和收据链完整后单独启用，不由 UI 按钮自行放开 |
+
+本轮已完成并推送的提交：
+`00e18f2`（独立 Paper 环境）、
+`1fe697c`（原子 Paper 成交）、
+`b6559e5`（成交投影）、
+`705dfcf`（永久自治模式）、
+`2cb917b`（窄 Cortex Paper Effect Bridge）。
+
 ## AP0 work packets
 
 | Packet | Status | Scope |
