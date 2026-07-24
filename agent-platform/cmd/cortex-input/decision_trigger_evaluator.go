@@ -232,6 +232,9 @@ func evaluateCortexDecisionTriggers(
 		if !trigger.Enabled {
 			continue
 		}
+		if trigger.DataSource == "moody_blues_replay" {
+			continue
+		}
 		value, observedAt, fetchErr := fetch(ctx, trigger)
 		if fetchErr != nil {
 			failures = append(failures,
@@ -448,7 +451,7 @@ func validCortexMonitorGEX(
 	value cortexMonitorGEX,
 	asOf time.Time,
 ) bool {
-	return value.Available && value.SchemaRevision == 1 &&
+	return value.SchemaRevision == 1 &&
 		value.ObservationID != "" &&
 		value.Provider == "gexbot_classic" &&
 		value.ProviderRevision != "" &&

@@ -21,6 +21,7 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(response.Body.String(), "MOODY BLUES · DATA STREAM") ||
 		!strings.Contains(response.Body.String(), "自动播放") ||
 		!strings.Contains(response.Body.String(), `aria-label="回放速度"`) ||
+		!strings.Contains(response.Body.String(), "CORTEX TRIGGER · IDLE") ||
 		!strings.Contains(response.Body.String(), "Agent Channel") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -34,6 +35,7 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(script.Body.String(), "trigger.last_value") ||
 		!strings.Contains(script.Body.String(), "advanceReplay") ||
 		!strings.Contains(script.Body.String(), "toggleReplayPlayback") ||
+		!strings.Contains(script.Body.String(), "renderReplayTriggerEvaluations") ||
 		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
 		t.Fatalf("script status=%d body=%s",
 			script.Code, script.Body.String())

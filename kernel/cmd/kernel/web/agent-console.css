@@ -473,6 +473,8 @@ button { color:inherit; }
 }
 .stream-clock strong { color:var(--amber); font:400 11px Georgia,serif; }
 .stream-clock small { color:#536058; font-size:6px; font-weight:800; letter-spacing:.08em; }
+.stream-clock #replay-trigger-state.wake { color:#d1a35b; }
+.stream-clock #replay-trigger-state.evaluated { color:#7ea78b; }
 .stream-metrics {
   display:grid;
   grid-column:1/-1;

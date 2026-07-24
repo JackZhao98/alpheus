@@ -38,6 +38,11 @@ func TestDecisionTriggerValidationAcceptsTypedPriceAndGEXConditions(t *testing.T
 	if err := validateDecisionTrigger(gex); err != nil {
 		t.Fatal(err)
 	}
+	replay := gex
+	replay.DataSource = "moody_blues_replay"
+	if err := validateDecisionTrigger(replay); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDecisionTriggerValidationRejectsCrossProviderMetricAndFalseState(t *testing.T) {

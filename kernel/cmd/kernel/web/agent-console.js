@@ -88,6 +88,7 @@ function renderReplay(payload) {
   byId("replay-play").disabled = payload.state !== "active";
   text("replay-state",
     `${String(payload.state || "unknown").toUpperCase()} · GEN ${payload.generation || "—"}`);
+  renderReplayTriggerEvaluations(payload.trigger_evaluations || []);
   const observation = payload.observation;
   if (!observation) {
     text("replay-clock",payload.state === "complete" ? "回放完成" : "等待第一帧");
@@ -102,6 +103,27 @@ function renderReplay(payload) {
   text("replay-zero",replayNumber(metrics.zero_gamma));
   text("replay-call",replayNumber(metrics.major_pos_oi));
   text("replay-put",replayNumber(metrics.major_neg_oi));
+}
+
+function renderReplayTriggerEvaluations(evaluations) {
+  const indicator = byId("replay-trigger-state");
+  indicator.className = "";
+  if (!Array.isArray(evaluations) || evaluations.length === 0) {
+    indicator.textContent = "CORTEX TRIGGER · NO MATCH";
+    return;
+  }
+  const wake = evaluations.find((item) => item?.wake?.run_id);
+  if (wake) {
+    indicator.className = "wake";
+    indicator.textContent =
+      `CORTEX WAKE · ${wake.wake.run_id.slice(0,8)} · ${wake.metric}`;
+    return;
+  }
+  const fired = evaluations.filter((item) => item?.sample?.fired).length;
+  indicator.className = "evaluated";
+  indicator.textContent = fired > 0
+    ? `TRIGGER FIRED · ${fired}/${evaluations.length}`
+    : `TRIGGER EVALUATED · ${evaluations.length}`;
 }
 
 async function createReplay() {

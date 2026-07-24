@@ -243,7 +243,6 @@ func TestFetchCortexMonitorGEXUsesMoodyBluesArchive(t *testing.T) {
 			t.Fatalf("input=%v", input)
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"available":         true,
 			"schema_revision":   1,
 			"observation_id":    "observation-1",
 			"provider":          "gexbot_classic",

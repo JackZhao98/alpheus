@@ -120,10 +120,20 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   元数据。页面内 60× 自动播放已从 generation 1 连续推进至 generation 5，
   并可完成至 generation 12；10× 回放在 generation 2 暂停后跨越一个调度
   周期仍保持 generation 2。自动播放仅在页面存活期间运行，不声称是服务端
-  后台流，也尚未连接策略触发。
-- 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 108 条 Agent
-  migration 的幂等回放、Compose 配置检查均通过。终态 Task 占用并发槽为
-  0，终态 Run 持有开放 Session 为 0。
+  后台流。
+- 独立模拟源 `moody_blues_replay` 已完成每帧
+  `gex_compact_v1 → Trigger Sample → Occurrence → Cortex Wake` 验收。
+  Replay `f5299c05-a4f9-5658-91ea-f41d694998dc` 的 generation 2 绑定
+  normalized digest
+  `bdfa5672719897557cafcc523886e1436e005a8aebfec5e73bc43edf99867e84`，
+  页面显示 Wake Run `9c8a5503-58c1-4728-8376-b9e1a82d0080`。验收 Trigger
+  已暂停，Paper / Observe / Execution Locked 已恢复，Effect Authorization
+  数量为 0。
+- Agent Platform 的 `go test -race ./...` 与 `go vet ./...`、139 个 Agent
+  migration 文件对应 143 条 ledger 记录的幂等回放均通过。暂停验收 Trigger
+  会按设计立即撤销旧 generation 的 Runtime Authority；两个故意留在处理中
+  的验收 Run 因此停止领取后续分支并等待 deadline recovery。下一切片增加
+  authority-revoked Run 的即时收敛，避免 Worker 重试刷屏。
 - `scripts/verify-cortex-research-operations.sh --restart` 已真实重启五个应用
   服务并通过：六个必需服务健康、旧写入口仍为 410、Cortex 六项当前风险为
   0、Research 三条序列新鲜、18 条过期 Run 恢复证据、14 条 Tool 恢复事件
@@ -144,6 +154,11 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | `POST :8300/internal/v1/moody-blues/providers/gexbot-classic/replays/{id}/next` | 消费下一条历史观察值 | Cortex 内部令牌；只读 |
 | `POST :8400/v1/data-streams/gexbot/replays` | 为 Console 创建受控历史数据流 | Kernel 持有 Cortex 服务令牌；浏览器不接触 Research / Provider 凭据 |
 | `POST :8400/v1/data-streams/gexbot/replays/{id}/next` | 按 generation 推进一帧并移除 raw Blob 元数据 | Kernel 持有 Cortex 服务令牌；旧 generation 返回冲突 |
+
+回放推进响应可附带 `trigger_evaluations`：只公开 Trigger ID、metric、Sample、
+Occurrence 和 Wake Run，不公开 Provider raw Blob。只有显式注册为
+`moody_blues_replay` 的 Trigger 会消费历史帧；`research_gexbot` 继续只消费
+新鲜的 Live 归档。
 
 旧 `/internal/v1/gexbot/*` 路径会暂时保留为兼容别名，直到所有内部调用迁移。
 

@@ -145,6 +145,9 @@ func (adapter *PostgresAdapter) AdmitDecisionTriggerWake(
 	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, occurrence.OccurredAt)
 	deadline := occurredAt.Add(14 * time.Minute)
+	if trigger.DataSource == "moody_blues_replay" {
+		deadline = time.Now().UTC().Add(14 * time.Minute)
+	}
 	if time.Until(deadline) <= 90*time.Second {
 		return DecisionTriggerWake{},
 			fmt.Errorf("decision Trigger wake expired")

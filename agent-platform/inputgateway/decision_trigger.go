@@ -18,6 +18,9 @@ var (
 	decisionTriggerStrategyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	decisionTriggerSymbolPattern   = regexp.MustCompile(`^[A-Z][A-Z0-9._^-]{0,15}$`)
 	decisionTriggerDigestPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	decisionTriggerReplayIDPattern = regexp.MustCompile(
+		`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	)
 )
 
 type DecisionTrigger struct {
@@ -206,6 +209,64 @@ func (adapter *PostgresAdapter) RecordDecisionTriggerSample(
 	return sample, nil
 }
 
+func (adapter *PostgresAdapter) RecordMoodyBluesReplayDecisionTriggerSample(
+	ctx context.Context,
+	triggerID string,
+	value json.Number,
+	virtualObservedAt time.Time,
+	replayID string,
+	replayGeneration int64,
+	observationID string,
+	observationRecordDigest string,
+	normalized json.RawMessage,
+) (DecisionTriggerSample, error) {
+	numeric, numericErr := strconv.ParseFloat(value.String(), 64)
+	var normalizedObject map[string]json.RawMessage
+	if adapter == nil || adapter.db == nil ||
+		!validDecisionTriggerID(triggerID) || numericErr != nil ||
+		numeric < -1_000_000_000 || numeric > 1_000_000_000 ||
+		virtualObservedAt.IsZero() ||
+		virtualObservedAt.Location() != time.UTC ||
+		!decisionTriggerReplayIDPattern.MatchString(replayID) ||
+		replayGeneration < 2 ||
+		!validDecisionTriggerID(observationID) ||
+		!decisionTriggerDigestPattern.MatchString(
+			observationRecordDigest,
+		) ||
+		len(normalized) == 0 || len(normalized) > 16<<10 ||
+		json.Unmarshal(normalized, &normalizedObject) != nil ||
+		normalizedObject == nil {
+		return DecisionTriggerSample{},
+			fmt.Errorf("invalid Moody Blues replay Trigger sample")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.
+				record_cortex_moody_blues_replay_trigger_sample(
+					$1,$2::NUMERIC,$3,$4::UUID,$5,$6,$7,$8::JSONB
+				)::TEXT`,
+			triggerID, value.String(), virtualObservedAt, replayID,
+			replayGeneration, observationID, observationRecordDigest,
+			string(normalized),
+		).Scan(&raw)
+	}); err != nil {
+		return DecisionTriggerSample{},
+			fmt.Errorf("record Moody Blues replay Trigger sample: %w", err)
+	}
+	var sample DecisionTriggerSample
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&sample) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		validateDecisionTriggerSample(sample) != nil {
+		return DecisionTriggerSample{},
+			fmt.Errorf("invalid Moody Blues replay Trigger sample response")
+	}
+	return sample, nil
+}
+
 func (adapter *PostgresAdapter) MaterializeDecisionTriggerOccurrence(
 	ctx context.Context,
 	sampleID string,
@@ -265,7 +326,8 @@ func validateDecisionTrigger(value DecisionTrigger) error {
 	validMetric := value.DataSource == "kernel_quote" &&
 		(value.Metric == "mid_price" || value.Metric == "bid_price" ||
 			value.Metric == "ask_price") ||
-		value.DataSource == "research_gexbot" &&
+		(value.DataSource == "research_gexbot" ||
+			value.DataSource == "moody_blues_replay") &&
 			(value.Metric == "gex_call_wall" ||
 				value.Metric == "gex_put_wall" ||
 				value.Metric == "gex_zero_gamma")

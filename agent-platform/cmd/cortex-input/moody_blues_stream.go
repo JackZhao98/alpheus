@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"alpheus/agentplatform/inputgateway"
 )
 
 const maxMoodyBluesStreamResponseBytes = 64 << 10
@@ -24,12 +29,48 @@ type moodyBluesReplayStepRequest struct {
 	Generation int64 `json:"generation"`
 }
 
+type moodyBluesReplayTriggerStore interface {
+	ListDecisionTriggers(
+		context.Context, string, int,
+	) ([]inputgateway.DecisionTrigger, error)
+	RecordMoodyBluesReplayDecisionTriggerSample(
+		context.Context, string, json.Number, time.Time,
+		string, int64, string, string, json.RawMessage,
+	) (inputgateway.DecisionTriggerSample, error)
+	MaterializeDecisionTriggerOccurrence(
+		context.Context, string,
+	) (inputgateway.DecisionTriggerOccurrence, error)
+	AdmitDecisionTriggerWake(
+		context.Context, string, inputgateway.DecisionTrigger,
+		inputgateway.DecisionTriggerSample,
+		inputgateway.DecisionTriggerOccurrence,
+	) (inputgateway.DecisionTriggerWake, error)
+}
+
+type moodyBluesReplayEnvelope struct {
+	SchemaRevision uint16            `json:"schema_revision"`
+	ReplayID       string            `json:"replay_id"`
+	State          string            `json:"state"`
+	Generation     int64             `json:"generation"`
+	Observation    *cortexMonitorGEX `json:"observation"`
+}
+
+type moodyBluesReplayTriggerEvaluation struct {
+	TriggerID  string                                  `json:"trigger_id"`
+	Metric     string                                  `json:"metric"`
+	Sample     inputgateway.DecisionTriggerSample      `json:"sample"`
+	Occurrence *inputgateway.DecisionTriggerOccurrence `json:"occurrence,omitempty"`
+	Wake       *inputgateway.DecisionTriggerWake       `json:"wake,omitempty"`
+}
+
 func registerMoodyBluesStreamHandlers(
 	mux *http.ServeMux,
 	serviceToken string,
 	client *http.Client,
 	researchURL string,
 	researchToken string,
+	triggerStore moodyBluesReplayTriggerStore,
+	subjectID string,
 ) {
 	if mux == nil {
 		return
@@ -97,12 +138,66 @@ func registerMoodyBluesStreamHandlers(
 				)
 				return
 			}
-			proxyMoodyBluesStream(
-				w, r, client, researchURL, researchToken,
-				"/internal/v1/moody-blues/providers/gexbot-classic/replays/"+
-					replayID+"/next",
-				input,
+			path := "/internal/v1/moody-blues/providers/" +
+				"gexbot-classic/replays/" + replayID + "/next"
+			raw, status, code := requestMoodyBluesStream(
+				r, client, researchURL, researchToken, path, input,
 			)
+			if code != "" {
+				writeMoodyBluesStreamError(w, status, code)
+				return
+			}
+			if triggerStore != nil {
+				evaluations, err :=
+					evaluateMoodyBluesReplayFrame(
+						r.Context(), triggerStore, subjectID,
+						replayID, raw,
+					)
+				if err != nil {
+					log.Printf(
+						"Moody Blues replay Trigger evaluation: %v",
+						err,
+					)
+					writeMoodyBluesStreamError(
+						w, http.StatusBadGateway,
+						"moody_blues_replay_evaluation_failed",
+					)
+					return
+				}
+				var envelope map[string]json.RawMessage
+				if json.Unmarshal(raw, &envelope) != nil {
+					writeMoodyBluesStreamError(
+						w, http.StatusBadGateway,
+						"moody_blues_response_invalid",
+					)
+					return
+				}
+				envelope["trigger_evaluations"], err =
+					json.Marshal(evaluations)
+				if err != nil {
+					writeMoodyBluesStreamError(
+						w, http.StatusBadGateway,
+						"moody_blues_response_invalid",
+					)
+					return
+				}
+				raw, err = json.Marshal(envelope)
+				if err != nil {
+					writeMoodyBluesStreamError(
+						w, http.StatusBadGateway,
+						"moody_blues_response_invalid",
+					)
+					return
+				}
+			}
+			raw, code = sanitizeMoodyBluesStreamResponse(raw)
+			if code != "" {
+				writeMoodyBluesStreamError(
+					w, http.StatusBadGateway, code,
+				)
+				return
+			}
+			writeMoodyBluesStreamResponse(w, raw)
 		},
 	)
 }
@@ -116,19 +211,40 @@ func proxyMoodyBluesStream(
 	path string,
 	input any,
 ) {
-	if client == nil || strings.TrimSpace(researchURL) == "" ||
-		strings.TrimSpace(researchToken) == "" {
+	raw, status, code := requestMoodyBluesStream(
+		incoming, client, researchURL, researchToken, path, input,
+	)
+	if code != "" {
+		writeMoodyBluesStreamError(w, status, code)
+		return
+	}
+	raw, code = sanitizeMoodyBluesStreamResponse(raw)
+	if code != "" {
 		writeMoodyBluesStreamError(
-			w, http.StatusServiceUnavailable, "moody_blues_unavailable",
+			w, http.StatusBadGateway, code,
 		)
 		return
 	}
+	writeMoodyBluesStreamResponse(w, raw)
+}
+
+func requestMoodyBluesStream(
+	incoming *http.Request,
+	client *http.Client,
+	researchURL string,
+	researchToken string,
+	path string,
+	input any,
+) ([]byte, int, string) {
+	if client == nil || strings.TrimSpace(researchURL) == "" ||
+		strings.TrimSpace(researchToken) == "" {
+		return nil, http.StatusServiceUnavailable,
+			"moody_blues_unavailable"
+	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadRequest, "moody_blues_request_invalid",
-		)
-		return
+		return nil, http.StatusBadRequest,
+			"moody_blues_request_invalid"
 	}
 	request, err := http.NewRequestWithContext(
 		incoming.Context(), http.MethodPost,
@@ -136,19 +252,13 @@ func proxyMoodyBluesStream(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadGateway, "moody_blues_unavailable",
-		)
-		return
+		return nil, http.StatusBadGateway, "moody_blues_unavailable"
 	}
 	request.Header.Set("Authorization", "Bearer "+researchToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadGateway, "moody_blues_unavailable",
-		)
-		return
+		return nil, http.StatusBadGateway, "moody_blues_unavailable"
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(
@@ -157,61 +267,193 @@ func proxyMoodyBluesStream(
 	if err != nil || len(raw) == 0 ||
 		len(raw) > maxMoodyBluesStreamResponseBytes ||
 		!json.Valid(raw) {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadGateway, "moody_blues_response_invalid",
-		)
-		return
+		return nil, http.StatusBadGateway,
+			"moody_blues_response_invalid"
 	}
 	if response.StatusCode == http.StatusConflict {
-		writeMoodyBluesStreamError(
-			w, http.StatusConflict, "moody_blues_generation_conflict",
-		)
-		return
+		return nil, http.StatusConflict,
+			"moody_blues_generation_conflict"
 	}
 	if response.StatusCode/100 != 2 {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadGateway, "moody_blues_unavailable",
-		)
-		return
+		return nil, http.StatusBadGateway, "moody_blues_unavailable"
 	}
+	return raw, http.StatusOK, ""
+}
+
+func sanitizeMoodyBluesStreamResponse(
+	raw []byte,
+) ([]byte, string) {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(raw, &envelope) != nil ||
 		envelope["payload"] != nil ||
 		envelope["raw"] != nil {
-		writeMoodyBluesStreamError(
-			w, http.StatusBadGateway, "moody_blues_response_invalid",
-		)
-		return
+		return nil, "moody_blues_response_invalid"
 	}
 	if observation := envelope["observation"]; observation != nil &&
 		string(observation) != "null" {
 		var value map[string]json.RawMessage
 		if json.Unmarshal(observation, &value) != nil ||
 			value["payload"] != nil {
-			writeMoodyBluesStreamError(
-				w, http.StatusBadGateway, "moody_blues_response_invalid",
-			)
-			return
+			return nil, "moody_blues_response_invalid"
 		}
 		delete(value, "raw")
-		envelope["observation"], err = json.Marshal(value)
+		sanitizedObservation, err := json.Marshal(value)
 		if err != nil {
-			writeMoodyBluesStreamError(
-				w, http.StatusBadGateway, "moody_blues_response_invalid",
-			)
-			return
+			return nil, "moody_blues_response_invalid"
 		}
+		envelope["observation"] = sanitizedObservation
 		raw, err = json.Marshal(envelope)
 		if err != nil {
-			writeMoodyBluesStreamError(
-				w, http.StatusBadGateway, "moody_blues_response_invalid",
-			)
-			return
+			return nil, "moody_blues_response_invalid"
 		}
 	}
+	return raw, ""
+}
+
+func writeMoodyBluesStreamResponse(w http.ResponseWriter, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(raw)
+}
+
+func evaluateMoodyBluesReplayFrame(
+	ctx context.Context,
+	store moodyBluesReplayTriggerStore,
+	subjectID string,
+	replayID string,
+	raw []byte,
+) ([]moodyBluesReplayTriggerEvaluation, error) {
+	var envelope moodyBluesReplayEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&envelope) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		envelope.SchemaRevision != 1 ||
+		envelope.ReplayID != replayID ||
+		envelope.Generation < 2 ||
+		(envelope.State != "active" && envelope.State != "complete") {
+		return nil, fmt.Errorf("invalid Moody Blues replay envelope")
+	}
+	observation := envelope.Observation
+	if observation == nil || observation.Category != "gex_full" {
+		return []moodyBluesReplayTriggerEvaluation{}, nil
+	}
+	if !validCortexReplayGEX(*observation) {
+		return nil, fmt.Errorf("invalid Moody Blues replay observation")
+	}
+	metrics := make(map[string]string, 4)
+	for _, key := range []string{
+		"spot", "zero_gamma", "major_pos_oi", "major_neg_oi",
+	} {
+		number, found := observation.Metrics[key]
+		if !found || !validMoodyBluesReplayNumber(number) {
+			return nil, fmt.Errorf(
+				"invalid Moody Blues normalized metric")
+		}
+		metrics[key] = number.String()
+	}
+	normalized, err := json.Marshal(map[string]any{
+		"schema_revision":           1,
+		"transform_id":              "gex_compact_v1",
+		"replay_id":                 replayID,
+		"replay_generation":         envelope.Generation,
+		"observation_id":            observation.ObservationID,
+		"observation_record_digest": observation.RecordDigest,
+		"symbol":                    observation.Symbol,
+		"category":                  observation.Category,
+		"virtual_observed_at": observation.SourceTimestamp.UTC().
+			Format(time.RFC3339Nano),
+		"metrics": metrics,
+	})
+	if err != nil {
+		return nil, err
+	}
+	triggers, err := store.ListDecisionTriggers(ctx, subjectID, 100)
+	if err != nil {
+		return nil, err
+	}
+	evaluations := make([]moodyBluesReplayTriggerEvaluation, 0)
+	for _, trigger := range triggers {
+		if !trigger.Enabled ||
+			trigger.DataSource != "moody_blues_replay" ||
+			trigger.Symbol != observation.Symbol {
+			continue
+		}
+		value, valueErr := decisionTriggerGEXValue(
+			trigger.Metric, *observation,
+		)
+		if valueErr != nil {
+			return nil, valueErr
+		}
+		sample, recordErr :=
+			store.RecordMoodyBluesReplayDecisionTriggerSample(
+				ctx, trigger.TriggerID, value,
+				observation.SourceTimestamp.UTC(), replayID,
+				envelope.Generation, observation.ObservationID,
+				observation.RecordDigest, normalized,
+			)
+		if recordErr != nil {
+			return nil, recordErr
+		}
+		evaluation := moodyBluesReplayTriggerEvaluation{
+			TriggerID: trigger.TriggerID,
+			Metric:    trigger.Metric,
+			Sample:    sample,
+		}
+		if sample.Fired {
+			occurrence, occurrenceErr :=
+				store.MaterializeDecisionTriggerOccurrence(
+					ctx, sample.SampleID,
+				)
+			if occurrenceErr != nil {
+				return nil, occurrenceErr
+			}
+			wake, wakeErr := store.AdmitDecisionTriggerWake(
+				ctx, subjectID, trigger, sample, occurrence,
+			)
+			if wakeErr != nil {
+				return nil, wakeErr
+			}
+			evaluation.Occurrence = &occurrence
+			evaluation.Wake = &wake
+		}
+		evaluations = append(evaluations, evaluation)
+	}
+	return evaluations, nil
+}
+
+func validCortexReplayGEX(value cortexMonitorGEX) bool {
+	return value.SchemaRevision == 1 &&
+		value.ObservationID != "" &&
+		value.Provider == "gexbot_classic" &&
+		value.ProviderRevision != "" &&
+		value.SourceKind != "" && value.Symbol == "SPX" &&
+		value.Category == "gex_full" &&
+		value.QualityState == "accepted" &&
+		validCortexMonitorDigest(value.RecordDigest) &&
+		value.Raw.BlobID != "" &&
+		validCortexMonitorDigest(value.Raw.ContentDigest) &&
+		value.Raw.SizeBytes > 0 && len(value.Metrics) > 0 &&
+		!value.SourceTimestamp.IsZero() &&
+		!value.ObservedAt.IsZero() && !value.FetchedAt.IsZero() &&
+		!value.AvailableAt.IsZero() && !value.IngestedAt.IsZero() &&
+		value.SourceTimestamp.Location() == time.UTC &&
+		value.ObservedAt.Location() == time.UTC &&
+		value.FetchedAt.Location() == time.UTC &&
+		value.AvailableAt.Location() == time.UTC &&
+		value.IngestedAt.Location() == time.UTC &&
+		!value.FetchedAt.Before(value.ObservedAt) &&
+		!value.AvailableAt.Before(value.FetchedAt) &&
+		!value.AvailableAt.After(time.Now().UTC())
+}
+
+func validMoodyBluesReplayNumber(value json.Number) bool {
+	raw := value.String()
+	if raw == "" || strings.ContainsAny(raw, "eE") {
+		return false
+	}
+	_, err := value.Float64()
+	return err == nil
 }
 
 func decodeMoodyBluesStreamJSON(

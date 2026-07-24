@@ -433,6 +433,7 @@ func run() error {
 	mux.Handle("/", publicHandler)
 	registerMoodyBluesStreamHandlers(
 		mux, serviceToken, researchHTTP, researchURL, researchToken,
+		adapter, subject.PrincipalID,
 	)
 	mux.HandleFunc("GET /v1/agent-rooms", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
