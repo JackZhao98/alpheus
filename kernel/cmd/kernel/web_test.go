@@ -120,7 +120,9 @@ func TestAgentRoomIsAProductSurfaceAndHardened(t *testing.T) {
 			}
 			for _, failureContract := range []string{
 				"tool_branch_failed", "kernel_tool_interval_invalid",
-				"本次运行未完成", "已停止自动重试",
+				"kernel_tool_time_window_too_narrow",
+				"openai_output_invalid", "本次运行未完成",
+				"已停止自动重试",
 			} {
 				if !strings.Contains(response.Body.String(), failureContract) {
 					t.Fatalf("Agent Room missing failure contract %q",

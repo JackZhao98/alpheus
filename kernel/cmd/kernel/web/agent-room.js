@@ -170,6 +170,9 @@ const failureLabels = {
   kernel_tool_interval_invalid:"历史行情间隔无效；应使用 hour 或 day 等正式值",
   kernel_tool_start_time_invalid:"历史行情开始时间不是 RFC3339 UTC",
   kernel_tool_end_time_invalid:"历史行情结束时间无效或早于开始时间",
+  kernel_tool_time_range_stale:"相对日期偏离了这次请求的实际时间",
+  kernel_tool_time_window_too_narrow:"美股交易窗口太窄，无法覆盖最近交易时段",
+  kernel_tool_end_time_future:"历史行情结束时间晚于这次请求时间",
   kernel_tool_bounds_invalid:"行情时段参数不受支持",
   kernel_tool_adjustment_type_invalid:"复权参数不受支持",
   kernel_tool_adjustment_interval_invalid:"all 复权只能用于日内间隔",
@@ -179,6 +182,7 @@ const failureLabels = {
   task_graph_tool_failed:"已授权工具执行失败或数据提供方拒绝请求",
   task_graph_admission_failed:"并行 Agent 任务未能建立",
   task_graph_join_failed:"并行 Agent 结果未达到汇合条件",
+  openai_output_invalid:"一次模型结构化输出未通过校验，系统已自动重试",
   runtime_deadline_expired:"运行超过了冻结的截止时间",
 };
 
