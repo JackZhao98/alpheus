@@ -280,7 +280,10 @@ func (s *server) submitCortexUserRequest(
 		return cortexSubmission{}, "cortex_input_invalid"
 	}
 	id := store.NewID()
-	now := time.Now().UTC()
+	// PostgreSQL stores timestamptz at microsecond precision. Canonicalizing
+	// before the immutable Conversation digest is computed ensures the exact
+	// contract timestamp survives a database-backed Agent Room restore.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	conversationID := strings.TrimSpace(input.ConversationID)
 	conversationCreatedAt := now
 	kind := "new_request"

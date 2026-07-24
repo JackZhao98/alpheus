@@ -28,6 +28,7 @@ type agentRoom struct {
 	Generation            int64  `json:"generation"`
 	LastRunID             string `json:"last_run_id,omitempty"`
 	LastRunState          string `json:"last_run_state,omitempty"`
+	MessageCount          int64  `json:"message_count"`
 }
 
 type agentRoomUpdate struct {

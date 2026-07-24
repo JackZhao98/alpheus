@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpheus Agent</title>
+  <meta name="description" content="Alpheus Cortex Agent workspace">
+  <link rel="stylesheet" href="/assets/agent-room.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="room-rail" class="room-rail" aria-label="Agent Rooms">
+      <div class="brand">
+        <span class="brand-mark">A</span>
+        <div>
+          <strong>ALPHEUS</strong>
+          <span>CORTEX</span>
+        </div>
+      </div>
+      <button id="new-room" class="new-room" type="button">
+        <span>＋</span>
+        新建 Agent Room
+      </button>
+      <label class="room-search">
+        <span>搜索</span>
+        <input id="room-filter" type="search" placeholder="查找历史会话" autocomplete="off">
+      </label>
+      <div class="rail-label">
+        <span>最近会话</span>
+        <strong id="room-count">0</strong>
+      </div>
+      <nav id="room-list" class="room-list" aria-live="polite"></nav>
+      <div class="rail-footer">
+        <a href="/cockpit">Trading Cockpit</a>
+        <a href="/agent-lab">Agent Lab <span>诊断</span></a>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <button id="open-rooms" class="icon-button mobile-only" type="button" aria-label="打开会话列表">☰</button>
+        <div class="room-heading">
+          <div class="room-title-line">
+            <h1 id="room-title">新的 Agent Room</h1>
+            <span id="mode-badge" class="mode-badge">RESEARCH</span>
+          </div>
+          <p id="room-subtitle">Cortex 会根据问题自行选择 Agent、数据源和工具。</p>
+        </div>
+        <div class="header-actions">
+          <span id="system-indicator" class="system-indicator checking"><i></i>检查系统</span>
+          <button id="pause-room" class="text-button" type="button" hidden>暂停</button>
+          <button id="open-activity" class="icon-button mobile-only" type="button" aria-label="打开活动面板">◎</button>
+        </div>
+      </header>
+
+      <section id="new-room-view" class="new-room-view">
+        <div class="welcome-copy">
+          <span class="overline">CORTEX AGENT WORKSPACE</span>
+          <h2>你想让 Agent<br>研究什么？</h2>
+          <p>先选择一种工作模式。每个 Room 都会持久保存，并在后续问题中延续同一个上下文。</p>
+        </div>
+        <div class="mode-grid" aria-label="Agent mode">
+          <button class="mode-card selected" type="button" data-mode="research">
+            <span class="mode-index">01</span>
+            <span class="mode-card-copy">
+              <strong>Research</strong>
+              <small>开放研究与专业 Agent 协作</small>
+            </span>
+            <span class="mode-state available">AVAILABLE</span>
+          </button>
+          <button class="mode-card" type="button" data-mode="spx_gamma" disabled>
+            <span class="mode-index">02</span>
+            <span class="mode-card-copy">
+              <strong>SPX Gamma</strong>
+              <small>数据流驱动的盘中模拟</small>
+            </span>
+            <span class="mode-state">NEXT PHASE</span>
+          </button>
+          <button class="mode-card" type="button" data-mode="equity_discovery" disabled>
+            <span class="mode-index">03</span>
+            <span class="mode-card-copy">
+              <strong>Equity Discovery</strong>
+              <small>发现股票与 ETF 机会</small>
+            </span>
+            <span class="mode-state">NEXT PHASE</span>
+          </button>
+          <button class="mode-card" type="button" data-mode="watchlist_monitor" disabled>
+            <span class="mode-index">04</span>
+            <span class="mode-card-copy">
+              <strong>Watchlist Monitor</strong>
+              <small>新闻、价格与事件监控</small>
+            </span>
+            <span class="mode-state">NEXT PHASE</span>
+          </button>
+        </div>
+        <div class="starter-prompts">
+          <span>可以这样开始</span>
+          <div id="starter-list" class="starter-list">
+            <button type="button">分析今天最值得关注的市场变化</button>
+            <button type="button">检查我的持仓，找出最需要验证的风险</button>
+            <button type="button">研究一家公司最近的财报与关键催化剂</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="conversation-view" class="conversation-view" hidden>
+        <div id="message-list" class="message-list" aria-live="polite"></div>
+      </section>
+
+      <section class="composer-dock">
+        <div id="run-banner" class="run-banner" hidden>
+          <div>
+            <span class="run-pulse"></span>
+            <strong id="run-status">Cortex 正在工作</strong>
+            <small id="run-stage">正在读取执行状态…</small>
+          </div>
+          <button id="cancel-run" type="button">停止</button>
+        </div>
+        <form id="composer" class="composer">
+          <textarea id="message-input" rows="1" maxlength="4000" placeholder="问 Cortex 一个问题…" autocomplete="off" required></textarea>
+          <div class="composer-footer">
+            <label class="symbol-control">
+              <span>TICKER</span>
+              <input id="symbol-input" maxlength="16" placeholder="可选" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="composer-meta">
+              <span id="composer-mode">Research</span>
+              <button id="send-message" type="submit" aria-label="发送消息">↑</button>
+            </div>
+          </div>
+        </form>
+        <p id="composer-note">只读研究模式 · Agent 不能创建或修改订单</p>
+        <p id="page-error" class="page-error" role="alert"></p>
+      </section>
+    </main>
+
+    <aside id="activity-rail" class="activity-rail" aria-label="Agent activity">
+      <div class="activity-header">
+        <div>
+          <span class="overline">LIVE ACTIVITY</span>
+          <h2>Agent 活动</h2>
+        </div>
+        <button id="close-activity" class="icon-button mobile-only" type="button" aria-label="关闭活动面板">×</button>
+      </div>
+      <section class="activity-section">
+        <div class="section-heading">
+          <span>当前运行</span>
+          <strong id="activity-state">IDLE</strong>
+        </div>
+        <div id="activity-timeline" class="activity-timeline">
+          <div class="activity-empty">
+            <i></i>
+            <p>发送问题后，这里会显示 Cortex 实际完成的意图解析、Agent 交接和工具调用。</p>
+          </div>
+        </div>
+      </section>
+      <section class="activity-section context-section">
+        <div class="section-heading">
+          <span>Room 上下文</span>
+          <strong id="message-count">0 MESSAGES</strong>
+        </div>
+        <dl class="context-list">
+          <div><dt>模式</dt><dd id="context-mode">Research</dd></div>
+          <div><dt>状态</dt><dd id="context-state">新会话</dd></div>
+          <div><dt>数据边界</dt><dd>Research Gateway</dd></div>
+          <div><dt>交易权限</dt><dd class="safe">只读</dd></div>
+        </dl>
+      </section>
+      <section class="activity-section roadmap-section">
+        <div class="section-heading"><span>接下来</span><strong>ROADMAP</strong></div>
+        <ol>
+          <li><span>02</span><p><strong>SPX Gamma Stream</strong>回放和自动触发模拟决策</p></li>
+          <li><span>03</span><p><strong>Equity Discovery</strong>自主扫描与 Watchlist</p></li>
+          <li><span>04</span><p><strong>Paper Execution</strong>有状态的纸面交易循环</p></li>
+        </ol>
+      </section>
+    </aside>
+  </div>
+
+  <div id="mobile-scrim" class="mobile-scrim" hidden></div>
+
+  <section id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-card">
+      <span class="brand-mark">A</span>
+      <span class="overline">PRIVATE AGENT WORKSPACE</span>
+      <h2>进入 Alpheus</h2>
+      <p>输入 Agent Web 密码以恢复你的持久化会话。</p>
+      <label for="login-password">密码</label>
+      <input id="login-password" type="password" maxlength="256" autocomplete="current-password" required>
+      <button type="submit">继续</button>
+      <p id="login-error" class="page-error" role="alert"></p>
+    </form>
+  </section>
+
+  <script src="/assets/agent-room.js" defer></script>
+</body>
+</html>

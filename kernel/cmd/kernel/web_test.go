@@ -80,6 +80,48 @@ func TestCockpitIsReadOnlyAndHardened(t *testing.T) {
 	}
 }
 
+func TestAgentRoomIsAProductSurfaceAndHardened(t *testing.T) {
+	s := &server{mode: protectedMode(config.ModeReadOnly), store: newMemoryStore()}
+	handler := s.routes()
+
+	page := routeRequest(handler, http.MethodGet, "/agent", "", "")
+	if page.Code != http.StatusOK {
+		t.Fatalf("Agent Room status=%d body=%s", page.Code, page.Body.String())
+	}
+	for _, required := range []string{
+		"Agent Room", "Research", "SPX Gamma", "Equity Discovery",
+		"Watchlist Monitor", "Agent 活动", "message-input",
+	} {
+		if !strings.Contains(page.Body.String(), required) {
+			t.Fatalf("Agent Room missing %q", required)
+		}
+	}
+	for _, asset := range []string{"/assets/agent-room.css", "/assets/agent-room.js"} {
+		response := routeRequest(handler, http.MethodGet, asset, "", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d", asset, response.Code)
+		}
+		if asset == "/assets/agent-room.js" {
+			for _, forbidden := range []string{
+				"innerHTML", "localStorage", "sessionStorage",
+				"document.cookie", "indexedDB",
+			} {
+				if strings.Contains(response.Body.String(), forbidden) {
+					t.Fatalf("Agent Room script contains forbidden API %q", forbidden)
+				}
+			}
+			for _, endpoint := range []string{
+				"/agent/rooms", "/agent/room-requests",
+				"/agent/cortex-runs/", "/cancel",
+			} {
+				if !strings.Contains(response.Body.String(), endpoint) {
+					t.Fatalf("Agent Room script missing %q", endpoint)
+				}
+			}
+		}
+	}
+}
+
 func TestOperationListPaginationAndInputValidation(t *testing.T) {
 	const (
 		id1 = "11111111-1111-4111-8111-111111111111"

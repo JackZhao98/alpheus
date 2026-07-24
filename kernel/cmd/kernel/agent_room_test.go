@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPostAgentRoomRequestCreatesDurableRoomWithoutFakeSymbol(t *testing.T) {
@@ -33,6 +34,12 @@ func TestPostAgentRoomRequestCreatesDurableRoomWithoutFakeSymbol(t *testing.T) {
 				input.Text != "Find the most important earnings catalyst." ||
 				input.RequestID == "" {
 				t.Fatalf("unexpected UserRequest: %+v", input)
+			}
+			createdAt, err := time.Parse(time.RFC3339Nano,
+				input.ConversationCreatedAt)
+			if err != nil || createdAt.Nanosecond()%1000 != 0 {
+				t.Fatalf("Conversation timestamp is not database-canonical: %q",
+					input.ConversationCreatedAt)
 			}
 			writeJSON(w, http.StatusAccepted, map[string]any{
 				"run_id":                  "run-1",
