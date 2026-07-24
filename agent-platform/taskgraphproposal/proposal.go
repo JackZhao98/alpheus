@@ -92,19 +92,31 @@ func (value Proposal) Canonicalize() (Proposal, error) {
 	canonical := value
 	canonical.Rationale = strings.TrimSpace(value.Rationale)
 	canonical.Branches = append([]Branch(nil), value.Branches...)
+	seen := make(map[string]struct{}, len(canonical.Branches))
 	for index := range canonical.Branches {
 		branch := &canonical.Branches[index]
 		branch.Objective = strings.TrimSpace(branch.Objective)
-		if branch.ToolID == "" {
-			continue
+		if branch.ToolID != "" {
+			owners := capability.AgentRolesForTool(
+				capability.ToolID(branch.ToolID),
+			)
+			if len(owners) != 1 {
+				return Proposal{}, ErrInvalidProposal
+			}
+			branch.RoleID = string(owners[0])
 		}
-		owners := capability.AgentRolesForTool(
-			capability.ToolID(branch.ToolID),
-		)
-		if len(owners) != 1 {
+		key := branch.RoleID + "\x00" + branch.ToolID
+		if _, duplicate := seen[key]; duplicate && branch.ToolID != "" {
+			// The model sometimes splits a multi-symbol request into repeated
+			// calls to the same Tool. Keep one authority-bearing branch and
+			// make the later independent lane effect-free.
+			branch.ToolID = ""
+			key = branch.RoleID + "\x00"
+		}
+		if _, duplicate := seen[key]; duplicate {
 			return Proposal{}, ErrInvalidProposal
 		}
-		branch.RoleID = string(owners[0])
+		seen[key] = struct{}{}
 	}
 	if err := canonical.Validate(); err != nil {
 		return Proposal{}, err

@@ -115,7 +115,7 @@ func TestProposalAdviceCanonicalizesToolOwnerAndWhitespace(t *testing.T) {
 	}
 }
 
-func TestProposalAdviceCannotCanonicalizeDuplicateAuthority(t *testing.T) {
+func TestProposalAdviceRemovesDuplicateToolAuthority(t *testing.T) {
 	value := validProposal()
 	value.Branches[1] = Branch{
 		RoleID:    "fundamental_scout",
@@ -127,8 +127,15 @@ func TestProposalAdviceCannotCanonicalizeDuplicateAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := advice.Canonicalize(); err == nil {
-		t.Fatal("canonical duplicate Tool branch was accepted")
+	canonical, err := advice.Canonicalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.Branches[0].ToolID != "kernel_equity_quotes" ||
+		canonical.Branches[1].ToolID != "" ||
+		canonical.Branches[1].RoleID != "market_scout" ||
+		canonical.Validate() != nil {
+		t.Fatalf("duplicate Tool authority was not removed: %+v", canonical)
 	}
 }
 

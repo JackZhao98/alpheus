@@ -1043,6 +1043,7 @@ func taskGraphProposalRequest(
 		"Use only installed role IDs. Each branch may name either no Tool or exactly one Tool from the catalog below, and the Tool's role_id must match the branch role_id. " +
 		"A no-Tool branch is useful for reasoning from the immutable conversation, but it must not claim current facts. " +
 		"Choose a Tool only when its evidence is materially required and its arguments can be derived from the user's request. " +
+		"Never create separate branches for the same Tool; when a Tool accepts a symbols array, one branch must request all explicitly named symbols together. " +
 		"Do not invent IDs, arguments, budgets, topology, permissions, or execution claims. " +
 		"Use join_mode=all_required only when every branch is indispensable; otherwise use minimum_succeeded. " +
 		"Installed read-only choices: " + catalog +
