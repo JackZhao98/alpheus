@@ -363,6 +363,117 @@ button { color:inherit; }
   font-size:8px;
 }
 .module-foot strong { color:#7f8b82; font-weight:600; }
+.stream-strip {
+  display:grid;
+  grid-template-columns:minmax(170px,.9fr) minmax(360px,1.55fr) auto minmax(120px,.65fr);
+  align-items:stretch;
+  margin-top:12px;
+  overflow:hidden;
+}
+.stream-identity,.stream-range,.stream-controls,.stream-clock {
+  min-width:0;
+  border-right:1px solid var(--line);
+}
+.stream-identity {
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:13px 16px;
+}
+.stream-mark {
+  display:grid;
+  width:33px;
+  height:33px;
+  flex:none;
+  place-items:center;
+  border:1px solid #506858;
+  border-radius:50%;
+  color:var(--green-hot);
+  font:700 9px Georgia,serif;
+  box-shadow:inset 0 0 0 4px #121c15;
+}
+.stream-identity div { display:grid; gap:5px; min-width:0; }
+.stream-identity strong {
+  overflow:hidden;
+  color:#b9c3bb;
+  font:400 12px Georgia,serif;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.stream-range {
+  display:grid;
+  grid-template-columns:1fr 1fr .8fr;
+  gap:8px;
+  padding:10px 12px;
+}
+.stream-range label {
+  display:grid;
+  gap:5px;
+  color:#536058;
+  font-size:6px;
+  font-weight:900;
+  letter-spacing:.12em;
+}
+.stream-range input,.stream-range select {
+  min-width:0;
+  width:100%;
+  padding:7px 8px;
+  border:1px solid #29332c;
+  border-radius:4px;
+  background:#0a0e0b;
+  color:#869188;
+  font-size:8px;
+}
+.stream-controls {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:5px;
+  padding:10px;
+}
+.stream-controls button {
+  min-width:78px;
+  padding:6px 10px;
+  border:1px solid #39503f;
+  border-radius:4px;
+  background:#142019;
+  color:#9dcead;
+  font-size:7px;
+  font-weight:900;
+  letter-spacing:.06em;
+  cursor:pointer;
+}
+.stream-controls button:last-child { border-color:#4d4532; background:#211d13; color:var(--amber); }
+.stream-controls button:disabled { opacity:.32; cursor:not-allowed; }
+.stream-clock {
+  display:grid;
+  align-content:center;
+  gap:4px;
+  padding:10px 13px;
+}
+.stream-clock span,.stream-metrics span {
+  color:#4f5b52;
+  font-size:6px;
+  font-weight:900;
+  letter-spacing:.12em;
+}
+.stream-clock strong { color:var(--amber); font:400 11px Georgia,serif; }
+.stream-clock small { color:#536058; font-size:6px; font-weight:800; letter-spacing:.08em; }
+.stream-metrics {
+  display:grid;
+  grid-column:1/-1;
+  grid-template-columns:repeat(4,1fr);
+  border-top:1px solid var(--line);
+}
+.stream-metrics div {
+  display:flex;
+  align-items:baseline;
+  justify-content:center;
+  gap:8px;
+  padding:8px 12px;
+  border-right:1px solid #1e2620;
+}
+.stream-metrics div:last-child { border-right:0; }
+.stream-metrics strong { color:#93a097; font:400 11px Georgia,serif; }
 .account-strip {
   display:grid;
   grid-template-columns:1.25fr repeat(4,1fr);
@@ -675,6 +786,8 @@ td:first-child { color:#c4ccc6; font-weight:800; }
   .header-controls { gap:8px; }
   .segmented button { min-width:52px; }
   .account-strip { grid-template-columns:repeat(3,1fr); }
+  .stream-strip { grid-template-columns:1fr 2fr auto; }
+  .stream-clock { grid-column:1/-1; border-top:1px solid var(--line); }
   .metric:nth-child(3) { border-right:0; }
   .metric:nth-child(n+4) { border-top:1px solid var(--line); }
 }
@@ -700,6 +813,12 @@ td:first-child { color:#c4ccc6; font-weight:800; }
   .command-header { align-items:flex-start; flex-direction:column; padding:18px 0; }
   .header-controls { width:100%; flex-wrap:wrap; }
   .market-row,.ledger-row { grid-template-columns:1fr; }
+  .stream-strip { grid-template-columns:1fr; }
+  .stream-identity,.stream-range,.stream-controls,.stream-clock {
+    border-right:0;
+    border-bottom:1px solid var(--line);
+  }
+  .stream-clock { grid-column:auto; }
   .agent-dock { position:relative; height:620px; margin:0 12px 20px; border:1px solid var(--line); border-radius:7px; }
 }
 @media (max-width:620px) {
@@ -714,4 +833,7 @@ td:first-child { color:#c4ccc6; font-weight:800; }
   .instrument-heading { flex-wrap:wrap; }
   .chart-meta { gap:14px; overflow:auto; }
   .account-strip .metric:last-child { grid-column:1/-1; }
+  .stream-range { grid-template-columns:1fr; }
+  .stream-controls { grid-template-columns:1fr 1fr; }
+  .stream-metrics { grid-template-columns:repeat(2,1fr); }
 }

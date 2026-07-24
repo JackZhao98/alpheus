@@ -113,6 +113,11 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   成功，不会重复创建执行树。
 - Moody Blues replay `bf41d3b3-33d7-590a-9c30-a0217903d4e1` 已从
   generation 1 消费至 generation 2；旧 generation 重放返回 HTTP 409。
+- Command Console 数据流条已用真实 Provider replay
+  `4bb2d472-c614-5240-8be8-2eb8f6c4e6d5` 验收：generation 1→2，
+  页面显示 Spot `7498.48`、Zero Gamma `7519.74`、Call Wall `7600`、
+  Put Wall `7500` 和分离的 source / available 时间；响应不含 raw Blob
+  元数据。该能力当前为人工逐帧回放，不声称已完成自动播放或策略触发。
 - 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 108 条 Agent
   migration 的幂等回放、Compose 配置检查均通过。终态 Task 占用并发槽为
   0，终态 Run 持有开放 Session 为 0。
@@ -134,6 +139,8 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | `POST :8300/internal/v1/moody-blues/providers/gexbot-classic/live` | 官方 API 按需读取并归档 | Cortex 内部令牌；只读；不得把抓取时间冒充市场数据时间 |
 | `POST :8300/internal/v1/moody-blues/providers/gexbot-classic/replays` | 创建受 generation 保护的历史回放游标 | Cortex 内部令牌；只读 |
 | `POST :8300/internal/v1/moody-blues/providers/gexbot-classic/replays/{id}/next` | 消费下一条历史观察值 | Cortex 内部令牌；只读 |
+| `POST :8400/v1/data-streams/gexbot/replays` | 为 Console 创建受控历史数据流 | Kernel 持有 Cortex 服务令牌；浏览器不接触 Research / Provider 凭据 |
+| `POST :8400/v1/data-streams/gexbot/replays/{id}/next` | 按 generation 推进一帧并移除 raw Blob 元数据 | Kernel 持有 Cortex 服务令牌；旧 generation 返回冲突 |
 
 旧 `/internal/v1/gexbot/*` 路径会暂时保留为兼容别名，直到所有内部调用迁移。
 

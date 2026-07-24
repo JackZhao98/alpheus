@@ -18,6 +18,7 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "交易决策控制台") ||
 		!strings.Contains(response.Body.String(), "AI Trigger Points") ||
+		!strings.Contains(response.Body.String(), "MOODY BLUES · DATA STREAM") ||
 		!strings.Contains(response.Body.String(), "Agent Channel") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -29,6 +30,7 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(script.Body.String(),
 			"`/agent/console/candidates?environment=${encodeURIComponent(environment)}`") ||
 		!strings.Contains(script.Body.String(), "trigger.last_value") ||
+		!strings.Contains(script.Body.String(), "advanceReplay") ||
 		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
 		t.Fatalf("script status=%d body=%s",
 			script.Code, script.Body.String())
@@ -428,5 +430,99 @@ func TestAgentConsoleCandidateReviewRequiresCopilotAndProxiesDecision(
 		upstreamCalls != 1 {
 		t.Fatalf("copilot status=%d body=%s calls=%d",
 			copilot.Code, copilot.Body.String(), upstreamCalls)
+	}
+}
+
+func TestAgentConsoleMoodyBluesReplayUsesCortexBoundary(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
+			}
+			switch r.URL.Path {
+			case "/v1/data-streams/gexbot/replays":
+				var command agentConsoleReplayCreateCommand
+				if r.Method != http.MethodPost ||
+					json.NewDecoder(r.Body).Decode(&command) != nil ||
+					command.Symbol != "SPX" ||
+					command.Category != "gex_full" {
+					t.Fatalf("create command=%+v", command)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"replay_id":  "11111111-1111-4111-8111-111111111111",
+					"state":      "active",
+					"generation": 1,
+				})
+			case "/v1/data-streams/gexbot/replays/11111111-1111-4111-8111-111111111111/next":
+				var command agentConsoleReplayStepCommand
+				if r.Method != http.MethodPost ||
+					json.NewDecoder(r.Body).Decode(&command) != nil ||
+					command.Generation != 1 {
+					t.Fatalf("step command=%+v", command)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"replay_id":  "11111111-1111-4111-8111-111111111111",
+					"state":      "active",
+					"generation": 2,
+					"observation": map[string]any{
+						"metrics": map[string]any{"spot": 6400},
+					},
+				})
+			default:
+				t.Fatalf("unexpected upstream path=%s", r.URL.Path)
+			}
+		},
+	))
+	defer upstream.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cortex-token")
+	if err := os.WriteFile(
+		tokenPath, []byte("test-token"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{
+		cortexURL:       upstream.URL,
+		cortexTokenFile: tokenPath,
+		runtimeHTTP:     upstream.Client(),
+	}
+	create := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/agent/console/data-streams/gexbot/replays",
+		strings.NewReader(`{
+		  "request_id":"console-replay-1",
+		  "symbol":"spx",
+		  "category":"gex_full",
+		  "start_available_at":"2026-07-23T13:00:00Z",
+		  "end_available_at":"2026-07-23T20:00:00Z",
+		  "as_of":"2026-07-24T00:00:00Z"
+		}`),
+	)
+	createRequest.Header.Set("Content-Type", "application/json")
+	s.postAgentConsoleReplay(create, createRequest)
+	if create.Code != http.StatusOK ||
+		!strings.Contains(create.Body.String(), `"generation":1`) {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	step := httptest.NewRecorder()
+	stepRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/agent/console/data-streams/gexbot/replays/11111111-1111-4111-8111-111111111111/next",
+		strings.NewReader(`{"generation":1}`),
+	)
+	stepRequest.SetPathValue(
+		"id", "11111111-1111-4111-8111-111111111111",
+	)
+	stepRequest.Header.Set("Content-Type", "application/json")
+	s.postAgentConsoleReplayNext(step, stepRequest)
+	if step.Code != http.StatusOK ||
+		!strings.Contains(step.Body.String(), `"spot":6400`) ||
+		requests != 2 {
+		t.Fatalf(
+			"step status=%d body=%s requests=%d",
+			step.Code, step.Body.String(), requests,
+		)
 	}
 }

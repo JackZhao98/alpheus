@@ -76,6 +76,19 @@ type agentConsoleCandidateReviewCommand struct {
 	Decision           string `json:"decision"`
 }
 
+type agentConsoleReplayCreateCommand struct {
+	RequestID string `json:"request_id"`
+	Symbol    string `json:"symbol"`
+	Category  string `json:"category"`
+	Start     string `json:"start_available_at"`
+	End       string `json:"end_available_at"`
+	AsOf      string `json:"as_of"`
+}
+
+type agentConsoleReplayStepCommand struct {
+	Generation int64 `json:"generation"`
+}
+
 func (s *server) agentConsoleEnvironment(
 	requested string,
 ) agentConsoleEnvironment {
@@ -427,6 +440,77 @@ func (s *server) putAgentConsoleTrigger(w http.ResponseWriter, r *http.Request) 
 		writeAgentQueryError(w, http.StatusServiceUnavailable,
 			"cortex_trigger_registry_unavailable",
 			"Decision Trigger Registry is unavailable")
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func (s *server) postAgentConsoleReplay(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	var input agentConsoleReplayCreateCommand
+	if !decodeJSONBody(w, r, &input) {
+		return
+	}
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Category = strings.TrimSpace(input.Category)
+	input.Start = strings.TrimSpace(input.Start)
+	input.End = strings.TrimSpace(input.End)
+	input.AsOf = strings.TrimSpace(input.AsOf)
+	body, err := json.Marshal(input)
+	if err != nil {
+		writeInternalError(w, "encode Moody Blues replay", err)
+		return
+	}
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodPost,
+		"/v1/data-streams/gexbot/replays", body,
+	)
+	if code != "" {
+		writeAgentQueryError(
+			w, http.StatusServiceUnavailable,
+			"moody_blues_replay_unavailable",
+			"Moody Blues replay is unavailable",
+		)
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func (s *server) postAgentConsoleReplayNext(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	replayID := strings.TrimSpace(r.PathValue("id"))
+	var input agentConsoleReplayStepCommand
+	if !validCortexConversationID(replayID) ||
+		!decodeJSONBody(w, r, &input) {
+		if !validCortexConversationID(replayID) {
+			writeAgentQueryError(
+				w, http.StatusBadRequest,
+				"moody_blues_replay_invalid",
+				"Moody Blues replay is invalid",
+			)
+		}
+		return
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		writeInternalError(w, "encode Moody Blues replay cursor", err)
+		return
+	}
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodPost,
+		"/v1/data-streams/gexbot/replays/"+replayID+"/next", body,
+	)
+	if code != "" {
+		writeAgentQueryError(
+			w, http.StatusServiceUnavailable,
+			"moody_blues_replay_unavailable",
+			"Moody Blues replay is unavailable",
+		)
 		return
 	}
 	writeAgentConsoleUpstream(w, raw, status)

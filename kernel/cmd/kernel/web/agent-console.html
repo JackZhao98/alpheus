@@ -121,6 +121,42 @@
         </article>
       </section>
 
+      <section class="stream-strip panel" aria-label="Moody Blues 数据回放">
+        <div class="stream-identity">
+          <span class="stream-mark">MB</span>
+          <div>
+            <span class="eyebrow">MOODY BLUES · DATA STREAM</span>
+            <strong>历史市场逐帧回放</strong>
+          </div>
+        </div>
+        <div class="stream-range">
+          <label>FROM<input id="replay-start" type="datetime-local" step="1"></label>
+          <label>TO<input id="replay-end" type="datetime-local" step="1"></label>
+          <label>SERIES
+            <select id="replay-category">
+              <option value="gex_full">FULL GEX</option>
+              <option value="gex_zero">0DTE GEX</option>
+              <option value="gex_one">1DTE GEX</option>
+            </select>
+          </label>
+        </div>
+        <div class="stream-controls">
+          <button id="replay-create" type="button">创建回放</button>
+          <button id="replay-next" type="button" disabled>下一帧</button>
+        </div>
+        <div class="stream-clock">
+          <span>VIRTUAL CLOCK</span>
+          <strong id="replay-clock">未启动</strong>
+          <small id="replay-state">PROVIDER CURSOR</small>
+        </div>
+        <div class="stream-metrics">
+          <div><span>SPOT</span><strong id="replay-spot">—</strong></div>
+          <div><span>ZERO Γ</span><strong id="replay-zero">—</strong></div>
+          <div><span>CALL WALL</span><strong id="replay-call">—</strong></div>
+          <div><span>PUT WALL</span><strong id="replay-put">—</strong></div>
+        </div>
+      </section>
+
       <section class="account-strip panel">
         <div class="metric primary">
           <span>PORTFOLIO VALUE</span>

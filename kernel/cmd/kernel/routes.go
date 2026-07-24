@@ -27,6 +27,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /agent/console/triggers", s.authorizeAgentWeb(s.getAgentConsoleTriggers))
 	mux.HandleFunc("GET /agent/console/candidates", s.authorizeAgentWeb(s.getAgentConsoleCandidates))
 	mux.HandleFunc("POST /agent/console/candidates/{id}/review", s.authorizeAgentWeb(s.postAgentConsoleCandidateReview))
+	mux.HandleFunc("POST /agent/console/data-streams/gexbot/replays", s.authorizeAgentWeb(s.postAgentConsoleReplay))
+	mux.HandleFunc("POST /agent/console/data-streams/gexbot/replays/{id}/next", s.authorizeAgentWeb(s.postAgentConsoleReplayNext))
 	mux.HandleFunc("PUT /agent/console/triggers/{id}", s.authorizeAgentWeb(s.putAgentConsoleTrigger))
 	mux.HandleFunc("GET /agent/console/market/quote/{symbol}", s.authorizeAgentWeb(s.getMarketQuote))
 	mux.HandleFunc("GET /agent/console/market/bars/{symbol}", s.authorizeAgentWeb(s.getMarketBars))

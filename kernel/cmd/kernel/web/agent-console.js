@@ -13,6 +13,7 @@ const state = {
   sending:false,
   environment:"",
   autonomy:null,
+  replay:null,
 };
 
 async function request(path,options = {}) {
@@ -54,6 +55,110 @@ function when(value,withDate = false) {
   } : {hour:"2-digit",minute:"2-digit"});
 }
 
+function replayNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return new Intl.NumberFormat("en-US",{
+    maximumFractionDigits:2,
+  }).format(number);
+}
+
+function localDateTimeValue(date) {
+  const shifted = new Date(date.getTime()-date.getTimezoneOffset()*60000);
+  return shifted.toISOString().slice(0,19);
+}
+
+function initializeReplayRange() {
+  const end = new Date();
+  const start = new Date(end.getTime()-24*60*60*1000);
+  byId("replay-start").value = localDateTimeValue(start);
+  byId("replay-end").value = localDateTimeValue(end);
+}
+
+function renderReplay(payload) {
+  state.replay = {
+    replay_id:payload.replay_id,
+    generation:payload.generation,
+    state:payload.state,
+  };
+  byId("replay-next").disabled = payload.state !== "active";
+  text("replay-state",
+    `${String(payload.state || "unknown").toUpperCase()} · GEN ${payload.generation || "—"}`);
+  const observation = payload.observation;
+  if (!observation) {
+    text("replay-clock",payload.state === "complete" ? "回放完成" : "等待第一帧");
+    return;
+  }
+  const metrics = observation.metrics || {};
+  text("replay-clock",when(observation.source_timestamp || observation.available_at,true));
+  text("replay-state",
+    `${String(payload.state || "active").toUpperCase()} · AVAILABLE ${when(observation.available_at,true)} · GEN ${payload.generation}`);
+  text("replay-spot",replayNumber(metrics.spot));
+  text("replay-zero",replayNumber(metrics.zero_gamma));
+  text("replay-call",replayNumber(metrics.major_pos_oi));
+  text("replay-put",replayNumber(metrics.major_neg_oi));
+}
+
+async function createReplay() {
+  clearError();
+  const start = new Date(byId("replay-start").value);
+  const end = new Date(byId("replay-end").value);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
+      end < start || end > new Date()) {
+    showError(new Error("请选择一个已经发生的有效回放时间段。"));
+    return;
+  }
+  const button = byId("replay-create");
+  button.disabled = true;
+  try {
+    const requestID = globalThis.crypto?.randomUUID ?
+      `console-replay-${crypto.randomUUID()}` :
+      `console-replay-${Date.now()}`;
+    const payload = await request(
+      "/agent/console/data-streams/gexbot/replays",
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          request_id:requestID,
+          symbol:"SPX",
+          category:byId("replay-category").value,
+          start_available_at:start.toISOString(),
+          end_available_at:end.toISOString(),
+          as_of:new Date().toISOString(),
+        }),
+      },
+    );
+    renderReplay(payload);
+  } catch (error) {
+    showError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function advanceReplay() {
+  if (!state.replay?.replay_id || state.replay.state !== "active") return;
+  clearError();
+  const button = byId("replay-next");
+  button.disabled = true;
+  try {
+    const payload = await request(
+      `/agent/console/data-streams/gexbot/replays/${encodeURIComponent(state.replay.replay_id)}/next`,
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({generation:state.replay.generation}),
+      },
+    );
+    renderReplay(payload);
+  } catch (error) {
+    showError(error);
+  } finally {
+    button.disabled = state.replay?.state !== "active";
+  }
+}
+
 function showError(error) {
   const known = {
     portfolio_unavailable:"账户数据暂时不可用。",
@@ -65,6 +170,9 @@ function showError(error) {
     agent_room_paused:"这个对话已暂停，请在完整对话界面恢复。",
     autonomy_generation_conflict:"自治模式刚被其他操作修改，已重新读取最新状态。",
     live_autonomy_locked:"Live 环境目前仍强制 Observe。",
+    moody_blues_replay_unavailable:"Moody Blues 历史回放暂时不可用。",
+    moody_blues_generation_conflict:"回放游标已前进，请重新创建或恢复该回放。",
+    moody_blues_cursor_invalid:"回放游标无效。",
   };
   text("console-error",known[error?.code] || error?.message || "请求失败");
 }
@@ -763,6 +871,8 @@ byId("chat-symbol").addEventListener("input",(event) => {
 byId("refresh-console").addEventListener("click",() => Promise.allSettled([
   loadSnapshot().then(loadCandidates),loadTriggers(),loadHealth(),loadMarket(),
 ]));
+byId("replay-create").addEventListener("click",createReplay);
+byId("replay-next").addEventListener("click",advanceReplay);
 for (const button of byId("environment-switch").querySelectorAll("button")) {
   button.addEventListener("click",async () => {
     if (button.disabled || button.dataset.environment === state.environment) return;
@@ -829,6 +939,7 @@ byId("login-form").addEventListener("submit",async (event) => {
   }
 });
 
+initializeReplayRange();
 restore();
 setInterval(() => {
   if (byId("login-screen").hidden) {

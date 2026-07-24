@@ -431,6 +431,9 @@ func run() error {
 	publicHandler := inputgateway.NewRuntimeHandler(gateway, adapter, actor, bearerSubject(serviceToken, subject))
 	mux := http.NewServeMux()
 	mux.Handle("/", publicHandler)
+	registerMoodyBluesStreamHandlers(
+		mux, serviceToken, researchHTTP, researchURL, researchToken,
+	)
 	mux.HandleFunc("GET /v1/agent-rooms", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
