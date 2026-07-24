@@ -2164,7 +2164,11 @@ func (adapter *PostgresAdapter) AdmitTaskGraphProposal(
 		return TaskGraphAdmission{}, fmt.Errorf(
 			"read TaskGraph proposal output: %w", err)
 	}
-	proposal, err := taskgraphproposal.DecodeStrict(proposalRaw)
+	advice, err := taskgraphproposal.DecodeAdvice(proposalRaw)
+	if err != nil {
+		return TaskGraphAdmission{}, err
+	}
+	proposal, err := advice.Canonicalize()
 	if err != nil {
 		return TaskGraphAdmission{}, err
 	}

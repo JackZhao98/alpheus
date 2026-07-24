@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"unicode"
 
@@ -45,19 +46,104 @@ type Proposal struct {
 }
 
 func DecodeStrict(raw []byte) (Proposal, error) {
+	value, err := decode(raw)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := value.Validate(); err != nil {
+		return Proposal{}, err
+	}
+	return value, nil
+}
+
+// DecodeAdvice accepts only schema-valid, installed read-only planning advice.
+// Relationship mistakes such as assigning a reviewed Tool to the wrong
+// Specialist are not authority: Control canonicalizes them deterministically.
+func DecodeAdvice(raw []byte) (Proposal, error) {
+	value, err := decode(raw)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := value.validateAdvice(); err != nil {
+		return Proposal{}, err
+	}
+	return value, nil
+}
+
+func decode(raw []byte) (Proposal, error) {
 	var value Proposal
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
 		return Proposal{}, fmt.Errorf("%w: %v", ErrInvalidProposal, err)
 	}
-	if decoder.Decode(&struct{}{}) == nil {
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Proposal{}, ErrInvalidProposal
 	}
-	if err := value.Validate(); err != nil {
+	return value, nil
+}
+
+// Canonicalize trims bounded text and assigns each Tool to its single reviewed
+// owner. It never adds a branch, Tool, permission, budget, or objective.
+func (value Proposal) Canonicalize() (Proposal, error) {
+	if err := value.validateAdvice(); err != nil {
 		return Proposal{}, err
 	}
-	return value, nil
+	canonical := value
+	canonical.Rationale = strings.TrimSpace(value.Rationale)
+	canonical.Branches = append([]Branch(nil), value.Branches...)
+	for index := range canonical.Branches {
+		branch := &canonical.Branches[index]
+		branch.Objective = strings.TrimSpace(branch.Objective)
+		if branch.ToolID == "" {
+			continue
+		}
+		owners := capability.AgentRolesForTool(
+			capability.ToolID(branch.ToolID),
+		)
+		if len(owners) != 1 {
+			return Proposal{}, ErrInvalidProposal
+		}
+		branch.RoleID = string(owners[0])
+	}
+	if err := canonical.Validate(); err != nil {
+		return Proposal{}, err
+	}
+	return canonical, nil
+}
+
+func (value Proposal) validateAdvice() error {
+	if value.SchemaRevision != SchemaRevisionV1 ||
+		!boundedAdviceText(value.Rationale, 1, 4000) ||
+		(value.JoinMode != JoinAllRequired &&
+			value.JoinMode != JoinMinimumSucceeded) ||
+		len(value.Branches) < MinBranchesV1 ||
+		len(value.Branches) > MaxBranchesV1 {
+		return ErrInvalidProposal
+	}
+	for _, branch := range value.Branches {
+		if !boundedAdviceText(branch.Objective, 1, 4000) {
+			return ErrInvalidProposal
+		}
+		role, found := capability.LookupAgentRole(
+			capability.AgentRoleID(branch.RoleID),
+		)
+		if !found || role.Revision != 1 {
+			return ErrInvalidProposal
+		}
+		if branch.ToolID == "" {
+			continue
+		}
+		tool, found := capability.LookupTool(
+			capability.ToolID(branch.ToolID),
+		)
+		if !found || tool.State != capability.CatalogStateActive ||
+			tool.Revision != 1 || tool.Effect != "read_only" ||
+			len(capability.AgentRolesForTool(tool.ID)) != 1 {
+			return ErrInvalidProposal
+		}
+	}
+	return nil
 }
 
 func (value Proposal) Validate() error {
@@ -122,6 +208,10 @@ func boundedText(value string, minimum, maximum int) bool {
 		}
 	}
 	return true
+}
+
+func boundedAdviceText(value string, minimum, maximum int) bool {
+	return boundedText(strings.TrimSpace(value), minimum, maximum)
 }
 
 // OutputSchema is the strict local schema sent to the model and committed as

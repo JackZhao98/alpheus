@@ -87,6 +87,51 @@ func TestProposalDecodeIsClosed(t *testing.T) {
 	}
 }
 
+func TestProposalAdviceCanonicalizesToolOwnerAndWhitespace(t *testing.T) {
+	value := validProposal()
+	value.Rationale = "  parallel evidence  "
+	value.Branches[0].RoleID = "fundamental_scout"
+	value.Branches[0].Objective = "  inspect price  "
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advice, err := DecodeAdvice(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := advice.Canonicalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.Rationale != "parallel evidence" ||
+		canonical.Branches[0].RoleID != "market_scout" ||
+		canonical.Branches[0].Objective != "inspect price" ||
+		canonical.Validate() != nil {
+		t.Fatalf("unexpected canonical proposal: %+v", canonical)
+	}
+	if _, err := DecodeStrict(raw); err == nil {
+		t.Fatal("uncanonical model advice passed strict decoding")
+	}
+}
+
+func TestProposalAdviceCannotCanonicalizeDuplicateAuthority(t *testing.T) {
+	value := validProposal()
+	value.Branches[1] = Branch{
+		RoleID:    "fundamental_scout",
+		Objective: "same quote under the wrong role",
+		ToolID:    "kernel_equity_quotes",
+	}
+	raw, _ := json.Marshal(value)
+	advice, err := DecodeAdvice(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := advice.Canonicalize(); err == nil {
+		t.Fatal("canonical duplicate Tool branch was accepted")
+	}
+}
+
 func TestOutputSchemaEnumeratesOnlySpecialistReadTools(t *testing.T) {
 	raw, err := json.Marshal(OutputSchema())
 	if err != nil {

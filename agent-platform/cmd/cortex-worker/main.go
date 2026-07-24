@@ -1085,7 +1085,11 @@ func taskGraphInstalledChoices() string {
 }
 
 func parseTaskGraphProposalOutput(raw []byte) (workflowOutput, error) {
-	if _, err := taskgraphproposal.DecodeStrict(raw); err != nil {
+	proposal, err := taskgraphproposal.DecodeAdvice(raw)
+	if err != nil {
+		return workflowOutput{}, err
+	}
+	if _, err := proposal.Canonicalize(); err != nil {
 		return workflowOutput{}, err
 	}
 	return workflowOutput{}, nil

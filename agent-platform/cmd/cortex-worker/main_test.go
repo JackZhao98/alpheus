@@ -210,8 +210,8 @@ func TestParseTaskGraphProposalOutputIsStrict(t *testing.T) {
 		valid, []byte(`"role_id":"market_scout"`),
 		[]byte(`"role_id":"options_scout"`), 1,
 	)
-	if _, err := parseTaskGraphProposalOutput(invalidOwner); err == nil {
-		t.Fatal("wrong Tool owner passed proposal parser")
+	if _, err := parseTaskGraphProposalOutput(invalidOwner); err != nil {
+		t.Fatalf("canonicalizable Tool owner advice rejected: %v", err)
 	}
 	withAuthority := bytes.Replace(
 		valid, []byte(`"schema_revision":1`),
