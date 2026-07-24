@@ -363,6 +363,86 @@ func run() error {
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{"rooms": rooms})
 	})
+	mux.HandleFunc("GET /v1/decision-triggers", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		triggers, err := adapter.ListDecisionTriggers(
+			request.Context(), subject.PrincipalID, 100)
+		if err != nil {
+			log.Printf("Cortex decision Trigger list failed: %v", err)
+			http.Error(w, "decision Triggers unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"available": true,
+			"items":     triggers,
+		})
+	})
+	mux.HandleFunc("PUT /v1/decision-triggers/{id}", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			ExpectedGeneration int64       `json:"expected_generation"`
+			Title              string      `json:"title"`
+			StrategyID         string      `json:"strategy_id"`
+			DataSource         string      `json:"data_source"`
+			Symbol             string      `json:"symbol"`
+			Metric             string      `json:"metric"`
+			Comparator         string      `json:"comparator"`
+			Threshold          json.Number `json:"threshold"`
+			CooldownSeconds    int64       `json:"cooldown_seconds"`
+			Objective          string      `json:"objective"`
+			Enabled            bool        `json:"enabled"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 8<<10))
+		decoder.UseNumber()
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid decision Trigger",
+				http.StatusBadRequest)
+			return
+		}
+		result, err := adapter.RegisterDecisionTrigger(
+			request.Context(), subject.PrincipalID,
+			inputgateway.DecisionTriggerCommand{
+				TriggerID:          strings.TrimSpace(request.PathValue("id")),
+				ExpectedGeneration: body.ExpectedGeneration,
+				Title:              strings.TrimSpace(body.Title),
+				StrategyID:         strings.TrimSpace(body.StrategyID),
+				DataSource:         strings.TrimSpace(body.DataSource),
+				Symbol:             strings.ToUpper(strings.TrimSpace(body.Symbol)),
+				Metric:             strings.TrimSpace(body.Metric),
+				Comparator:         strings.TrimSpace(body.Comparator),
+				Threshold:          body.Threshold,
+				CooldownSeconds:    body.CooldownSeconds,
+				Objective:          strings.TrimSpace(body.Objective),
+				Enabled:            body.Enabled,
+			},
+		)
+		if err != nil {
+			log.Printf("Cortex decision Trigger registration failed: %v", err)
+			http.Error(w, "decision Trigger unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		status := http.StatusOK
+		if result.Status == "conflict" {
+			status = http.StatusConflict
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("POST /v1/agent-rooms/{id}/record", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
