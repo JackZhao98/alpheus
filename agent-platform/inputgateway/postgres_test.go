@@ -1,6 +1,7 @@
 package inputgateway
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,33 @@ import (
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/taskgraphcontract"
 )
+
+func TestCortexTraceEventPreservesSafeFailureFields(t *testing.T) {
+	var event CortexTraceEvent
+	if err := json.Unmarshal([]byte(`{
+		"sequence":7,
+		"created_at":"2026-07-24T04:00:00Z",
+		"stage":"tool_branch_failed",
+		"state":"failed",
+		"task_id":"task-1",
+		"role_id":"market_scout",
+		"tool_id":"kernel_equity_historicals",
+		"error_code":"kernel_tool_interval_invalid",
+		"retryable":false
+	}`), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.ErrorCode != "kernel_tool_interval_invalid" ||
+		event.Retryable == nil || *event.Retryable {
+		t.Fatalf("safe failure fields lost: %+v", event)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil || !strings.Contains(string(encoded),
+		`"retryable":false`) {
+		t.Fatalf("non-retryable failure was omitted: %s err=%v",
+			encoded, err)
+	}
+}
 
 func TestDeterministicStageIDIsStableAndScoped(t *testing.T) {
 	first := deterministicStageID("cortex-control-1", "request-1")

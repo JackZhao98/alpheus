@@ -185,5 +185,6 @@ run_sql agent-platform/migrations/0102_cortex_run_cancellation_replay_fix.sql 01
 run_sql agent-platform/migrations/0103_cortex_run_cancellation_trace.sql 0103_cortex_run_cancellation_trace
 run_sql agent-platform/migrations/0104_cortex_run_cancellation_trace_state.sql 0104_cortex_run_cancellation_trace_state
 run_sql agent-platform/migrations/0105_cortex_agent_rooms.sql 0105_cortex_agent_rooms
+run_sql agent-platform/migrations/0106_cortex_attempt_failure_trace.sql 0106_cortex_attempt_failure_trace
 
 echo "agent-platform migration bootstrap complete"

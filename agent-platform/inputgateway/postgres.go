@@ -516,6 +516,8 @@ type CortexTraceEvent struct {
 	JoinPolicy        string            `json:"join_policy,omitempty"`
 	Outcome           string            `json:"outcome,omitempty"`
 	ReasonCode        string            `json:"reason_code,omitempty"`
+	ErrorCode         string            `json:"error_code,omitempty"`
+	Retryable         *bool             `json:"retryable,omitempty"`
 	RequestID         string            `json:"request_id,omitempty"`
 	ArtifactID        string            `json:"artifact_id,omitempty"`
 	Round             int64             `json:"round,omitempty"`
