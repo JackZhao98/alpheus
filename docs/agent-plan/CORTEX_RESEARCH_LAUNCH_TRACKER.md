@@ -9,22 +9,23 @@
 范围是持久化对话、六个专业 Agent、37 条收据化只读/只读预检 Tool、
 Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 `agent-runtime` 部署与 Kernel legacy query 写入路径已经退役；历史
-`agent_query_job` 仅保留只读审计访问。
+`agent_query_job` 仅保留只读审计访问。最新重启验收后 Cortex 与 Research
+当前健康状态均为 `healthy`。
 
 | 工作项 | 当前状态 | 上线验收 |
 |---|---|---|
 | Cortex 输入、Conversation 与多轮上下文 | 已部署并持久化 | 重启后连续对话、刷新历史、同一 subject 隔离均通过 |
-| Run / Task / Attempt / Turn / Artifact | canonical 执行链已部署 | 成功、失败、超时恢复及 Trace 均由数据库记录重建 |
+| Run / Task / Attempt / Turn / Artifact | canonical 执行链已部署 | 成功、失败、超时恢复、用户取消及 Trace 均由数据库记录重建 |
 | Intent → Scout / Desk 协作 | 已部署并实测 | 真实 Run 能显示 handoff、Scout memo、Desk continuation |
 | Cortex 工具授权与收据 | 37 条只读 / 只读预检 Tool 已接入 | Tool 精准测试可逐项运行；真实抽测均出现授权与 receipt |
 | 专业 Agent 路由 | 6 个 Specialist 已部署 | Market / Fundamental / Options / Position / Catalyst / Discovery 均有真实 handoff、持久化 Turn 和 Desk continuation |
 | Research Gateway | 已有 Web Fetch 与 GEXBOT 受控入口 | 服务健康、权限最小化、失败不泄露凭据或原始数据 |
 | Moody Blues Provider 目录 | 已部署并实测 | 目录准确声明每个 Provider 的 `live` / `as_of` / `replay` 能力 |
-| Moody Blues GEXBOT 采集状态 | 已迁移、部署并实测 | 显示三条 SPX 序列覆盖、最新 observed/available 时间；不泄露 raw 数据 |
+| Moody Blues GEXBOT 采集状态 | 已迁移、部署并修复时区依赖 | 显示三条 SPX 序列覆盖、最新 observed/available 时间；配置采集器缺失 New York 时区时拒绝伪健康；不泄露 raw 数据 |
 | GEXBOT 历史 `as_of` / replay | 已部署并实测 | 秒级时间围栏正确、微秒规范化、仅返回 `available_at <= as_of` 的数据 |
 | GEXBOT 官方按需读数 | 已部署并实测 | `market_gexbot_live` 独立于历史 Tool；永久保存 raw Blob、Evidence、Receipt，并区分 `source_timestamp` 与 `fetched_at` |
 | Kernel / Robinhood 只读工具批次 | 34/34 已接入 Cortex | 1 条财报专用桥；33 条使用严格 Tool/source/参数白名单的通用只读桥 |
-| Agent Lab 验收界面 | 已部署并通过真实网页交互 | 用户可看见 Conversation、Trace、Tool receipt、Provider 数据时间边界；阶段 A 精准 Tool 与阶段 B 自主意图路线分开展示 |
+| Agent Lab 验收界面 | 已部署并通过真实网页交互 | 用户可看见 Conversation、Trace、Tool receipt、Provider 数据时间边界、系统健康与恢复；阶段 A 精准 Tool 与阶段 B 自主意图路线分开展示；运行中 Run 可由本人取消 |
 | 并行多 Agent TaskGraph | 两轮自适应真实图已部署 | 每轮由模型提出无权限提案，Control 重新准入 2–4 条独立分支；并行 Worker、Join、Decision Desk 与下一轮均由数据库状态驱动 |
 | 旧 agent-runtime 退役 | 已完成 | Compose 无该服务；`POST /agent/query` 返回 410；旧 job 不再恢复或执行，14 条历史记录仍可读 |
 
@@ -34,8 +35,13 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   `kernel` 镜像已成功构建，服务已强制重建且健康。
 - 数据库 migration `0048_moody_blues_gexbot_collection_status` 已实际应用。
 - Provider 目录、GEXBOT 状态、历史 `as_of` 和 generation 保护的 replay 已对
-  真实归档数据验证；三条 SPX 序列均有数据。最新观测为
-  `2026-07-22T19:59:30Z`，不是伪造的“实时”读数。
+  真实归档数据验证；三条 SPX 序列均有数据。
+- 2026-07-23 的定时采集曾因 Provider Alpine 镜像缺少 `tzdata` 而静默停机。
+  修复后，配置采集器会在无法加载 `America/New_York` 时拒绝启动；容器已
+  重建并明确记录 09:00–16:00 ET 窗口启用。三条官方收盘快照已补采，
+  `source_timestamp` 均为 `2026-07-23T20:00:00Z`，实际
+  `fetched_at` / `available_at` 约为 `2026-07-24T00:20:18Z`。当天缺失的
+  盘中 30 秒序列无法重建，本表不声称已经回填。
 - 历史 GEX Run `f4aa847c-e7b1-42ad-a293-9093da1d376f` 已验证
   Run → `research_gexbot_as_of` authorization → receipt → Desk Artifact。
 - 财报 Run `e025fff6-706e-48f9-abc7-da0655ca2e33` 已验证
@@ -93,6 +99,12 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   `/agent-lab?run=94a2760e-3914-4906-a639-a7680a225cc9` 恢复持久化 Run，
   同时显示第 1、2 轮的全部节点、Tool、Join 和“Decision Desk 发起第 2
   轮核验”转换事件，不依赖页面内存。
+- Agent Lab 用户取消 Run
+  `c258fcac-350e-42bc-b1a4-4eecefaa3ece` 已通过真实按钮验收。页面只在
+  Run 活跃时显示取消按钮，最终显示“已取消 · 资源已回收”；持久化 Trace
+  包含同一 request ID 的 `run_cancel_requested` 和 `run_canceled`。
+  进行中的 Turn / Attempt、Task、Session 和并发槽均收敛，稍后返回的模型
+  结果不能覆盖终态；同一取消请求精确重放返回相同响应。
 - 严格部分失败 Run `1d418675-071e-44b1-9a21-11fc69035b90` 已证明第二轮
   必需 Tool 分支失败会让整个 Run `dead_lettered`；过期树
   `0f55b29f-1bc8-4411-a096-49eb20be9e7d` 已由恢复器收敛为终态。
@@ -101,9 +113,13 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   成功，不会重复创建执行树。
 - Moody Blues replay `bf41d3b3-33d7-590a-9c30-a0217903d4e1` 已从
   generation 1 消费至 generation 2；旧 generation 重放返回 HTTP 409。
-- 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 98 条 Agent
+- 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 108 条 Agent
   migration 的幂等回放、Compose 配置检查均通过。终态 Task 占用并发槽为
   0，终态 Run 持有开放 Session 为 0。
+- `scripts/verify-cortex-research-operations.sh --restart` 已真实重启五个应用
+  服务并通过：六个必需服务健康、旧写入口仍为 410、Cortex 六项当前风险为
+  0、Research 三条序列新鲜、18 条过期 Run 恢复证据、14 条 Tool 恢复事件
+  和 5 条用户取消记录均在数据库中保留。
 - `cortex-input`、`cortex-worker`、`db`、`gexbot-provider`、`kernel`、
   `research-gateway` 六个必需服务均运行；对外入口健康，内部 Worker 保持
   无公开端口。
@@ -134,7 +150,7 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
 | P4 | Join Barrier / fan-in | 支持 `all_required`、`minimum_success`、部分失败和严格终态；Join 只读取已提交 Artifact | 已完成：Control-only Join 解析、下游 Blob/ACL、Desk fan-in、失败收敛、结果血缘及成功/失败数据库验收通过 |
 | P5 | Tool 并行节点与 Moody Blues 预处理上下文 | 每个带 Tool 节点只执行准入时冻结的一项只读 Tool；回放数据先经过统一 normalize/精简框架再交给 Agent | 已完成：双 Turn 参数/证据边界、精确 grant、全部现有只读 Tool 分派、错误 Tool 拒绝及 `gex_compact_v1` 已验证 |
 | P6 | 多阶段自适应研究与 DAG Trace | Desk 可在有界轮次内提出下一批子链路；网页显示真实分叉、等待、失败、汇合和下一轮 | 已完成：最多两轮；每轮 Control 重新准入；持久化 DAG Trace 与 Agent Lab 全轮次恢复视图均通过真实 Run |
-| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 已完成（只读上线范围）：并发、精确重放、过期恢复、严格部分失败、预算/轮次围栏、两轮真实端到端、数据库终态不变量及全量 race/vet 均通过 |
+| P7 | 故障与上线验收 | 通过并发、重复、崩溃恢复、慢分支、部分失败、预算耗尽和真实多角色端到端测试 | 已完成（只读上线范围）：并发、精确重放、过期恢复、工具恢复、用户取消、五服务重启、严格部分失败、预算/轮次围栏、两轮真实端到端、数据库终态不变量及全量 race/vet 均通过 |
 
 P1–P7 已在本表定义的**只读 Cortex + Research** 范围内完成。此结论不包含
 交易下单、资金效果、Live 权限或完整 AP1 正式 stage seal；这些能力必须作为

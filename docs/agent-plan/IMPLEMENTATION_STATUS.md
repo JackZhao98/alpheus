@@ -26,8 +26,8 @@
   Worker claim, start, and heartbeat durable non-money Tasks and transact exact
   model-call and terminalization facts. The deployed bounded Cortex Worker now
   uses this canonical AP1 path for effect-none Agent Lab requests; child-task
-  requests and cancellation submission are durable,
-  while cancellation reconciliation and recovery commands remain absent. An
+  requests, cancellation submission, Run cancellation reconciliation and
+  bounded restart recovery are durable. An
   idempotent, digest-pinned bootstrapper now deploys the already-frozen
   AP0/AP1 schema and grants in their tested order; it is the database substrate
   used by the separately deployed Cortex Control and Worker.
@@ -38,8 +38,9 @@
   immutable Worker child-task-request slice now records the requested symbolic
   capability, reason code, objective, inputs, output Contract and subordinate
   limit without creating a runnable Task or Session. Control/Scheduler
-  admission remains a separate later command. This canonical AP1 path cannot
-  call a model or produce an external effect.
+  admission is now implemented by the later Cortex Control slices. The
+  deployed path can call the explicitly configured OpenAI model but remains
+  effect `none`; it cannot produce a Kernel operation or trading effect.
 - The former Agent Lab MVP query queue is retired. Kernel no longer creates,
   recovers, dispatches, or extends `agent_query_job`; `POST /agent/query`
   returns `410 agent_query_retired`, and Compose no longer defines
@@ -81,12 +82,19 @@
   The directory, three-series collection status, an archived `as_of` result,
   and a generation-fenced replay step were verified after the migration and
   service recreation on 2026-07-23. The three SPX categories are
-  `gex_full`, `gex_zero`, and `gex_one`; their latest verified archive
-  observation is `2026-07-22T19:59:30Z`. This must not be presented as an
-  historical GEXBOT live quote. `market_gexbot_live` now performs a separate
-  official API fetch, archives the raw Blob and records normalized Evidence
-  and Receipt while preserving both provider `source_timestamp` and request
-  `fetched_at`. Real Run `edf5bb71-51c2-4df6-8ded-17b890f13d51` completed
+  `gex_full`, `gex_zero`, and `gex_one`. On 2026-07-23 the Provider image was
+  found healthy but not collecting because Alpine lacked the New York timezone
+  database. Commit `547fe36` installs `tzdata`, makes a configured collector
+  refuse startup when the timezone cannot load, and logs the enabled window.
+  Three official close snapshots were archived with
+  `source_timestamp=2026-07-23T20:00:00Z` and separate fetch/availability
+  times around `2026-07-24T00:20:18Z`. The missed intraday archive interval
+  cannot be reconstructed and is not claimed as backfilled. These records must
+  not be presented as historical GEXBOT live quotes. `market_gexbot_live` now
+  performs a separate official API fetch, archives the raw Blob and records
+  normalized Evidence and Receipt while preserving both provider
+  `source_timestamp` and request `fetched_at`. Real Run
+  `edf5bb71-51c2-4df6-8ded-17b890f13d51` completed
   Options Scout and Decision Desk with that receipt and refused to call the
   older source timestamp real-time. Legacy `/internal/v1/gexbot/*` routes remain
   narrow compatibility aliases while callers migrate to `/moody-blues/*`.
@@ -134,6 +142,17 @@
   `position_manager`, `catalyst_scout`, and `discovery_scout`. Control enforces
   the unique Tool grant before authorization; every Specialist memo is a
   separate persisted model Turn before Decision Desk.
+- Agent Lab now has a collapsed operations panel backed by bounded Control
+  health plus Moody Blues freshness. It exposes counts and stable record IDs,
+  not prompts, credentials or provider payloads. It also shows a cancel button
+  only for an active user-owned Run. Browser Run
+  `c258fcac-350e-42bc-b1a4-4eecefaa3ece` persisted
+  `run_cancel_requested` and `run_canceled`; its in-flight Turn and Attempt
+  were canceled, Session and Task closed, all slots released, and the later
+  provider response could not overwrite the terminal Run. Exact transport
+  replay returned the same cancellation response. The current operations
+  snapshot is healthy with zero stalled Runs, expired Runs/leases,
+  unacknowledged Tool calls, terminal open Sessions and terminal slot leaks.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record
@@ -151,13 +170,11 @@
   submission adapters, exact transport-retry recovery, and a separately
   provisioned `cortex-control-1` NOINHERIT LOGIN/container on localhost port
   8400. All Agent Platform race tests, vet, shell syntax, Compose validation,
-  the 17-migration disposable PostgreSQL replay/role probe, container health,
-  owner-only Blob mode, and exact duplicate HTTP write smoke pass. The target
-  database contains one immutable smoke request and one committed 28-byte Blob;
-  the Blob root is mode 0700 and content is mode 0400 under `cortex:cortex`.
-  IntentDraft, PolicyResolution,
-  Run admission, question, confirmation, and Agent Lab UI routing remain
-  disabled by this slice.
+  the current 108-migration disposable PostgreSQL replay/role probe, container
+  health, owner-only Blob mode, and exact duplicate HTTP write smoke pass. The
+  Blob root remains mode 0700 and content is mode 0400 under `cortex:cortex`.
+  IntentDraft, PolicyResolution, question and confirmation remain later work;
+  Run admission and Agent Lab routing are implemented by subsequent slices.
 - The Kernel, Provider, Runtime behavior, operation path, GRACE, Delegation,
   Live mode, and UI were not changed by AP0-1 through AP0-6.
 - `./scripts/certify-agent.sh ap0` is the permanent historical non-money
@@ -184,9 +201,9 @@ milestones and not independent authorization gates.
 | Packet | Status | Scope |
 |---|---|---|
 | AP1-1 durable Runtime contract freeze | Complete at `df73161`; corrected at `006e623`; canonical sources at `fef99de`; lease chronology corrected at `d23215c`; retry classification corrected at `ce0da6e` | Strict Go contracts and semantic validation for triggers, runs, tasks, dependencies, reconstructable BlobRef-backed sessions and checkpoints, fenced and reclaimable attempts and leases, replay-safe model dispatch/result/unknown commands, explicit failed-Attempt retry budget classification, exact OwnerPolicy and JSON OutputContract revisions, canonical non-money artifacts, disabled publication intents, budgets, cancellation, recovery and transition events; JSON Schema, exact authority-ref and state-machine parity, permissions/retention boundaries, valid/invalid goldens and digest vectors. Operational limits remain database policy; effect ceiling is `none`. |
-| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission and immutable Cortex output-validation evidence deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits an exact-current-policy Run/root Task, and validates each model output against the exact committed schema before binding its Blob to Worker. The fixed validator identity plus exact schema/output digests are immutable database evidence. Formal Result-linked validation receipts, cancellation reconciliation, child admission, and complete unknown-outcome recovery remain deferred. |
+| AP1-2 PostgreSQL durable state and command transactions | In progress; immutable definitions at `bce88cc`; durable Runtime state at `7671762`; claim/start/heartbeat commands at `95a1af2`; model-call transactions at `4f3a082`; Attempt terminalization at `9ea1c04`; bounded output validator contracts at `f70388d`; root admission, child/TaskGraph admission, output-validation evidence and Run cancellation reconciliation deployed | OwnerPolicy, RuntimePolicy, JSON OutputContract, Run/Task/Session/Attempt/Turn, model-call, Artifact, Checkpoint, budget, cancellation, recovery, idempotency-record, and transition-event state are durable, exact-lineage-bound, default-deny, and effect `none`. Cortex uses separate Activator, Control, and Worker LOGINS. Control atomically admits exact-current-policy execution trees, validates model output against the exact committed schema, and reconciles an authenticated owner's immutable cancellation request across Turn, Attempt, Session, Task, graph schedule and Run resources. Unknown provider outcomes remain `canceling` until their existing reconciliation path produces a known result. Formal standalone Result-linked validation receipts and the broader AP1 stage seal remain deferred. |
 | AP1-3 Control Plane and bounded Worker execution | Canonical read-only slice deployed; Agent Lab uses Cortex directly; verified OpenAI Worker persists canonical Run/Task/Attempt/Turn/Artifact | The deployed Worker claims only canonical effect-none Tasks, starts a fenced Attempt, durably dispatches Responses API calls to explicit `gpt-5.6-sol`, heartbeats its lease during provider wait, persists actual token usage, validates and publishes structured output through Control, then resolves and commits the Attempt and Artifact. Intent may answer directly, use open Scout child work, or hand off to one of six grant-bound Specialists; Specialist and Desk each produce separate persisted Turns. Invalid provider output and exhausted Control publication retries close the Turn/Attempt explicitly. The legacy Kernel query writer and static runtime deployment are retired. External cost remains zero until an authoritative versioned price registry exists; unknown provider outcomes remain fail-closed and are not blindly retried. |
-| AP1-4 crash/concurrency acceptance and stage seal | Read-only Cortex + Research launch matrix complete; broader AP1 formal stage seal remains open | The deployed read-only slice passes race/vet, exact replay, stale/expired recovery, strict partial failure, bounded multi-round execution, terminal-state invariants and real end-to-end acceptance. Cancellation and any future effect-bearing path remain outside this launch claim and still require the formal AP1 stage seal. |
+| AP1-4 crash/concurrency acceptance and stage seal | Read-only Cortex + Research launch matrix complete; broader AP1 formal stage seal remains open | The deployed read-only slice passes race/vet, exact replay, stale/expired recovery, strict partial failure, bounded multi-round execution, authenticated user cancellation, terminal-state invariants, full process restart and real end-to-end acceptance. Any future effect-bearing path remains outside this launch claim and still requires the formal AP1 stage seal. |
 
 AP1-1 freezes data shape and fail-closed validation only. It does not create
 tables, start a scheduler, claim work, call a model, publish a behavior event,
@@ -308,11 +325,16 @@ terminal failure, recovery and duplicate-submission paths. All terminal Tasks
 release their graph slots and no terminal Run retains an open Session.
 
 P7 is complete for the stated read-only launch scope: all three Go modules
-pass full race tests and vet, all 98 Agent migrations replay idempotently,
+pass full race tests and vet, all 108 Agent migrations replay idempotently,
 Compose validates, the six required services run, Moody Blues `as_of` and
 generation-fenced replay pass live archive probes, and the database terminal
-invariants are clean. This is not the broader AP1 formal effect-bearing stage
-seal and does not authorize trading, order submission or money movement.
+invariants are clean. `scripts/verify-cortex-research-operations.sh --restart`
+also restarts the five application services and verifies that six required
+services return healthy, the legacy writer remains 410, all current Cortex
+risks remain zero, Research is fresh, and durable expired-Run, Tool-recovery
+and user-cancellation evidence survives. This is not the broader AP1 formal
+effect-bearing stage seal and does not authorize trading, order submission or
+money movement.
 
 The first post-cutover hardening slice is deployed. Worker provider waits now
 heartbeat the Attempt lease, use a 75-second provider deadline inside the
