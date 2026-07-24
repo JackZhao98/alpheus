@@ -481,6 +481,26 @@ type CortexRunResult struct {
 	Trace []CortexTraceEvent `json:"trace"`
 }
 
+type AgentRoom struct {
+	ConversationID        string `json:"conversation_id"`
+	ConversationCreatedAt string `json:"conversation_created_at"`
+	Mode                  string `json:"mode"`
+	Title                 string `json:"title"`
+	State                 string `json:"state"`
+	Generation            int64  `json:"generation"`
+	LastRunID             string `json:"last_run_id,omitempty"`
+	LastRunState          string `json:"last_run_state,omitempty"`
+	LastActivityAt        string `json:"last_activity_at"`
+	UpdatedAt             string `json:"updated_at"`
+	MessageCount          int64  `json:"message_count"`
+}
+
+type AgentRoomMutation struct {
+	Status     string    `json:"status"`
+	ReasonCode string    `json:"reason_code,omitempty"`
+	Room       AgentRoom `json:"room,omitempty"`
+}
+
 type CortexTraceEvent struct {
 	Sequence          int64             `json:"sequence"`
 	CreatedAt         string            `json:"created_at"`
@@ -517,6 +537,200 @@ type CortexTraceNode struct {
 	RoleID string `json:"role_id"`
 	Depth  int64  `json:"depth"`
 	ToolID string `json:"tool_id,omitempty"`
+}
+
+func (adapter *PostgresAdapter) RecordAgentRoom(
+	ctx context.Context,
+	subjectID string,
+	conversationID string,
+	mode string,
+	title string,
+	runID string,
+) (AgentRoomMutation, error) {
+	if adapter == nil || adapter.db == nil || subjectID == "" ||
+		conversationID == "" || !validAgentRoomMode(mode) ||
+		!validAgentRoomTitle(title) || runID == "" {
+		return AgentRoomMutation{}, fmt.Errorf("invalid Agent Room record")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_input.record_cortex_agent_room($1,$2,$3,$4,$5)::TEXT`,
+			subjectID, conversationID, mode, title, runID,
+		).Scan(&raw)
+	}); err != nil {
+		return AgentRoomMutation{},
+			fmt.Errorf("record Cortex Agent Room: %w", err)
+	}
+	return decodeAgentRoomMutation(raw, "recorded")
+}
+
+func (adapter *PostgresAdapter) ListAgentRooms(
+	ctx context.Context,
+	subjectID string,
+	limit int,
+) ([]AgentRoom, error) {
+	if adapter == nil || adapter.db == nil || subjectID == "" ||
+		limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("invalid Agent Room list")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_input.list_cortex_agent_rooms($1,$2)::TEXT`,
+			subjectID, limit,
+		).Scan(&raw)
+	}); err != nil {
+		return nil, fmt.Errorf("list Cortex Agent Rooms: %w", err)
+	}
+	var rooms []AgentRoom
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&rooms) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF || len(rooms) > limit {
+		return nil, fmt.Errorf("invalid Agent Room list response")
+	}
+	for _, room := range rooms {
+		if err := validateAgentRoom(room); err != nil {
+			return nil, err
+		}
+	}
+	return rooms, nil
+}
+
+func (adapter *PostgresAdapter) GetAgentRoom(
+	ctx context.Context,
+	subjectID string,
+	conversationID string,
+) (AgentRoom, error) {
+	if adapter == nil || adapter.db == nil || subjectID == "" ||
+		conversationID == "" {
+		return AgentRoom{}, fmt.Errorf("invalid Agent Room read")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_input.get_cortex_agent_room($1,$2)::TEXT`,
+			subjectID, conversationID,
+		).Scan(&raw)
+	}); err != nil {
+		return AgentRoom{}, fmt.Errorf("read Cortex Agent Room: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return AgentRoom{}, sql.ErrNoRows
+	}
+	var room AgentRoom
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&room) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF {
+		return AgentRoom{}, fmt.Errorf("invalid Agent Room response")
+	}
+	if err := validateAgentRoom(room); err != nil {
+		return AgentRoom{}, err
+	}
+	return room, nil
+}
+
+func (adapter *PostgresAdapter) UpdateAgentRoom(
+	ctx context.Context,
+	subjectID string,
+	conversationID string,
+	expectedGeneration int64,
+	mode string,
+	title string,
+	state string,
+) (AgentRoomMutation, error) {
+	if adapter == nil || adapter.db == nil || subjectID == "" ||
+		conversationID == "" || expectedGeneration < 1 ||
+		!validAgentRoomMode(mode) || !validAgentRoomTitle(title) ||
+		(state != "active" && state != "paused" && state != "archived") {
+		return AgentRoomMutation{}, fmt.Errorf("invalid Agent Room update")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_input.update_cortex_agent_room($1,$2,$3,$4,$5,$6)::TEXT`,
+			subjectID, conversationID, expectedGeneration,
+			mode, title, state,
+		).Scan(&raw)
+	}); err != nil {
+		return AgentRoomMutation{},
+			fmt.Errorf("update Cortex Agent Room: %w", err)
+	}
+	return decodeAgentRoomMutation(raw, "updated")
+}
+
+func decodeAgentRoomMutation(
+	raw []byte,
+	successStatus string,
+) (AgentRoomMutation, error) {
+	var result AgentRoomMutation
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		(result.Status != successStatus && result.Status != "conflict" &&
+			result.Status != "denied") {
+		return AgentRoomMutation{},
+			fmt.Errorf("invalid Agent Room mutation response")
+	}
+	if result.Status == successStatus {
+		if err := validateAgentRoom(result.Room); err != nil {
+			return AgentRoomMutation{}, err
+		}
+	} else if result.ReasonCode == "" {
+		return AgentRoomMutation{},
+			fmt.Errorf("invalid Agent Room denial response")
+	}
+	return result, nil
+}
+
+func validateAgentRoom(room AgentRoom) error {
+	created, createdErr := time.Parse(
+		time.RFC3339Nano, room.ConversationCreatedAt)
+	activity, activityErr := time.Parse(
+		time.RFC3339Nano, room.LastActivityAt)
+	updated, updatedErr := time.Parse(time.RFC3339Nano, room.UpdatedAt)
+	if room.ConversationID == "" || !validAgentRoomMode(room.Mode) ||
+		!validAgentRoomTitle(room.Title) ||
+		(room.State != "active" && room.State != "paused") ||
+		room.Generation < 1 || room.MessageCount < 1 ||
+		(room.LastRunID == "") != (room.LastRunState == "") ||
+		(room.LastRunState != "" &&
+			room.LastRunState != "queued" &&
+			room.LastRunState != "running" &&
+			room.LastRunState != "waiting" &&
+			room.LastRunState != "canceling" &&
+			room.LastRunState != "succeeded" &&
+			room.LastRunState != "failed" &&
+			room.LastRunState != "canceled" &&
+			room.LastRunState != "superseded" &&
+			room.LastRunState != "dead_lettered") ||
+		createdErr != nil || activityErr != nil || updatedErr != nil ||
+		created.Location() != time.UTC || activity.Location() != time.UTC ||
+		updated.Location() != time.UTC || activity.Before(created) ||
+		updated.Before(activity) {
+		return fmt.Errorf("invalid Agent Room")
+	}
+	return nil
+}
+
+func validAgentRoomMode(mode string) bool {
+	return mode == "research" || mode == "spx_gamma" ||
+		mode == "equity_discovery" || mode == "watchlist_monitor"
+}
+
+func validAgentRoomTitle(title string) bool {
+	if title == "" || title != strings.TrimSpace(title) || len(title) > 240 {
+		return false
+	}
+	for _, char := range title {
+		if char < 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // CortexOperationsHealth is a bounded Control-owned read model. It contains

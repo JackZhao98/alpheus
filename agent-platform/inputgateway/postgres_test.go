@@ -159,3 +159,41 @@ func TestDecodeRunCancellationResultRejectsMismatchedIdentity(t *testing.T) {
 		t.Fatal("mismatched cancellation request identity was accepted")
 	}
 }
+
+func TestDecodeAgentRoomMutation(t *testing.T) {
+	result, err := decodeAgentRoomMutation([]byte(`{
+		"status":"recorded",
+		"room":{
+			"conversation_id":"room-1",
+			"conversation_created_at":"2026-07-23T20:00:00Z",
+			"mode":"research",
+			"title":"Analyze SPX structure",
+			"state":"active",
+			"generation":1,
+			"last_run_id":"run-1",
+			"last_run_state":"running",
+			"last_activity_at":"2026-07-23T20:00:01Z",
+			"updated_at":"2026-07-23T20:00:02Z",
+			"message_count":1
+		}
+	}`), "recorded")
+	if err != nil || result.Room.ConversationID != "room-1" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := decodeAgentRoomMutation([]byte(`{
+		"status":"recorded",
+		"room":{
+			"conversation_id":"room-1",
+			"conversation_created_at":"2026-07-23T20:00:00Z",
+			"mode":"research",
+			"title":"Analyze SPX structure",
+			"state":"active",
+			"generation":1,
+			"last_activity_at":"2026-07-23T20:00:01Z",
+			"updated_at":"2026-07-23T20:00:02Z",
+			"message_count":0
+		}
+	}`), "recorded"); err == nil {
+		t.Fatal("empty persisted Agent Room was accepted")
+	}
+}

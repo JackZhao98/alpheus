@@ -68,11 +68,11 @@ fi
 count=$(docker exec "$CONTAINER" psql --no-psqlrc --username postgres --dbname probe \
 	--tuples-only --no-align --command 'SELECT count(*) FROM agent_control.schema_migration' \
 	| tr -d '[:space:]')
-if [ "$count" != 108 ]; then
+if [ "$count" != 109 ]; then
 	echo "FAIL reason=migration_ledger_count count=$count artifacts=$ARTIFACT_DIR" >&2
 	exit 1
 fi
 
-printf '{"status":"PASS","probe":"agent-platform-bootstrap","migrations":108,"second_execution":"digest-verified-no-ddl-replay"}\n' \
+printf '{"status":"PASS","probe":"agent-platform-bootstrap","migrations":109,"second_execution":"digest-verified-no-ddl-replay"}\n' \
 	>"$ARTIFACT_DIR/summary.json"
 cat "$ARTIFACT_DIR/summary.json"

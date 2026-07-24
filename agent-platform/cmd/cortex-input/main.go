@@ -346,6 +346,134 @@ func run() error {
 	publicHandler := inputgateway.NewRuntimeHandler(gateway, adapter, actor, bearerSubject(serviceToken, subject))
 	mux := http.NewServeMux()
 	mux.Handle("/", publicHandler)
+	mux.HandleFunc("GET /v1/agent-rooms", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		rooms, err := adapter.ListAgentRooms(
+			request.Context(), subject.PrincipalID, 50)
+		if err != nil {
+			log.Printf("Cortex Agent Room list failed: %v", err)
+			http.Error(w, "Agent Rooms unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"rooms": rooms})
+	})
+	mux.HandleFunc("POST /v1/agent-rooms/{id}/record", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Mode  string `json:"mode"`
+			Title string `json:"title"`
+			RunID string `json:"run_id"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid Agent Room record",
+				http.StatusBadRequest)
+			return
+		}
+		result, err := adapter.RecordAgentRoom(
+			request.Context(), subject.PrincipalID,
+			strings.TrimSpace(request.PathValue("id")),
+			strings.TrimSpace(body.Mode), strings.TrimSpace(body.Title),
+			strings.TrimSpace(body.RunID),
+		)
+		if err != nil {
+			log.Printf("Cortex Agent Room record failed: %v", err)
+			http.Error(w, "Agent Room unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		status := http.StatusOK
+		if result.Status == "conflict" {
+			status = http.StatusConflict
+		} else if result.Status == "denied" {
+			status = http.StatusNotFound
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("GET /v1/agent-rooms/{id}", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		conversationID := strings.TrimSpace(request.PathValue("id"))
+		room, err := adapter.GetAgentRoom(
+			request.Context(), subject.PrincipalID, conversationID)
+		if err != nil {
+			http.Error(w, "Agent Room not found", http.StatusNotFound)
+			return
+		}
+		messages, err := adapter.ConversationHistory(
+			request.Context(), conversationID, subject.PrincipalID, "")
+		if err != nil {
+			log.Printf("Cortex Agent Room messages failed: %v", err)
+			http.Error(w, "Agent Room messages unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"room": room, "messages": messages,
+		})
+	})
+	mux.HandleFunc("PATCH /v1/agent-rooms/{id}", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			ExpectedGeneration int64  `json:"expected_generation"`
+			Mode               string `json:"mode"`
+			Title              string `json:"title"`
+			State              string `json:"state"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid Agent Room update",
+				http.StatusBadRequest)
+			return
+		}
+		result, err := adapter.UpdateAgentRoom(
+			request.Context(), subject.PrincipalID,
+			strings.TrimSpace(request.PathValue("id")),
+			body.ExpectedGeneration, strings.TrimSpace(body.Mode),
+			strings.TrimSpace(body.Title), strings.TrimSpace(body.State),
+		)
+		if err != nil {
+			log.Printf("Cortex Agent Room update failed: %v", err)
+			http.Error(w, "Agent Room unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		status := http.StatusOK
+		if result.Status == "conflict" {
+			status = http.StatusConflict
+		} else if result.Status == "denied" {
+			status = http.StatusNotFound
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("GET /v1/runs/{id}", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
