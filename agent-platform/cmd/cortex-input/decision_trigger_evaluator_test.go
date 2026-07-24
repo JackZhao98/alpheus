@@ -13,13 +13,20 @@ import (
 )
 
 type decisionTriggerEvaluationStoreProbe struct {
-	triggers []inputgateway.DecisionTrigger
-	samples  []inputgateway.DecisionTriggerSample
-	values   []json.Number
-	fired    bool
-	occurs   []string
-	wakes    []string
-	pending  []inputgateway.PendingDecisionTriggerWake
+	triggers           []inputgateway.DecisionTrigger
+	samples            []inputgateway.DecisionTriggerSample
+	values             []json.Number
+	fired              bool
+	occurs             []string
+	wakes              []string
+	pendingOccurrences []inputgateway.PendingDecisionTriggerOccurrence
+	pending            []inputgateway.PendingDecisionTriggerWake
+}
+
+func (probe *decisionTriggerEvaluationStoreProbe) ListPendingDecisionTriggerOccurrences(
+	context.Context, string, int,
+) ([]inputgateway.PendingDecisionTriggerOccurrence, error) {
+	return probe.pendingOccurrences, nil
 }
 
 func (probe *decisionTriggerEvaluationStoreProbe) ListPendingDecisionTriggerWakes(
@@ -304,5 +311,30 @@ func TestRecoverCortexDecisionTriggerWakesReplaysPendingOccurrence(
 	if err != nil || count != 1 || len(probe.wakes) != 1 ||
 		probe.wakes[0] != occurrence.OccurrenceID {
 		t.Fatalf("count=%d wakes=%v err=%v", count, probe.wakes, err)
+	}
+}
+
+func TestRecoverCortexDecisionTriggerWakesMaterializesMissedFiring(
+	t *testing.T,
+) {
+	trigger := inputgateway.DecisionTrigger{
+		TriggerID: "trigger-mid", Generation: 1,
+	}
+	sample := inputgateway.DecisionTriggerSample{
+		SampleID: "sample-missed", TriggerID: "trigger-mid",
+		Generation: 1, Fired: true,
+	}
+	probe := &decisionTriggerEvaluationStoreProbe{
+		pendingOccurrences: []inputgateway.PendingDecisionTriggerOccurrence{{
+			Trigger: trigger, Sample: sample,
+		}},
+	}
+	count, err := recoverCortexDecisionTriggerWakes(
+		context.Background(), probe, "owner-1",
+	)
+	if err != nil || count != 1 || len(probe.occurs) != 1 ||
+		probe.occurs[0] != sample.SampleID {
+		t.Fatalf("count=%d occurrences=%v err=%v",
+			count, probe.occurs, err)
 	}
 }

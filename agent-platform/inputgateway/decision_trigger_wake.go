@@ -29,6 +29,57 @@ type PendingDecisionTriggerWake struct {
 	Occurrence DecisionTriggerOccurrence `json:"occurrence"`
 }
 
+type PendingDecisionTriggerOccurrence struct {
+	Trigger DecisionTrigger       `json:"trigger"`
+	Sample  DecisionTriggerSample `json:"sample"`
+}
+
+func (adapter *PostgresAdapter) ListPendingDecisionTriggerOccurrences(
+	ctx context.Context,
+	subjectID string,
+	limit int,
+) ([]PendingDecisionTriggerOccurrence, error) {
+	if adapter == nil || adapter.db == nil ||
+		!validDecisionTriggerID(subjectID) ||
+		limit < 1 || limit > 100 {
+		return nil, fmt.Errorf(
+			"invalid pending decision Trigger occurrence list")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.list_pending_cortex_decision_trigger_occurrences(
+				$1,$2
+			)::TEXT`,
+			subjectID, limit,
+		).Scan(&raw)
+	}); err != nil {
+		return nil, fmt.Errorf(
+			"list pending Cortex decision Trigger occurrences: %w", err)
+	}
+	var items []PendingDecisionTriggerOccurrence
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&items) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		len(items) > limit {
+		return nil, fmt.Errorf(
+			"invalid pending decision Trigger occurrence response")
+	}
+	for _, item := range items {
+		if validateDecisionTrigger(item.Trigger) != nil ||
+			validateDecisionTriggerSample(item.Sample) != nil ||
+			!item.Sample.Fired ||
+			item.Sample.TriggerID != item.Trigger.TriggerID ||
+			item.Sample.Generation != item.Trigger.Generation {
+			return nil, fmt.Errorf(
+				"invalid pending decision Trigger occurrence")
+		}
+	}
+	return items, nil
+}
+
 func (adapter *PostgresAdapter) ListPendingDecisionTriggerWakes(
 	ctx context.Context,
 	subjectID string,
@@ -195,8 +246,11 @@ func decisionTriggerWakePrompt(
 			"Observed at: %s\nOccurrence: %s\n\n"+
 			"Objective: %s\n\n"+
 			"Assess the market context and portfolio implications. "+
-			"State whether the setup deserves continued monitoring or a "+
-			"paper-only candidate. Cite tool receipts for any new facts. "+
+			"State whether the setup deserves continued monitoring. "+
+			"If the active strategy objective requires a decision and "+
+			"receipt-backed evidence supports it, the final Decision Desk "+
+			"may emit one effect-free equity Paper Candidate. A Candidate "+
+			"is not approval or an order. Cite tool receipts for new facts. "+
 			"Do not place, propose as approved, or imply a live order.",
 		trigger.Title, trigger.StrategyID, trigger.Symbol,
 		trigger.Metric, trigger.Comparator, trigger.Threshold.String(),

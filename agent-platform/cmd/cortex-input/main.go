@@ -86,6 +86,7 @@ func run() error {
 	defer stopRecovery()
 	startCortexWebFetchRecovery(recoveryContext, adapter, researchHTTP, researchURL, researchToken)
 	startCortexScoutContinuationRecovery(recoveryContext, adapter)
+	startCortexTaskGraphSessionRecovery(recoveryContext, adapter)
 	startCortexTaskGraphJoinRecovery(recoveryContext, adapter)
 	startCortexExpiredRunRecovery(recoveryContext, adapter)
 	startCortexRunCancellationRecovery(recoveryContext, adapter)

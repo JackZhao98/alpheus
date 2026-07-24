@@ -186,6 +186,26 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 	}
 }
 
+func TestCandidateTaskGraphDeskAllowsActiveStrategyDecision(t *testing.T) {
+	request := taskGraphDecisionDeskRequest(
+		"model", "prompt", "evaluate an automatic strategy wake",
+		[]taskGraphDeskMemo{{
+			TaskID: "task-market", RoleID: "market_scout",
+			Memo: scoutMemoOutput{
+				Summary: "market summary", Evidence: []string{"receipt"},
+				Limitations: "bounded",
+			},
+		}},
+		1, 1, 1200, true,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok ||
+		!strings.Contains(instructions, "active strategy objective") ||
+		!strings.Contains(instructions, "effect-free equity Paper Candidate") {
+		t.Fatalf("candidate strategy boundary missing: %#v", request)
+	}
+}
+
 func TestTaskGraphToolNodeSplitsOneFrozenOutputBudget(t *testing.T) {
 	planner, memo, err := taskGraphToolTokenLimits(workItem{
 		MaxModelCalls: 3, MaxOutputTokens: 2400,

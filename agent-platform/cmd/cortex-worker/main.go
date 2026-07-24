@@ -1199,7 +1199,7 @@ func taskGraphDecisionDeskRequest(
 	schema := taskgraphround.OutputSchema()
 	schemaName := "cortex_task_graph_round_decision"
 	if paperCandidateEnabled {
-		instructions += " This Run supports one effect-free equity Paper Candidate. Only action=answer may include it, and only when the user explicitly requested Paper execution and the joined receipt-backed evidence supports the exact bounded proposal. A Candidate is not approval or an order. Set paper_candidate=null when evidence is insufficient; action=refine must always set paper_candidate=null."
+		instructions += " This Run supports one effect-free equity Paper Candidate. Only action=answer may include it, and only when the user explicitly requested Paper execution or the active strategy objective requires a decision, and the joined receipt-backed evidence supports the exact bounded proposal. A Candidate is not approval or an order. Set paper_candidate=null when evidence is insufficient; action=refine must always set paper_candidate=null."
 		schema = taskgraphround.CandidateOutputSchema()
 		schemaName = "cortex_task_graph_candidate_round_decision"
 	}

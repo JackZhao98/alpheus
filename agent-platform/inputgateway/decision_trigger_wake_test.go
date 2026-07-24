@@ -22,7 +22,8 @@ func TestDecisionTriggerWakePromptCarriesBoundaryAndExactCondition(
 	prompt := decisionTriggerWakePrompt(trigger, sample, occurrence)
 	for _, expected := range []string{
 		"EFFECT CEILING: NONE", "SPY", "mid_price gte 800.00000000",
-		"Observed value: 800.125", "paper-only", "Do not place",
+		"Observed value: 800.125", "effect-free equity Paper Candidate",
+		"not approval or an order", "Do not place",
 		"occurrence-1",
 	} {
 		if !strings.Contains(prompt, expected) {

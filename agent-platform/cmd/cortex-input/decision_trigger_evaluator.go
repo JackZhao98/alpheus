@@ -20,6 +20,9 @@ const (
 )
 
 type decisionTriggerEvaluationStore interface {
+	ListPendingDecisionTriggerOccurrences(
+		context.Context, string, int,
+	) ([]inputgateway.PendingDecisionTriggerOccurrence, error)
 	ListPendingDecisionTriggerWakes(
 		context.Context, string, int,
 	) ([]inputgateway.PendingDecisionTriggerWake, error)
@@ -152,14 +155,37 @@ func recoverCortexDecisionTriggerWakes(
 	store decisionTriggerEvaluationStore,
 	subjectID string,
 ) (int, error) {
+	pendingOccurrences, occurrenceListErr :=
+		store.ListPendingDecisionTriggerOccurrences(
+			ctx, subjectID, cortexDecisionTriggerLimit,
+		)
+	materialized := 0
+	var failures []string
+	if occurrenceListErr != nil {
+		failures = append(failures, occurrenceListErr.Error())
+	}
+	for _, item := range pendingOccurrences {
+		if _, occurrenceErr :=
+			store.MaterializeDecisionTriggerOccurrence(
+				ctx, item.Sample.SampleID,
+			); occurrenceErr != nil {
+			failures = append(failures,
+				fmt.Sprintf("%s materialize: %v",
+					item.Sample.SampleID, occurrenceErr))
+			continue
+		}
+		materialized++
+	}
 	pending, err := store.ListPendingDecisionTriggerWakes(
 		ctx, subjectID, cortexDecisionTriggerLimit,
 	)
 	if err != nil {
-		return 0, err
+		failures = append(failures, err.Error())
+		return materialized, fmt.Errorf(
+			"pending decision Trigger recovery: %s",
+			strings.Join(failures, "; "))
 	}
-	recovered := 0
-	var failures []string
+	recovered := materialized
 	for _, item := range pending {
 		if _, wakeErr := store.AdmitDecisionTriggerWake(
 			ctx, subjectID, item.Trigger, item.Sample, item.Occurrence,

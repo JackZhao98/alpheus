@@ -208,7 +208,7 @@
 | 模块 | 状态 | 已完成边界 / 下一道边界 |
 |---|---|---|
 | Command Console | 已部署 | `/agent/console` 是控制台主界面；右侧保留弱化的持久化 Agent 对话。行情、真实 Robinhood 账户、持仓、活动、Trigger 和系统状态均来自后端，不使用浏览器伪数据 |
-| Decision Trigger Registry | 已部署 | immutable generation、确定性采样、cross/threshold/cooldown、Occurrence、外部事件 Run/Task/Attempt 唤醒和崩溃恢复均已完成；当前 Effect Ceiling 仍为 `none` |
+| Decision Trigger Registry | 已部署 | immutable generation、确定性采样、cross/threshold/cooldown、Occurrence、外部事件 Run/Task/Attempt 唤醒和崩溃恢复均已完成；Trigger Run 可进入 Candidate-aware 并行 TaskGraph。已补齐 fired sample→Occurrence、已入库 Graph→Node Session、外部事件动态 round 三处重启恢复边界；当前 Effect Ceiling 仍为 `none` |
 | Paper / Live 双环境 | 已部署 | Paper 是独立永久数据库账本，初始资金 $100,000；不复用 Robinhood、旧 shadow ledger 或浏览器状态。Live 仍只投影真实 Robinhood 账户 |
 | Paper 成交账本 | 已部署 | 订单按 Kernel 当场 quote 的 buy=ask / sell=bid 成交；现金、持仓、成本、订单、事件在一个 PostgreSQL 事务内结算；幂等冲突拒绝；订单和事件不可篡改 |
 | Paper 活动投影 | 已部署 | Console 会显示真实 Paper 成交的 actor、方向、数量、价格、行情来源和时间；当前无成交时明确显示 0，不造测试成交 |
@@ -218,7 +218,7 @@
 | Candidate 授权与执行收据契约 | 已部署 | 每个 Candidate 最多一个 immutable Control Authorization 和一个 immutable Kernel Receipt；Authorization 固定 Copilot/Agentic、review generation、Kernel mode generation、effect ID 和 Candidate 摘要。Control 负责授权、调用和崩溃恢复；Kernel 再次校验本地模式与 generation，并以 effect ID 幂等结算。Console 与 Run Trace 均显示 proposed / authorized / succeeded / failed、HTTP 状态、稳定失败码和 Paper 成交 |
 | Copilot 人工确认 | 已部署 | Candidate 状态为 `proposed → approved/rejected`，只有 Paper + Copilot 显示批准/拒绝；Kernel 在 Observe/Agentic 拒绝人工审批。决定按 generation 防并发并支持同决定重放，Cortex 校验用户归属和来源 Run 已成功，审计事件 append-only。批准本身仍不成交 |
 | Agentic Paper 自动执行 | 已部署 | 只有 `paper + agentic` 且来源 Run 已成功、Candidate 合法、Control Authorization 与当前 Kernel mode generation 一致时才调用 Effect Bridge。已用 SPY 0.001 股完成真实 Paper 买入/卖出闭环并清仓；同时验收了一次行情不可用的 502 失败收据。Live 始终保持 Observe，未产生 Live 订单 |
-| Candidate + 并行 TaskGraph | 已部署 | Candidate Run 已使用独立 v2 round contract：模型可并行派发 2–4 条只读 Specialist/Tool 分支，等待 Join 后仅允许最终 Decision Desk 携带一个 effect-free Candidate；refine 和 Specialist 均不能携带 Candidate。普通研究继续固定在不可变 v1 answer contract。真实 Observe 验收完成了双分支、两轮证据补充、Join、候选生成；Candidate 无 Authorization/Receipt，Paper 与 Live 均无成交 |
+| Candidate + 并行 TaskGraph | 已部署 | Candidate Run 已使用独立 v2 round contract：用户请求或 Trigger objective 都可并行派发 2–4 条只读 Specialist/Tool 分支，等待 Join 后仅允许最终 Decision Desk 携带一个 effect-free Candidate；refine 和 Specialist 均不能携带 Candidate。普通研究继续固定在不可变 v1 answer contract。真实 Trigger Run `e413d25a-8e7f-4a24-8ad2-687d40ededca` 完成 3 个并行分支、Join 和候选生成；Candidate `8631f023-f545-4f80-91ae-011452ce7412` 无 Authorization/Receipt，Paper 与 Live 均无成交 |
 | Moody Blues GEX Trigger 输入 | 已部署 | `research_gexbot` Trigger 已接入最新 Moody Blues `gex_full` 归档；确定性映射 Call Wall=`major_pos_oi`、Put Wall=`major_neg_oi`、Zero Gamma=`zero_gamma`，继续复用阈值、cross、cooldown、Occurrence 和 Cortex 唤醒链。超过 2 分钟的归档拒绝采样，非交易时段不会把昨日日终数据伪装成当前信号 |
 | 数据流与日内循环 | 待完成 | Moody Blues replay/stream → 数学 Trigger → Cortex 决策 → Paper Candidate/成交 → Portfolio/活动更新；用户可在右侧对话中途参与 |
 | Live 执行 | 未开放 | 继续强制 Observe；必须在 Paper 日内循环验收、限额、Kill Switch、确认和收据链完整后单独启用，不由 UI 按钮自行放开 |
@@ -357,6 +357,18 @@ only after its threshold is proven, and the exact Desk Artifact completes the
 Run. Empty Tool grants are encoded as arrays, a parked graph parent releases
 only its own active slot, and TaskGraph Desk output uses its frozen synthesis
 budget instead of the legacy 2k-token linear cap.
+
+External-event graphs now use the same bounded path without masquerading as a
+UserRequest. Control selects exactly one immutable origin-specific raw input
+for proposal admission, node Session preparation and dynamic rounds. A
+periodic recovery projection resumes any admitted node whose Session setup was
+interrupted, while the existing idempotent preparation command prevents a
+second Session identity. Candidate-aware v2 round results are accepted by both
+seed selection and the atomic next-round transition. Real Trigger Run
+`e413d25a-8e7f-4a24-8ad2-687d40ededca` completed three concurrent Specialist
+branches and its Join, then committed effect-free Candidate
+`8631f023-f545-4f80-91ae-011452ce7412`; no Control Authorization or Kernel
+Receipt exists for that Candidate.
 
 Decision Desk must choose the strict `answer` or `refine` result. A `refine`
 result contains only two to four authority-free branch proposals; Control
