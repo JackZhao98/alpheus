@@ -337,6 +337,40 @@ func TestTaskGraphToolPlannerRejectsStaleRelativeMarketTime(t *testing.T) {
 	}
 }
 
+func TestTaskGraphToolPlannerRejectsNarrowOrFutureRelativeWindow(t *testing.T) {
+	requestTime := time.Date(2026, 7, 24, 5, 0, 0, 0, time.UTC)
+	output := workflowOutput{
+		Kind: "handoff", Target: "market_scout",
+		GEXBOTAction: "none", EarningsAction: "none",
+		KernelAction: "read", KernelToolID: "kernel_equity_historicals",
+		KernelArguments: `{"symbols":["SPCX","TSLA"],"start_time":"2026-07-24T00:00:00Z","end_time":"2026-07-24T05:00:00Z","interval":"minute","bounds":"regular","adjustment_type":"split"}`,
+	}
+	if issue := taskGraphKernelPlannerIssue(
+		output, "kernel_equity_historicals",
+		"SPCX 和 TSLA 今天为什么跌", requestTime,
+	); issue != "kernel_tool_time_window_too_narrow" {
+		t.Fatalf("narrow relative window issue = %q", issue)
+	}
+	output.KernelArguments = `{"symbols":["SPCX","TSLA"],"start_time":"2026-07-23T00:00:00Z","end_time":"2026-07-24T20:00:00Z","interval":"hour","bounds":"extended","adjustment_type":"split"}`
+	if issue := taskGraphKernelPlannerIssue(
+		output, "kernel_equity_historicals",
+		"SPCX 和 TSLA 今天为什么跌", requestTime,
+	); issue != "kernel_tool_end_time_future" {
+		t.Fatalf("future relative end issue = %q", issue)
+	}
+	request := taskGraphToolPlannerRequest(
+		"model", "SPCX and TSLA today", "market_scout",
+		"compare current session", "kernel_equity_historicals",
+		requestTime, 700,
+	)
+	instructions, _ := request["instructions"].(string)
+	if !strings.Contains(instructions, "36 hours") ||
+		!strings.Contains(instructions, "interval=hour") ||
+		!strings.Contains(instructions, "every equity ticker") {
+		t.Fatalf("relative market window guidance missing: %s", instructions)
+	}
+}
+
 func TestTaskGraphToolMemoContainsReceiptBackedEvidence(t *testing.T) {
 	request := taskGraphToolMemoRequest(
 		"model", "prompt", "market_scout", "read quote",

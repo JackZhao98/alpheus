@@ -1255,6 +1255,10 @@ func taskGraphToolPlannerRequest(
 			"and kernel_arguments to one JSON object matching the argument guide. " +
 			"Set gexbot and earnings actions to none."
 	}
+	if capability.ToolID(toolID) == "kernel_equity_historicals" &&
+		relativeMarketTimeRequested(prompt) {
+		instructions += " For a relative US-equity session request, use a lookback beginning at least 36 hours before the frozen request time (96 hours after a weekend), end no later than the frozen request time, interval=hour, bounds=extended, adjustment_type=split, and include every equity ticker explicitly named by the user."
+	}
 	instructions += " Return kind=handoff, target=" + role +
 		", a non-empty objective and rationale, empty text, and every required schema field."
 	request := workflowRequest(
@@ -1297,6 +1301,10 @@ func taskGraphToolCorrectionRequest(
 		"kernel_tool_id to the immutable Tool ID, and kernel_arguments to one compact JSON object. " +
 		"Set gexbot and earnings actions to none. Return kind=handoff, target=" +
 		role + ", a non-empty objective and rationale, empty text, and every required schema field."
+	if capability.ToolID(toolID) == "kernel_equity_historicals" &&
+		relativeMarketTimeRequested(prompt) {
+		instructions += " For a relative US-equity session request, use a lookback beginning at least 36 hours before the frozen request time (96 hours after a weekend), end no later than the frozen request time, interval=hour, bounds=extended, adjustment_type=split, and include every equity ticker explicitly named by the user."
+	}
 	request := workflowRequest(
 		model, instructions, prompt, true, true, true, true, true,
 	)
@@ -2329,6 +2337,15 @@ func taskGraphKernelPlannerIssue(
 			start.Before(reference.Add(-7*24*time.Hour)) ||
 			start.After(reference.Add(24*time.Hour)) {
 			return "kernel_tool_time_range_stale"
+		}
+		if start.After(reference.Add(-12 * time.Hour)) {
+			return "kernel_tool_time_window_too_narrow"
+		}
+		if rawEnd, supplied := request.Arguments["end_time"]; supplied {
+			end, _ := time.Parse(time.RFC3339Nano, rawEnd.(string))
+			if end.After(reference.Add(5 * time.Minute)) {
+				return "kernel_tool_end_time_future"
+			}
 		}
 	}
 	return ""
