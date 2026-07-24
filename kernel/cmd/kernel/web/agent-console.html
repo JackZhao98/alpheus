@@ -143,6 +143,12 @@
         <div class="stream-controls">
           <button id="replay-create" type="button">创建回放</button>
           <button id="replay-next" type="button" disabled>下一帧</button>
+          <button id="replay-play" type="button" disabled>自动播放</button>
+          <select id="replay-speed" aria-label="回放速度">
+            <option value="30000">1× REALTIME</option>
+            <option value="3000" selected>10×</option>
+            <option value="500">60×</option>
+          </select>
         </div>
         <div class="stream-clock">
           <span>VIRTUAL CLOCK</span>

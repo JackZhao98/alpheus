@@ -14,6 +14,8 @@ const state = {
   environment:"",
   autonomy:null,
   replay:null,
+  replayTimer:null,
+  replayPlaying:false,
 };
 
 async function request(path,options = {}) {
@@ -81,12 +83,15 @@ function renderReplay(payload) {
     generation:payload.generation,
     state:payload.state,
   };
-  byId("replay-next").disabled = payload.state !== "active";
+  byId("replay-next").disabled =
+    payload.state !== "active" || state.replayPlaying;
+  byId("replay-play").disabled = payload.state !== "active";
   text("replay-state",
     `${String(payload.state || "unknown").toUpperCase()} · GEN ${payload.generation || "—"}`);
   const observation = payload.observation;
   if (!observation) {
     text("replay-clock",payload.state === "complete" ? "回放完成" : "等待第一帧");
+    if (payload.state === "complete") pauseReplay();
     return;
   }
   const metrics = observation.metrics || {};
@@ -101,6 +106,7 @@ function renderReplay(payload) {
 
 async function createReplay() {
   clearError();
+  pauseReplay();
   const start = new Date(byId("replay-start").value);
   const end = new Date(byId("replay-end").value);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
@@ -138,7 +144,7 @@ async function createReplay() {
 }
 
 async function advanceReplay() {
-  if (!state.replay?.replay_id || state.replay.state !== "active") return;
+  if (!state.replay?.replay_id || state.replay.state !== "active") return false;
   clearError();
   const button = byId("replay-next");
   button.disabled = true;
@@ -152,11 +158,53 @@ async function advanceReplay() {
       },
     );
     renderReplay(payload);
+    return true;
   } catch (error) {
     showError(error);
+    pauseReplay();
+    return false;
   } finally {
-    button.disabled = state.replay?.state !== "active";
+    button.disabled =
+      state.replay?.state !== "active" || state.replayPlaying;
   }
+}
+
+function pauseReplay() {
+  if (state.replayTimer) clearTimeout(state.replayTimer);
+  state.replayTimer = null;
+  state.replayPlaying = false;
+  const button = byId("replay-play");
+  button.classList.remove("playing");
+  button.textContent = "自动播放";
+  button.disabled = state.replay?.state !== "active";
+  byId("replay-next").disabled = state.replay?.state !== "active";
+}
+
+async function autoplayReplay() {
+  if (!state.replayPlaying) return;
+  const advanced = await advanceReplay();
+  if (!advanced || state.replay?.state !== "active" ||
+      !state.replayPlaying) {
+    pauseReplay();
+    return;
+  }
+  const delay = Number(byId("replay-speed").value);
+  state.replayTimer = setTimeout(autoplayReplay,
+    Number.isFinite(delay) ? delay : 3000);
+}
+
+function toggleReplayPlayback() {
+  if (state.replayPlaying) {
+    pauseReplay();
+    return;
+  }
+  if (state.replay?.state !== "active") return;
+  state.replayPlaying = true;
+  byId("replay-next").disabled = true;
+  const button = byId("replay-play");
+  button.classList.add("playing");
+  button.textContent = "暂停";
+  autoplayReplay();
 }
 
 function showError(error) {
@@ -873,6 +921,7 @@ byId("refresh-console").addEventListener("click",() => Promise.allSettled([
 ]));
 byId("replay-create").addEventListener("click",createReplay);
 byId("replay-next").addEventListener("click",advanceReplay);
+byId("replay-play").addEventListener("click",toggleReplayPlayback);
 for (const button of byId("environment-switch").querySelectorAll("button")) {
   button.addEventListener("click",async () => {
     if (button.disabled || button.dataset.environment === state.environment) return;

@@ -117,7 +117,10 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   `4bb2d472-c614-5240-8be8-2eb8f6c4e6d5` 验收：generation 1→2，
   页面显示 Spot `7498.48`、Zero Gamma `7519.74`、Call Wall `7600`、
   Put Wall `7500` 和分离的 source / available 时间；响应不含 raw Blob
-  元数据。该能力当前为人工逐帧回放，不声称已完成自动播放或策略触发。
+  元数据。页面内 60× 自动播放已从 generation 1 连续推进至 generation 5，
+  并可完成至 generation 12；10× 回放在 generation 2 暂停后跨越一个调度
+  周期仍保持 generation 2。自动播放仅在页面存活期间运行，不声称是服务端
+  后台流，也尚未连接策略触发。
 - 三个 Go 模块的 `go test -race ./...` 与 `go vet ./...`、全部 108 条 Agent
   migration 的幂等回放、Compose 配置检查均通过。终态 Task 占用并发槽为
   0，终态 Run 持有开放 Session 为 0。

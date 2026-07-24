@@ -442,8 +442,23 @@ button { color:inherit; }
   letter-spacing:.06em;
   cursor:pointer;
 }
-.stream-controls button:last-child { border-color:#4d4532; background:#211d13; color:var(--amber); }
+.stream-controls #replay-next { border-color:#4d4532; background:#211d13; color:var(--amber); }
 .stream-controls button:disabled { opacity:.32; cursor:not-allowed; }
+.stream-controls select {
+  min-width:78px;
+  padding:5px 7px;
+  border:1px solid #29332c;
+  border-radius:4px;
+  background:#0a0e0b;
+  color:#6f7b72;
+  font-size:7px;
+  font-weight:800;
+}
+.stream-controls button.playing {
+  border-color:#5a413b;
+  background:#271917;
+  color:#df9a8f;
+}
 .stream-clock {
   display:grid;
   align-content:center;
