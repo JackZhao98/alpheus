@@ -116,7 +116,13 @@
       </form>
       <div class="result-head"><span>Conversation</span><strong id="conversation-count">0 EXCHANGES</strong></div>
       <div id="conversation" class="conversation" aria-live="polite"><p class="field-note">后续问题会沿用同一个 Cortex Conversation；历史来自已持久化的 UserRequest 和回答 Artifact。</p></div>
-      <div class="result-head"><span>结果</span><strong id="status">READY</strong></div>
+      <div class="result-head">
+        <span>结果</span>
+        <div class="result-actions">
+          <button id="cancel-run" class="secondary danger hidden" type="button">取消当前 Run</button>
+          <strong id="status">READY</strong>
+        </div>
+      </div>
       <pre id="result">提交一个问题开始测试。</pre>
       <details id="task-graph-panel" class="task-graph-panel" hidden>
         <summary>

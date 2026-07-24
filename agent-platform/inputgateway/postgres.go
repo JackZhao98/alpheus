@@ -19,6 +19,7 @@ import (
 	"alpheus/agentplatform/contracts"
 	"alpheus/agentplatform/inputcontract"
 	"alpheus/agentplatform/outputcontract"
+	"alpheus/agentplatform/runtimecontract"
 	"alpheus/agentplatform/taskgraphcontract"
 	"alpheus/agentplatform/taskgraphplanner"
 	"alpheus/agentplatform/taskgraphproposal"
@@ -466,6 +467,13 @@ type ExpiredRunReconciliation struct {
 	TerminalizedTasks    int64  `json:"terminalized_tasks"`
 }
 
+type RunCancellationReconciliation struct {
+	Status    string `json:"status"`
+	Processed int64  `json:"processed"`
+	Canceled  int64  `json:"canceled"`
+	Pending   int64  `json:"pending"`
+}
+
 type CortexRunResult struct {
 	RunID string             `json:"run_id"`
 	State string             `json:"state"`
@@ -488,6 +496,7 @@ type CortexTraceEvent struct {
 	JoinPolicy        string            `json:"join_policy,omitempty"`
 	Outcome           string            `json:"outcome,omitempty"`
 	ReasonCode        string            `json:"reason_code,omitempty"`
+	RequestID         string            `json:"request_id,omitempty"`
 	ArtifactID        string            `json:"artifact_id,omitempty"`
 	Round             int64             `json:"round,omitempty"`
 	NextRound         int64             `json:"next_round,omitempty"`
@@ -559,6 +568,29 @@ type CortexOperationsFailure struct {
 	State      string `json:"state"`
 	TerminalAt string `json:"terminal_at"`
 	ReasonCode string `json:"reason_code"`
+}
+
+type CortexRunCancellationSeed struct {
+	Status             string `json:"status"`
+	ReasonCode         string `json:"reason_code,omitempty"`
+	RunID              string `json:"run_id,omitempty"`
+	RunState           string `json:"run_state,omitempty"`
+	RunStateGeneration int64  `json:"run_state_generation,omitempty"`
+}
+
+type CortexRunCancellationResult struct {
+	Status               string `json:"status"`
+	RunID                string `json:"run_id,omitempty"`
+	RunState             string `json:"run_state,omitempty"`
+	RequestID            string `json:"request_id,omitempty"`
+	ReasonCode           string `json:"reason_code"`
+	CanceledAt           string `json:"canceled_at,omitempty"`
+	TerminalAt           string `json:"terminal_at,omitempty"`
+	UnknownTurns         int64  `json:"unknown_turns,omitempty"`
+	TerminalizedTurns    int64  `json:"terminalized_turns,omitempty"`
+	TerminalizedAttempts int64  `json:"terminalized_attempts,omitempty"`
+	ClosedSessions       int64  `json:"closed_sessions,omitempty"`
+	TerminalizedTasks    int64  `json:"terminalized_tasks,omitempty"`
 }
 
 // WebFetchAuthorization is the only external-read Tool authorization enabled
@@ -1071,6 +1103,186 @@ func validateOperationsHealth(value CortexOperationsHealth) error {
 		}
 	}
 	return nil
+}
+
+func (adapter *PostgresAdapter) CancelRun(
+	ctx context.Context,
+	runID string,
+	subjectID string,
+	requestID string,
+	idempotencyKey string,
+	requestedAt time.Time,
+) (CortexRunCancellationResult, error) {
+	if adapter == nil || adapter.db == nil || runID == "" ||
+		subjectID == "" || requestID == "" || idempotencyKey == "" ||
+		requestedAt.IsZero() || requestedAt.Location() != time.UTC {
+		return CortexRunCancellationResult{},
+			fmt.Errorf("invalid Cortex Run cancellation request")
+	}
+	if replay, found, err := adapter.getRunCancellationResult(
+		ctx, requestID, subjectID,
+	); err != nil {
+		return CortexRunCancellationResult{}, err
+	} else if found {
+		return replay, nil
+	}
+	seed, err := adapter.getRunCancellationSeed(ctx, runID, subjectID)
+	if err != nil {
+		return CortexRunCancellationResult{}, err
+	}
+	if seed.Status != "ready" {
+		return CortexRunCancellationResult{
+			Status:     seed.Status,
+			RunID:      seed.RunID,
+			RunState:   seed.RunState,
+			RequestID:  requestID,
+			ReasonCode: seed.ReasonCode,
+		}, nil
+	}
+	actor := contracts.AuditActor{
+		PrincipalID: adapter.principal,
+		Kind:        contracts.PrincipalWorkload,
+		Audience:    contracts.AudienceControlAPI,
+	}
+	cancelRequest := runtimecontract.CancellationRequest{
+		SchemaRevision:          runtimecontract.SchemaRevisionV1,
+		RequestID:               requestID,
+		Target:                  runtimecontract.CancellationRun,
+		TargetID:                runID,
+		ExpectedStateGeneration: seed.RunStateGeneration,
+		Mode:                    runtimecontract.CancellationCancel,
+		Actor:                   actor,
+		ReasonCode:              "user_cancel",
+		RequestedAt:             requestedAt,
+	}
+	requestDigest, err := canonical.Digest(
+		"agent_control.runtime_cancellation_request.v1", cancelRequest)
+	if err != nil {
+		return CortexRunCancellationResult{}, err
+	}
+	command := runtimecontract.SubmitCancellationRequestCommand{
+		SchemaRevision: runtimecontract.SchemaRevisionV1,
+		Envelope: contracts.CommandEnvelope{
+			SchemaRevision: contracts.SchemaRevisionV1,
+			CommandID: deterministicControlStageID(
+				adapter.principal, "cancellation_command", requestID),
+			Actor:          actor,
+			Audience:       contracts.AudienceControlAPI,
+			CommandType:    "submit_cancellation_request",
+			IdempotencyKey: idempotencyKey,
+			RequestDigest:  requestDigest,
+			CausationID:    requestID,
+			CorrelationID:  runID,
+			Deadline:       requestedAt.Add(30 * time.Second),
+		},
+		Request: cancelRequest,
+	}
+	if command.Validate() != nil {
+		return CortexRunCancellationResult{},
+			fmt.Errorf("invalid assembled Cortex cancellation command")
+	}
+	raw, err := json.Marshal(command)
+	if err != nil {
+		return CortexRunCancellationResult{}, err
+	}
+	var responseRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.cancel_cortex_run($1,$2)::TEXT`,
+			subjectID, string(raw),
+		).Scan(&responseRaw)
+	}); err != nil {
+		return CortexRunCancellationResult{},
+			fmt.Errorf("cancel Cortex Run: %w", err)
+	}
+	return decodeRunCancellationResult(responseRaw, requestID)
+}
+
+func (adapter *PostgresAdapter) getRunCancellationSeed(
+	ctx context.Context,
+	runID string,
+	subjectID string,
+) (CortexRunCancellationSeed, error) {
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.get_cortex_run_cancellation_seed($1,$2)::TEXT`,
+			runID, subjectID,
+		).Scan(&raw)
+	}); err != nil {
+		return CortexRunCancellationSeed{},
+			fmt.Errorf("read Cortex Run cancellation seed: %w", err)
+	}
+	var seed CortexRunCancellationSeed
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&seed) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		(seed.Status != "ready" && seed.Status != "terminal" &&
+			seed.Status != "denied") {
+		return CortexRunCancellationSeed{},
+			fmt.Errorf("invalid Cortex Run cancellation seed")
+	}
+	if seed.Status == "ready" &&
+		(seed.RunID != runID || seed.RunStateGeneration < 1 ||
+			(seed.RunState != "queued" && seed.RunState != "running" &&
+				seed.RunState != "waiting" &&
+				seed.RunState != "canceling")) {
+		return CortexRunCancellationSeed{},
+			fmt.Errorf("invalid ready Cortex Run cancellation seed")
+	}
+	if seed.Status == "terminal" {
+		seed.ReasonCode = "run_already_terminal"
+	}
+	return seed, nil
+}
+
+func (adapter *PostgresAdapter) getRunCancellationResult(
+	ctx context.Context,
+	requestID string,
+	subjectID string,
+) (CortexRunCancellationResult, bool, error) {
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.get_cortex_run_cancellation_result($1,$2)::TEXT`,
+			requestID, subjectID,
+		).Scan(&raw)
+	}); err != nil {
+		return CortexRunCancellationResult{}, false,
+			fmt.Errorf("read Cortex Run cancellation replay: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return CortexRunCancellationResult{}, false, nil
+	}
+	result, err := decodeRunCancellationResult(raw, requestID)
+	return result, err == nil, err
+}
+
+func decodeRunCancellationResult(
+	raw []byte,
+	requestID string,
+) (CortexRunCancellationResult, error) {
+	var result CortexRunCancellationResult
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		(result.Status != "canceled" && result.Status != "canceling" &&
+			result.Status != "terminal" && result.Status != "denied") ||
+		result.ReasonCode == "" ||
+		(result.RequestID != "" && result.RequestID != requestID) ||
+		result.UnknownTurns < 0 || result.TerminalizedTurns < 0 ||
+		result.TerminalizedAttempts < 0 || result.ClosedSessions < 0 ||
+		result.TerminalizedTasks < 0 {
+		return CortexRunCancellationResult{},
+			fmt.Errorf("invalid Cortex Run cancellation response")
+	}
+	if result.Status == "canceled" && result.RunState != "canceled" {
+		return CortexRunCancellationResult{},
+			fmt.Errorf("invalid canceled Cortex Run response")
+	}
+	return result, nil
 }
 
 func (adapter *PostgresAdapter) GetRunResult(ctx context.Context, runID string) (CortexRunResult, error) {
@@ -2006,6 +2218,39 @@ func (adapter *PostgresAdapter) ReconcileExpiredRuns(
 		result.ClosedSessions < 0 || result.TerminalizedTasks < 0 {
 		return ExpiredRunReconciliation{},
 			fmt.Errorf("invalid expired Run reconciliation response")
+	}
+	return result, nil
+}
+
+func (adapter *PostgresAdapter) ReconcileRunCancellations(
+	ctx context.Context,
+	limit int,
+) (RunCancellationReconciliation, error) {
+	if adapter == nil || adapter.db == nil || limit < 1 || limit > 32 {
+		return RunCancellationReconciliation{},
+			fmt.Errorf("invalid Cortex Run cancellation reconciliation")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.reconcile_cortex_run_cancellations($1)::TEXT`,
+			limit,
+		).Scan(&raw)
+	}); err != nil {
+		return RunCancellationReconciliation{},
+			fmt.Errorf("reconcile Cortex Run cancellations: %w", err)
+	}
+	var result RunCancellationReconciliation
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		result.Status != "reconciled" || result.Processed < 0 ||
+		result.Processed > int64(limit) || result.Canceled < 0 ||
+		result.Pending < 0 ||
+		result.Canceled+result.Pending != result.Processed {
+		return RunCancellationReconciliation{},
+			fmt.Errorf("invalid Cortex Run cancellation reconciliation response")
 	}
 	return result, nil
 }

@@ -133,3 +133,29 @@ func TestValidateOperationsHealthEnforcesBoundedConsistentProjection(t *testing.
 		t.Fatal("terminal Run was accepted in the active projection")
 	}
 }
+
+func TestDecodeRunCancellationResultRejectsMismatchedIdentity(t *testing.T) {
+	result, err := decodeRunCancellationResult([]byte(`{
+		"status":"canceled",
+		"run_id":"run-1",
+		"run_state":"canceled",
+		"request_id":"cancel-1",
+		"reason_code":"user_cancel",
+		"canceled_at":"2026-07-24T00:00:00Z",
+		"terminalized_turns":1,
+		"terminalized_attempts":1,
+		"closed_sessions":1,
+		"terminalized_tasks":1
+	}`), "cancel-1")
+	if err != nil || result.Status != "canceled" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if _, err := decodeRunCancellationResult([]byte(`{
+		"status":"canceled",
+		"run_state":"canceled",
+		"request_id":"cancel-other",
+		"reason_code":"user_cancel"
+	}`), "cancel-1"); err == nil {
+		t.Fatal("mismatched cancellation request identity was accepted")
+	}
+}

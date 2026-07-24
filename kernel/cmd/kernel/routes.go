@@ -69,6 +69,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /agent/query-jobs/{id}", s.authorizeAgentWeb(s.getAgentQueryJob))
 	mux.HandleFunc("POST /agent/cortex-requests", s.authorizeAgentWeb(s.postCortexRequest))
 	mux.HandleFunc("GET /agent/cortex-runs/{id}", s.authorizeAgentWeb(s.getCortexRun))
+	mux.HandleFunc("POST /agent/cortex-runs/{id}/cancel", s.authorizeAgentWeb(s.postCortexRunCancellation))
 	mux.HandleFunc("GET /agent/cortex-conversations/{id}", s.authorizeAgentWeb(s.getCortexConversation))
 	mux.HandleFunc("GET /agent/cortex-operations", s.authorizeAgentWeb(s.getCortexOperations))
 

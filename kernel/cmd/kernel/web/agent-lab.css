@@ -109,6 +109,8 @@ button:disabled { opacity:.55; cursor:wait; }
 button.secondary { width:auto; margin:0; padding:9px 13px; background:transparent; color:#c4d9d0; border:1px solid #335d50; }
 .badge { padding:7px 10px; border:1px solid #397761; border-radius:999px; color:#72dfb4; font-size:12px; font-weight:800; }
 .result-head { margin-top:28px; color:#a6beb4; }
+.result-actions { display:flex; gap:10px; align-items:center; justify-content:flex-end; }
+button.secondary.danger { color:#ffb0b0; border-color:#7b3f45; }
 #status { color:#72dfb4; }
 pre { min-height:190px; max-height:55vh; overflow:auto; padding:18px; border-radius:12px; background:#030a08; border:1px solid #1e3b32; color:#d9f4e8; white-space:pre-wrap; word-break:break-word; }
 .conversation { display:grid; gap:10px; max-height:46vh; overflow:auto; padding:12px; border:1px solid #1e3b32; border-radius:12px; background:#06100d; }
@@ -127,4 +129,5 @@ pre { min-height:190px; max-height:55vh; overflow:auto; padding:18px; border-rad
   .operations-item { flex-direction:column; }
   .operations-item span:last-child { text-align:left; }
   .task-graph-lanes { grid-template-columns:1fr; }
+  .result-actions { align-items:flex-end; flex-direction:column-reverse; }
 }

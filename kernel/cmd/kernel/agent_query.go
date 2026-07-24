@@ -40,6 +40,11 @@ type cortexSubmission struct {
 	ConversationCreatedAt string `json:"conversation_created_at"`
 }
 
+type cortexCancellationRequest struct {
+	RequestID      string `json:"request_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
 func legacyAgentQueryGone(w http.ResponseWriter, _ *http.Request) {
 	writeAgentQueryError(w, http.StatusGone, "agent_query_retired", "use /agent/cortex-requests")
 }
@@ -79,11 +84,39 @@ func (s *server) getCortexRun(w http.ResponseWriter, r *http.Request) {
 		response["status"] = "succeeded"
 		response["result"] = map[string]any{"workflow": "answer", "cognition": "llm", "model": "gpt-5.6-sol", "answer": text, "run_id": r.PathValue("id")}
 	}
-	if state == "failed" || state == "canceled" || state == "dead_lettered" {
+	if state == "canceled" {
+		response["status"] = "canceled"
+	}
+	if state == "failed" || state == "dead_lettered" {
 		response["status"] = "failed"
 		response["error_code"] = "cortex_run_failed"
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) postCortexRunCancellation(w http.ResponseWriter, r *http.Request) {
+	runID := strings.TrimSpace(r.PathValue("id"))
+	var input cortexCancellationRequest
+	if !decodeJSONBody(w, r, &input) {
+		return
+	}
+	if !validCortexConversationID(runID) ||
+		!validCortexConversationID(input.RequestID) ||
+		!validCortexConversationID(input.IdempotencyKey) {
+		writeAgentQueryError(w, http.StatusBadRequest,
+			"cortex_cancellation_invalid", "Cancellation request is invalid")
+		return
+	}
+	raw, status, code := s.cancelCortexRun(r.Context(), runID, input)
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable, code,
+			"Cortex Run cancellation is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
 }
 
 func (s *server) getCortexConversation(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +206,59 @@ func (s *server) fetchCortexOperations(ctx context.Context) (json.RawMessage, st
 		return nil, "cortex_response_invalid"
 	}
 	return json.RawMessage(raw), ""
+}
+
+func (s *server) cancelCortexRun(
+	ctx context.Context,
+	runID string,
+	input cortexCancellationRequest,
+) (json.RawMessage, int, string) {
+	token, err := s.cortexToken()
+	if err != nil {
+		return nil, 0, "cortex_credential_unavailable"
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return nil, 0, "cortex_cancellation_invalid"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(s.cortexURL, "/")+"/v1/runs/"+runID+"/cancel",
+		bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	client := s.runtimeHTTP
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, "cortex_unavailable"
+	}
+	defer resp.Body.Close()
+	responseRaw, err := io.ReadAll(io.LimitReader(
+		resp.Body, maxAgentQueryResponseBytes+1))
+	if err != nil || int64(len(responseRaw)) > maxAgentQueryResponseBytes {
+		return nil, 0, "cortex_response_invalid"
+	}
+	if resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusAccepted &&
+		resp.StatusCode != http.StatusConflict &&
+		resp.StatusCode != http.StatusNotFound {
+		return nil, 0, "cortex_cancellation_rejected"
+	}
+	var result struct {
+		Status     string `json:"status"`
+		RunID      string `json:"run_id"`
+		ReasonCode string `json:"reason_code"`
+	}
+	if json.Unmarshal(responseRaw, &result) != nil ||
+		(result.Status != "canceled" && result.Status != "canceling" &&
+			result.Status != "terminal" && result.Status != "denied") ||
+		result.ReasonCode == "" ||
+		(result.RunID != "" && result.RunID != runID) {
+		return nil, 0, "cortex_response_invalid"
+	}
+	return json.RawMessage(responseRaw), resp.StatusCode, ""
 }
 
 func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (cortexSubmission, string) {

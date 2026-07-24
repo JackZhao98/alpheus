@@ -81,6 +81,7 @@ func run() error {
 	startCortexScoutContinuationRecovery(recoveryContext, adapter)
 	startCortexTaskGraphJoinRecovery(recoveryContext, adapter)
 	startCortexExpiredRunRecovery(recoveryContext, adapter)
+	startCortexRunCancellationRecovery(recoveryContext, adapter)
 	answerSchema := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,
@@ -357,6 +358,61 @@ func run() error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("POST /v1/runs/{id}/cancel", func(w http.ResponseWriter, request *http.Request) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			RequestID      string `json:"request_id"`
+			IdempotencyKey string `json:"idempotency_key"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			strings.TrimSpace(body.RequestID) != body.RequestID ||
+			strings.TrimSpace(body.IdempotencyKey) != body.IdempotencyKey ||
+			body.RequestID == "" || len(body.RequestID) > 200 ||
+			body.IdempotencyKey == "" || len(body.IdempotencyKey) > 200 {
+			http.Error(w, "invalid cancellation request", http.StatusBadRequest)
+			return
+		}
+		result, err := adapter.CancelRun(
+			request.Context(),
+			strings.TrimSpace(request.PathValue("id")),
+			subject.PrincipalID,
+			body.RequestID,
+			body.IdempotencyKey,
+			time.Now().UTC(),
+		)
+		if err != nil {
+			log.Printf("Cortex Run cancellation failed: %v", err)
+			http.Error(w, "Run cancellation unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		statusCode := http.StatusOK
+		switch result.Status {
+		case "canceling":
+			statusCode = http.StatusAccepted
+		case "terminal":
+			statusCode = http.StatusConflict
+		case "denied":
+			if result.ReasonCode == "cancellation_target_not_found" {
+				statusCode = http.StatusNotFound
+			} else {
+				statusCode = http.StatusConflict
+			}
+		case "canceled":
+		default:
+			http.Error(w, "invalid cancellation result", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(statusCode)
 		_ = json.NewEncoder(w).Encode(result)
 	})
 	mux.HandleFunc("GET /v1/conversations/{id}", func(w http.ResponseWriter, request *http.Request) {

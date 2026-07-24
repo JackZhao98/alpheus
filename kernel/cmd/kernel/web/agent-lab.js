@@ -17,6 +17,25 @@ function formatError(error) {
 
 let currentConversation = null;
 let conversationEntries = [];
+let currentRunID = null;
+let cancellationRequested = false;
+
+function setActiveRun(runID) {
+  currentRunID = runID || null;
+  const button = byId("cancel-run");
+  button.classList.toggle("hidden", !currentRunID);
+  button.disabled = !currentRunID || cancellationRequested;
+  button.textContent = cancellationRequested ? "正在取消…" : "取消当前 Run";
+}
+
+function newCancellationID() {
+  if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0,4).join("")}-${hex.slice(4,6).join("")}-${hex.slice(6,8).join("")}-${hex.slice(8,10).join("")}-${hex.slice(10).join("")}`;
+}
 
 // This operator-facing catalog mirrors the reviewed Cortex allowlist. Runtime
 // authorization remains server-side and every execution still requires an
@@ -282,6 +301,7 @@ async function restoreRun() {
   const job = await request(
     `/agent/cortex-runs/${encodeURIComponent(runID)}`);
   renderTrace(job);
+  setActiveRun(job.status === "running" || job.status === "queued" ? runID : null);
   if (job.status === "succeeded" && job.result) {
     byId("result").textContent = JSON.stringify(job.result, null, 2);
     byId("status").textContent =
@@ -289,6 +309,9 @@ async function restoreRun() {
   } else if (job.status === "failed") {
     byId("result").textContent = "No result returned.";
     byId("status").textContent = "FAILED CLOSED";
+  } else if (job.status === "canceled") {
+    byId("result").textContent = "该 Cortex Run 已由用户取消；没有生成回答。";
+    byId("status").textContent = "已取消 · 资源已回收";
   } else {
     byId("result").textContent = "This Cortex Run is still in progress.";
     byId("status").textContent = "AGENTS WORKING";
@@ -335,6 +358,8 @@ function renderTrace(job) {
       tool_call_id: event.tool_call_id,
       tool_id: event.tool_id,
       receipt_id: event.receipt_id,
+      request_id: event.request_id,
+      reason_code: event.reason_code,
       error_code: event.error_code || undefined,
     })),
   };
@@ -1089,6 +1114,7 @@ async function runToolPrecisionTest(test, row, prompt, button) {
 
 async function waitForAgentQuery(job) {
   const deadline = Date.now() + 540000;
+  setActiveRun(job.id);
   while (job.status === "queued" || job.status === "running") {
     if (Date.now() >= deadline) throw new Error("Agent Team 仍在运行，请稍后重试。");
     byId("status").textContent = job.status === "queued" ? "QUERY QUEUED" : "AGENTS WORKING";
@@ -1096,9 +1122,45 @@ async function waitForAgentQuery(job) {
     await wait(750);
     job = await request(`/agent/cortex-runs/${encodeURIComponent(job.id)}`);
   }
+  setActiveRun(null);
   renderTrace(job);
   return job;
 }
+
+byId("cancel-run").addEventListener("click", async () => {
+  if (!currentRunID || cancellationRequested) return;
+  cancellationRequested = true;
+  const runID = currentRunID;
+  setActiveRun(runID);
+  byId("query-error").textContent = "";
+  byId("status").textContent = "正在取消 · 等待资源回收";
+  try {
+    const requestID = newCancellationID();
+    const result = await request(
+      `/agent/cortex-runs/${encodeURIComponent(runID)}/cancel`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          request_id:requestID,
+          idempotency_key:`agent-lab-cancel-${requestID}`,
+        }),
+      });
+    byId("status").textContent = result.status === "canceled"
+      ? "已取消 · 资源已回收"
+      : "正在取消 · 等待外部结果确认";
+    if (result.status === "canceled") {
+      const job = await request(
+        `/agent/cortex-runs/${encodeURIComponent(runID)}`);
+      renderTrace(job);
+      byId("result").textContent =
+        "该 Cortex Run 已由用户取消；没有生成回答。";
+      setActiveRun(null);
+    }
+  } catch (error) {
+    cancellationRequested = false;
+    setActiveRun(runID);
+    byId("query-error").textContent = formatError(error);
+  }
+});
 
 byId("query-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1112,6 +1174,8 @@ byId("query-form").addEventListener("submit", async (event) => {
   byId("status").textContent = "CORTEX WORKING";
   byId("query-error").textContent = "";
   byId("result").textContent = "Awaiting dispatcher…";
+  cancellationRequested = false;
+  setActiveRun(null);
   renderTrace(null);
   try {
     let job = await request("/agent/cortex-requests", {
@@ -1121,8 +1185,16 @@ byId("query-form").addEventListener("submit", async (event) => {
         conversation_created_at: currentConversation?.createdAt})
     });
     if (!job.conversation_id || !job.conversation_created_at) throw new Error("Cortex conversation was not accepted");
+    const url = new URL(window.location.href);
+    url.searchParams.set("run", job.id);
+    history.replaceState(null, "", url);
     setConversation({id: job.conversation_id, createdAt: job.conversation_created_at});
     job = await waitForAgentQuery(job);
+    if (job.status === "canceled") {
+      byId("result").textContent = "该 Cortex Run 已由用户取消；没有生成回答。";
+      byId("status").textContent = "已取消 · 资源已回收";
+      return;
+    }
     if (job.status !== "succeeded") throw new Error(job.error_code || "agent_query_failed");
     const result = job.result;
     byId("result").textContent = JSON.stringify(result, null, 2);
@@ -1145,6 +1217,8 @@ byId("query-form").addEventListener("submit", async (event) => {
     byId("status").textContent = "FAILED CLOSED";
     byId("query-error").textContent = formatError(error);
   } finally {
+    cancellationRequested = false;
+    setActiveRun(null);
     byId("run").disabled = false;
   }
 });
