@@ -79,3 +79,69 @@ func TestKernelEquityFundamentalsRejectsInventedBounds(t *testing.T) {
 		t.Fatal("invented fundamentals bounds was accepted")
 	}
 }
+
+func TestKernelSearchRejectsInventedRobinhoodEnums(t *testing.T) {
+	valid := KernelReadRequest{
+		ToolID:     "kernel_search",
+		SourceTool: "search",
+		Arguments: map[string]any{
+			"query":      "SPCX",
+			"asset_type": "instrument",
+			"limit":      json.Number("10"),
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid search rejected: %v", err)
+	}
+	valid.Arguments["asset_type"] = "equity"
+	if issue := valid.ValidationIssue(); issue != "kernel_tool_asset_type_invalid" {
+		t.Fatalf("invalid asset type issue = %q", issue)
+	}
+	valid.Arguments["asset_type"] = "instrument"
+	valid.Arguments["limit"] = json.Number("10.5")
+	if issue := valid.ValidationIssue(); issue != "kernel_tool_limit_invalid" {
+		t.Fatalf("fractional limit issue = %q", issue)
+	}
+}
+
+func TestKernelHistoricalsRequireExactProviderVocabulary(t *testing.T) {
+	valid := KernelReadRequest{
+		ToolID:     "kernel_equity_historicals",
+		SourceTool: "get_equity_historicals",
+		Arguments: map[string]any{
+			"symbols":         []any{"TSLA", "SPCX"},
+			"start_time":      "2026-07-20T00:00:00Z",
+			"end_time":        "2026-07-24T00:00:00Z",
+			"interval":        "hour",
+			"bounds":          "extended",
+			"adjustment_type": "split",
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid historical request rejected: %v", err)
+	}
+	cases := []struct {
+		key   string
+		value any
+		issue string
+	}{
+		{"interval", "1h", "kernel_tool_interval_invalid"},
+		{"interval", "1day", "kernel_tool_interval_invalid"},
+		{"bounds", "all", "kernel_tool_bounds_invalid"},
+		{"adjustment_type", "everything", "kernel_tool_adjustment_type_invalid"},
+		{"start_time", "2026-07-20", "kernel_tool_start_time_invalid"},
+	}
+	for _, test := range cases {
+		original := valid.Arguments[test.key]
+		valid.Arguments[test.key] = test.value
+		if issue := valid.ValidationIssue(); issue != test.issue {
+			t.Fatalf("%s issue = %q, want %q", test.key, issue, test.issue)
+		}
+		valid.Arguments[test.key] = original
+	}
+	valid.Arguments["interval"] = "day"
+	valid.Arguments["adjustment_type"] = "all"
+	if issue := valid.ValidationIssue(); issue != "kernel_tool_adjustment_interval_invalid" {
+		t.Fatalf("interday all-adjustment issue = %q", issue)
+	}
+}
