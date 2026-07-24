@@ -215,8 +215,8 @@
 | Observe / Copilot / Agentic | 状态层已部署 | 每个环境的模式和 generation 永久保存并有 append-only 事件。Paper 可切换三档；Live 强制锁在 Observe。模式切换本身不等于获得执行权限 |
 | Cortex Paper Effect Bridge | Kernel 入口已部署 | 独立 secret-file credential、只允许 `agent-default` Paper、只允许 equity、调用方不能指定成交价、Observe/Copilot 时 409 拒绝；无法选择或访问 Robinhood 账户 |
 | Cortex Candidate 生成、存储与投影 | 已部署 | Workflow v9 允许最终 Decision Desk 生成一个严格、effect-free 的 equity Paper Candidate；Intent 和 Specialist 只能返回 `null`。Candidate 永久绑定来源 Model Result、Run、Task、Attempt 和有效 Worker Lease；普通回答不产生 Candidate，任何写入失败都会阻止 Run 伪装成功。Console 已按用户隔离显示 Candidate 与来源 Run；Live 环境不显示 Paper Candidate |
-| Candidate 授权与执行收据 | **下一步** | Copilot 需要人工确认，Agentic 需要 Control 策略授权；随后才允许调用 Kernel Paper Effect Bridge，并持久化授权、执行收据和失败 Trace。完成前 Effect Tool 不向 LLM 暴露 |
-| Copilot 人工确认 | 待完成 | Candidate 可见、可追问、可批准/拒绝；批准动作必须 generation-fenced 且精确幂等 |
+| Candidate 授权与执行收据 | **下一步** | Agentic 需要 Control 策略授权；随后才允许调用 Kernel Paper Effect Bridge，并持久化授权、执行收据和失败 Trace。完成前 Effect Tool 不向 LLM 暴露 |
+| Copilot 人工确认 | 已部署 | Candidate 状态为 `proposed → approved/rejected`，只有 Paper + Copilot 显示批准/拒绝；Kernel 在 Observe/Agentic 拒绝人工审批。决定按 generation 防并发并支持同决定重放，Cortex 校验用户归属和来源 Run 已成功，审计事件 append-only。批准本身仍不成交 |
 | Agentic Paper 自动执行 | 待完成 | 只有 `paper + agentic` 且 Candidate/授权/限额全部通过时才调用 Effect Bridge；失败原因投影到 Console |
 | 数据流与日内循环 | 待完成 | Moody Blues replay/stream → 数学 Trigger → Cortex 决策 → Paper Candidate/成交 → Portfolio/活动更新；用户可在右侧对话中途参与 |
 | Live 执行 | 未开放 | 继续强制 Observe；必须在 Paper 日内循环验收、限额、Kill Switch、确认和收据链完整后单独启用，不由 UI 按钮自行放开 |

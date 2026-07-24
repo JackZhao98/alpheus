@@ -70,6 +70,12 @@ type agentConsoleAutonomyCommand struct {
 	Mode               string `json:"mode"`
 }
 
+type agentConsoleCandidateReviewCommand struct {
+	Environment        string `json:"environment"`
+	ExpectedGeneration int64  `json:"expected_generation"`
+	Decision           string `json:"decision"`
+}
+
 func (s *server) agentConsoleEnvironment(
 	requested string,
 ) agentConsoleEnvironment {
@@ -327,6 +333,59 @@ func (s *server) getAgentConsoleCandidates(
 		writeAgentQueryError(w, http.StatusServiceUnavailable,
 			"cortex_paper_candidates_unavailable",
 			"Paper Candidates are unavailable")
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func (s *server) postAgentConsoleCandidateReview(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	candidateID := strings.TrimSpace(r.PathValue("id"))
+	var input agentConsoleCandidateReviewCommand
+	if !validCortexConversationID(candidateID) ||
+		!decodeJSONBody(w, r, &input) {
+		if !validCortexConversationID(candidateID) {
+			writeAgentQueryError(w, http.StatusBadRequest,
+				"paper_candidate_invalid",
+				"Paper Candidate is invalid")
+		}
+		return
+	}
+	input.Environment = strings.TrimSpace(input.Environment)
+	input.Decision = strings.TrimSpace(input.Decision)
+	if input.Environment != "paper" ||
+		input.ExpectedGeneration < 1 ||
+		(input.Decision != "approve" && input.Decision != "reject") {
+		writeAgentQueryError(w, http.StatusBadRequest,
+			"paper_candidate_review_invalid",
+			"Paper Candidate review is invalid")
+		return
+	}
+	profile, err := s.store.AgentAutonomyProfile("paper")
+	if err != nil {
+		writeInternalError(w, "read Paper autonomy", err)
+		return
+	}
+	if profile.Mode != "copilot" {
+		writeAgentQueryError(w, http.StatusConflict,
+			"paper_candidate_review_requires_copilot",
+			"Paper Candidate review requires Copilot mode")
+		return
+	}
+	body, _ := json.Marshal(map[string]any{
+		"expected_generation": input.ExpectedGeneration,
+		"decision":            input.Decision,
+	})
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodPost,
+		"/v1/paper-candidates/"+candidateID+"/review", body,
+	)
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable,
+			"cortex_paper_candidate_review_unavailable",
+			"Paper Candidate review is unavailable")
 		return
 	}
 	writeAgentConsoleUpstream(w, raw, status)

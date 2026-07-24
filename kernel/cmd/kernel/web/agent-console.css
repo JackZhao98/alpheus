@@ -469,7 +469,28 @@ td:first-child { color:#c4ccc6; font-weight:800; }
   font-weight:900;
   letter-spacing:.08em;
 }
+.candidate-actions { display:grid; gap:5px; }
+.candidate-actions button {
+  min-width:42px;
+  padding:5px 7px;
+  border:1px solid #34463a;
+  border-radius:3px;
+  background:#142019;
+  color:var(--green-hot);
+  font-size:7px;
+  font-weight:900;
+  letter-spacing:.05em;
+  cursor:pointer;
+}
+.candidate-actions button[data-decision="reject"] {
+  border-color:#49312f;
+  background:#211615;
+  color:#d28e86;
+}
+.candidate-actions button:disabled { opacity:.35; cursor:wait; }
 .candidate-item.source_not_committed .candidate-state { color:var(--red); }
+.candidate-item.approved .candidate-state { color:var(--green); }
+.candidate-item.rejected .candidate-state { color:var(--red); }
 .operation-list { display:grid; }
 .operation-item {
   display:grid;

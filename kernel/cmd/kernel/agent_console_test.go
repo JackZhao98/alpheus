@@ -346,3 +346,85 @@ func TestAgentConsoleCandidatesUseCortexAuthorityAndHideInLive(t *testing.T) {
 			live.Code, live.Body.String(), requests)
 	}
 }
+
+func TestAgentConsoleCandidateReviewRequiresCopilotAndProxiesDecision(
+	t *testing.T,
+) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			upstreamCalls++
+			if r.Method != http.MethodPost ||
+				r.URL.Path != "/v1/paper-candidates/candidate-1/review" ||
+				r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("unexpected upstream request: %s %s auth=%q",
+					r.Method, r.URL.Path, r.Header.Get("Authorization"))
+			}
+			var command struct {
+				ExpectedGeneration int64  `json:"expected_generation"`
+				Decision           string `json:"decision"`
+			}
+			if json.NewDecoder(r.Body).Decode(&command) != nil ||
+				command.ExpectedGeneration != 1 ||
+				command.Decision != "approve" {
+				t.Fatalf("command=%+v", command)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":       "reviewed",
+				"candidate_id": "candidate-1",
+				"generation":   2,
+				"state":        "approved",
+			})
+		}))
+	defer upstream.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cortex-token")
+	if err := os.WriteFile(
+		tokenPath, []byte("test-token"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	st := newMemoryStore()
+	s := &server{
+		store:           st,
+		cortexURL:       upstream.URL,
+		cortexTokenFile: tokenPath,
+		runtimeHTTP:     upstream.Client(),
+	}
+	body := `{"environment":"paper","expected_generation":1,"decision":"approve"}`
+	observe := httptest.NewRecorder()
+	observeRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/agent/console/candidates/candidate-1/review",
+		strings.NewReader(body),
+	)
+	observeRequest.SetPathValue("id", "candidate-1")
+	observeRequest.Header.Set("Content-Type", "application/json")
+	s.postAgentConsoleCandidateReview(observe, observeRequest)
+	if observe.Code != http.StatusConflict ||
+		!strings.Contains(observe.Body.String(),
+			`"error_code":"paper_candidate_review_requires_copilot"`) ||
+		upstreamCalls != 0 {
+		t.Fatalf("observe status=%d body=%s calls=%d",
+			observe.Code, observe.Body.String(), upstreamCalls)
+	}
+	if _, err := st.SetAgentAutonomy(
+		"paper", "copilot", 1, "owner-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	copilot := httptest.NewRecorder()
+	copilotRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/agent/console/candidates/candidate-1/review",
+		strings.NewReader(body),
+	)
+	copilotRequest.SetPathValue("id", "candidate-1")
+	copilotRequest.Header.Set("Content-Type", "application/json")
+	s.postAgentConsoleCandidateReview(copilot, copilotRequest)
+	if copilot.Code != http.StatusOK ||
+		!strings.Contains(copilot.Body.String(), `"state":"approved"`) ||
+		upstreamCalls != 1 {
+		t.Fatalf("copilot status=%d body=%s calls=%d",
+			copilot.Code, copilot.Body.String(), upstreamCalls)
+	}
+}

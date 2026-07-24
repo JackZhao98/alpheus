@@ -14,6 +14,7 @@ func validPaperCandidateViewFixture() PaperCandidateView {
 		CandidateID:    "11111111-1111-4111-8111-111111111111",
 		RunID:          "22222222-2222-4222-8222-222222222222",
 		TaskID:         "33333333-3333-4333-8333-333333333333",
+		Generation:     1,
 		Status:         "proposed",
 		SourceRunState: "succeeded",
 		Eligible:       true,
@@ -54,5 +55,35 @@ func TestPaperCandidateProjectionRejectsMalformedProposal(t *testing.T) {
 	value.Proposal.Symbol = "spy"
 	if err := validatePaperCandidateView(value); err == nil {
 		t.Fatal("malformed Candidate proposal was accepted")
+	}
+}
+
+func TestPaperCandidateReviewValidationSeparatesDecisionFromConflict(
+	t *testing.T,
+) {
+	reviewed := PaperCandidateReview{
+		Status:      "reviewed",
+		CandidateID: "11111111-1111-4111-8111-111111111111",
+		Generation:  2,
+		State:       "approved",
+		DecidedBy:   "owner-1",
+		DecidedAt:   "2026-07-24T08:00:00Z",
+	}
+	if err := validatePaperCandidateReview(reviewed); err != nil {
+		t.Fatal(err)
+	}
+	conflict := PaperCandidateReview{
+		Status:      "conflict",
+		ReasonCode:  "candidate_review_conflict",
+		CandidateID: reviewed.CandidateID,
+		Generation:  2,
+		State:       "rejected",
+	}
+	if err := validatePaperCandidateReview(conflict); err != nil {
+		t.Fatal(err)
+	}
+	conflict.ReasonCode = "invented"
+	if err := validatePaperCandidateReview(conflict); err == nil {
+		t.Fatal("invented review conflict was accepted")
 	}
 }

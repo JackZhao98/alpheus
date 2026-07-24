@@ -20,7 +20,8 @@ async function request(path,options = {}) {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const error = new Error(payload?.error || `HTTP ${response.status}`);
-    error.code = payload?.error_code || `http_${response.status}`;
+    error.code = payload?.error_code || payload?.reason_code ||
+      `http_${response.status}`;
     error.status = response.status;
     throw error;
   }
@@ -58,6 +59,9 @@ function showError(error) {
     portfolio_unavailable:"账户数据暂时不可用。",
     cortex_unavailable:"Cortex 暂时无法连接。",
     cortex_paper_candidates_unavailable:"Cortex 候选交易暂时不可用。",
+    paper_candidate_review_requires_copilot:"请先切换到 Copilot，再批准或拒绝候选交易。",
+    candidate_review_conflict:"候选交易已被处理，列表已刷新。",
+    candidate_source_not_committed:"来源决策尚未成功提交，不能批准。",
     agent_room_paused:"这个对话已暂停，请在完整对话界面恢复。",
     autonomy_generation_conflict:"自治模式刚被其他操作修改，已重新读取最新状态。",
     live_autonomy_locked:"Live 环境目前仍强制 Observe。",
@@ -240,11 +244,64 @@ function renderCandidates(payload) {
     invalidation.className = "candidate-thesis";
     invalidation.textContent = `INVALIDATION ${proposal.invalidation || "—"}`;
     copy.append(title,meta,thesis,invalidation);
-    const status = document.createElement("span");
-    status.className = "candidate-state";
-    status.textContent = candidate.eligible ? "REVIEW" : "INVALID";
-    item.append(copy,status);
+    if (candidate.status === "proposed" && candidate.eligible &&
+        state.environment === "paper" &&
+        state.autonomy?.selected === "copilot") {
+      const actions = document.createElement("div");
+      actions.className = "candidate-actions";
+      for (const [decision,label] of [
+        ["approve","批准"],["reject","拒绝"],
+      ]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.decision = decision;
+        button.textContent = label;
+        button.addEventListener("click",() =>
+          reviewCandidate(candidate,decision,button));
+        actions.append(button);
+      }
+      item.append(copy,actions);
+    } else {
+      const status = document.createElement("span");
+      status.className = "candidate-state";
+      status.textContent = {
+        proposed:"REVIEW",
+        approved:"APPROVED",
+        rejected:"REJECTED",
+        source_not_committed:"INVALID",
+      }[candidate.status] || "UNKNOWN";
+      item.append(copy,status);
+    }
     list.append(item);
+  }
+}
+
+async function reviewCandidate(candidate,decision,button) {
+  if (!candidate?.candidate_id || !candidate?.generation ||
+      state.environment !== "paper" ||
+      state.autonomy?.selected !== "copilot") return;
+  clearError();
+  const actions = button.closest(".candidate-actions");
+  for (const item of actions?.querySelectorAll("button") || []) {
+    item.disabled = true;
+  }
+  try {
+    await request(
+      `/agent/console/candidates/${encodeURIComponent(candidate.candidate_id)}/review`,
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          environment:"paper",
+          expected_generation:candidate.generation,
+          decision,
+        }),
+      },
+    );
+    await loadCandidates();
+  } catch (error) {
+    showError(error);
+    await loadCandidates().catch(() => {});
   }
 }
 
@@ -719,9 +776,11 @@ for (const button of byId("autonomy-switch").querySelectorAll("button")) {
         }),
       });
       await loadSnapshot();
+      await loadCandidates();
     } catch (error) {
       showError(error);
       await loadSnapshot().catch(() => {});
+      await loadCandidates().catch(() => {});
     }
   });
 }

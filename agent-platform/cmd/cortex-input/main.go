@@ -448,6 +448,48 @@ func run() error {
 			"items":     candidates,
 		})
 	})
+	mux.HandleFunc("POST /v1/paper-candidates/{id}/review", func(
+		w http.ResponseWriter,
+		request *http.Request,
+	) {
+		if !validBearer(request, serviceToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			ExpectedGeneration int64  `json:"expected_generation"`
+			Decision           string `json:"decision"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(
+			w, request.Body, 4<<10,
+		))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&body) != nil ||
+			decoder.Decode(&struct{}{}) != io.EOF {
+			http.Error(w, "invalid Paper Candidate review",
+				http.StatusBadRequest)
+			return
+		}
+		review, err := adapter.ReviewPaperCandidate(
+			request.Context(), subject.PrincipalID,
+			strings.TrimSpace(request.PathValue("id")),
+			body.ExpectedGeneration, strings.TrimSpace(body.Decision),
+		)
+		if err != nil {
+			log.Printf("Cortex Paper Candidate review failed: %v", err)
+			http.Error(w, "Paper Candidate review unavailable",
+				http.StatusServiceUnavailable)
+			return
+		}
+		status := http.StatusOK
+		if review.Status == "conflict" {
+			status = http.StatusConflict
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(review)
+	})
 	mux.HandleFunc("PUT /v1/decision-triggers/{id}", func(w http.ResponseWriter, request *http.Request) {
 		if !validBearer(request, serviceToken) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
