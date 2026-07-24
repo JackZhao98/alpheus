@@ -262,9 +262,22 @@ func (s *server) cancelCortexRun(
 }
 
 func (s *server) submitCortexRequest(ctx context.Context, input agentQueryRequest) (cortexSubmission, string) {
+	text := fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query)
+	return s.submitCortexUserRequest(ctx, input, "agent-lab", text)
+}
+
+func (s *server) submitCortexUserRequest(
+	ctx context.Context,
+	input agentQueryRequest,
+	namespace string,
+	text string,
+) (cortexSubmission, string) {
 	token, err := s.cortexToken()
 	if err != nil {
 		return cortexSubmission{}, "cortex_credential_unavailable"
+	}
+	if namespace == "" || text == "" {
+		return cortexSubmission{}, "cortex_input_invalid"
 	}
 	id := store.NewID()
 	now := time.Now().UTC()
@@ -282,13 +295,13 @@ func (s *server) submitCortexRequest(ctx context.Context, input agentQueryReques
 		conversationCreatedAt = parsed
 		kind = "continuation"
 	} else {
-		conversationID = "agent-lab-" + id
+		conversationID = namespace + "-" + id
 	}
 	// A bounded Scout retry must survive a 120-second Worker lease expiry and
 	// still leave time for the Desk continuation. Keep this below the Agent
 	// Lab's nine-minute polling window.
 	body := map[string]any{"conversation_id": conversationID, "conversation_created_at": conversationCreatedAt, "request_id": id, "kind": kind,
-		"text": fmt.Sprintf("Symbol: %s\n\n%s", input.Symbol, input.Query), "idempotency_key": "agent-lab-" + id,
+		"text": text, "idempotency_key": namespace + "-" + id,
 		"causation_id": id, "correlation_id": id, "deadline": now.Add(8 * time.Minute)}
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.cortexURL, "/")+"/v1/user-requests", bytes.NewReader(raw))

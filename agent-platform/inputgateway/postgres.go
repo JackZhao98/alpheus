@@ -694,7 +694,8 @@ func validateAgentRoom(room AgentRoom) error {
 	updated, updatedErr := time.Parse(time.RFC3339Nano, room.UpdatedAt)
 	if room.ConversationID == "" || !validAgentRoomMode(room.Mode) ||
 		!validAgentRoomTitle(room.Title) ||
-		(room.State != "active" && room.State != "paused") ||
+		(room.State != "active" && room.State != "paused" &&
+			room.State != "archived") ||
 		room.Generation < 1 || room.MessageCount < 1 ||
 		(room.LastRunID == "") != (room.LastRunState == "") ||
 		(room.LastRunState != "" &&

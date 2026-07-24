@@ -197,3 +197,24 @@ func TestDecodeAgentRoomMutation(t *testing.T) {
 		t.Fatal("empty persisted Agent Room was accepted")
 	}
 }
+
+func TestDecodeAgentRoomArchivedMutation(t *testing.T) {
+	raw := []byte(`{
+		"status":"updated",
+		"room":{
+			"conversation_id":"room-1",
+			"conversation_created_at":"2026-07-24T01:00:00Z",
+			"mode":"research",
+			"title":"Finished room",
+			"state":"archived",
+			"generation":3,
+			"last_activity_at":"2026-07-24T01:01:00Z",
+			"updated_at":"2026-07-24T01:02:00Z",
+			"message_count":1
+		}
+	}`)
+	result, err := decodeAgentRoomMutation(raw, "updated")
+	if err != nil || result.Room.State != "archived" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

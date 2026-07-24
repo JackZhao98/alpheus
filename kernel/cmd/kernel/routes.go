@@ -72,6 +72,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /agent/cortex-runs/{id}/cancel", s.authorizeAgentWeb(s.postCortexRunCancellation))
 	mux.HandleFunc("GET /agent/cortex-conversations/{id}", s.authorizeAgentWeb(s.getCortexConversation))
 	mux.HandleFunc("GET /agent/cortex-operations", s.authorizeAgentWeb(s.getCortexOperations))
+	mux.HandleFunc("POST /agent/room-requests", s.authorizeAgentWeb(s.postAgentRoomRequest))
+	mux.HandleFunc("GET /agent/rooms", s.authorizeAgentWeb(s.getAgentRooms))
+	mux.HandleFunc("GET /agent/rooms/{id}", s.authorizeAgentWeb(s.getAgentRoom))
+	mux.HandleFunc("PATCH /agent/rooms/{id}", s.authorizeAgentWeb(s.patchAgentRoom))
 
 	if s.tradingMode() == config.ModeReadOnly {
 		mux.HandleFunc("POST /operations", methodNotAllowed)
