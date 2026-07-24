@@ -1,10 +1,12 @@
 package inputgateway
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -19,6 +21,57 @@ type DecisionTriggerWake struct {
 	RootTaskID   string `json:"root_task_id"`
 	RunState     string `json:"run_state"`
 	TaskState    string `json:"task_state"`
+}
+
+type PendingDecisionTriggerWake struct {
+	Trigger    DecisionTrigger           `json:"trigger"`
+	Sample     DecisionTriggerSample     `json:"sample"`
+	Occurrence DecisionTriggerOccurrence `json:"occurrence"`
+}
+
+func (adapter *PostgresAdapter) ListPendingDecisionTriggerWakes(
+	ctx context.Context,
+	subjectID string,
+	limit int,
+) ([]PendingDecisionTriggerWake, error) {
+	if adapter == nil || adapter.db == nil ||
+		!validDecisionTriggerID(subjectID) ||
+		limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("invalid pending decision Trigger wake list")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.list_pending_cortex_decision_trigger_wakes(
+				$1,$2
+			)::TEXT`,
+			subjectID, limit,
+		).Scan(&raw)
+	}); err != nil {
+		return nil, fmt.Errorf(
+			"list pending Cortex decision Trigger wakes: %w", err)
+	}
+	var items []PendingDecisionTriggerWake
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&items) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		len(items) > limit {
+		return nil, fmt.Errorf("invalid pending decision Trigger wake response")
+	}
+	for _, item := range items {
+		if validateDecisionTrigger(item.Trigger) != nil ||
+			validateDecisionTriggerSample(item.Sample) != nil ||
+			validateDecisionTriggerOccurrence(item.Occurrence) != nil ||
+			!item.Sample.Fired ||
+			item.Sample.TriggerID != item.Trigger.TriggerID ||
+			item.Occurrence.TriggerID != item.Trigger.TriggerID ||
+			item.Occurrence.SampleID != item.Sample.SampleID {
+			return nil, fmt.Errorf("invalid pending decision Trigger wake")
+		}
+	}
+	return items, nil
 }
 
 func (adapter *PostgresAdapter) AdmitDecisionTriggerWake(
@@ -112,6 +165,7 @@ func (adapter *PostgresAdapter) AdmitDecisionTriggerWake(
 	decoder := json.NewDecoder(strings.NewReader(string(responseRaw)))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&wake) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
 		wake.Status != "admitted" ||
 		wake.OccurrenceID != occurrence.OccurrenceID ||
 		!validDecisionTriggerID(wake.RunID) ||

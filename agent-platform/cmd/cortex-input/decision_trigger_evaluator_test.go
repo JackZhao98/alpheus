@@ -17,6 +17,13 @@ type decisionTriggerEvaluationStoreProbe struct {
 	fired    bool
 	occurs   []string
 	wakes    []string
+	pending  []inputgateway.PendingDecisionTriggerWake
+}
+
+func (probe *decisionTriggerEvaluationStoreProbe) ListPendingDecisionTriggerWakes(
+	context.Context, string, int,
+) ([]inputgateway.PendingDecisionTriggerWake, error) {
+	return probe.pending, nil
 }
 
 func (probe *decisionTriggerEvaluationStoreProbe) ListDecisionTriggers(
@@ -155,5 +162,29 @@ func TestEvaluateCortexDecisionTriggersMaterializesOnlyFiredSample(
 		len(probe.wakes) != 1 || probe.wakes[0] != "occurrence-1" {
 		t.Fatalf("count=%d occurrences=%v wakes=%v err=%v",
 			count, probe.occurs, probe.wakes, err)
+	}
+}
+
+func TestRecoverCortexDecisionTriggerWakesReplaysPendingOccurrence(
+	t *testing.T,
+) {
+	trigger := inputgateway.DecisionTrigger{TriggerID: "trigger-mid"}
+	sample := inputgateway.DecisionTriggerSample{
+		SampleID: "sample-1", TriggerID: "trigger-mid", Fired: true,
+	}
+	occurrence := inputgateway.DecisionTriggerOccurrence{
+		OccurrenceID: "occurrence-recovery",
+	}
+	probe := &decisionTriggerEvaluationStoreProbe{
+		pending: []inputgateway.PendingDecisionTriggerWake{{
+			Trigger: trigger, Sample: sample, Occurrence: occurrence,
+		}},
+	}
+	count, err := recoverCortexDecisionTriggerWakes(
+		context.Background(), probe, "owner-1",
+	)
+	if err != nil || count != 1 || len(probe.wakes) != 1 ||
+		probe.wakes[0] != occurrence.OccurrenceID {
+		t.Fatalf("count=%d wakes=%v err=%v", count, probe.wakes, err)
 	}
 }

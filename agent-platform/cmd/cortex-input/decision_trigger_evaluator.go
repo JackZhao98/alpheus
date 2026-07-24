@@ -20,6 +20,9 @@ const (
 )
 
 type decisionTriggerEvaluationStore interface {
+	ListPendingDecisionTriggerWakes(
+		context.Context, string, int,
+	) ([]inputgateway.PendingDecisionTriggerWake, error)
 	ListDecisionTriggers(
 		context.Context, string, int,
 	) ([]inputgateway.DecisionTrigger, error)
@@ -71,10 +74,16 @@ func startCortexDecisionTriggerEvaluator(
 	go func() {
 		for {
 			callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			_, err := evaluateCortexDecisionTriggers(
+			_, recoveryErr := recoverCortexDecisionTriggerWakes(
+				callCtx, store, subjectID,
+			)
+			_, evaluationErr := evaluateCortexDecisionTriggers(
 				callCtx, store, fetch, subjectID,
 			)
 			cancel()
+			err := combineDecisionTriggerErrors(
+				recoveryErr, evaluationErr,
+			)
 			if err != nil && ctx.Err() == nil {
 				log.Printf("Cortex decision Trigger evaluation: %v", err)
 			}
@@ -85,6 +94,47 @@ func startCortexDecisionTriggerEvaluator(
 			}
 		}
 	}()
+}
+
+func recoverCortexDecisionTriggerWakes(
+	ctx context.Context,
+	store decisionTriggerEvaluationStore,
+	subjectID string,
+) (int, error) {
+	pending, err := store.ListPendingDecisionTriggerWakes(
+		ctx, subjectID, cortexDecisionTriggerLimit,
+	)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
+	var failures []string
+	for _, item := range pending {
+		if _, wakeErr := store.AdmitDecisionTriggerWake(
+			ctx, subjectID, item.Trigger, item.Sample, item.Occurrence,
+		); wakeErr != nil {
+			failures = append(failures,
+				fmt.Sprintf("%s: %v",
+					item.Occurrence.OccurrenceID, wakeErr))
+			continue
+		}
+		recovered++
+	}
+	if len(failures) != 0 {
+		return recovered, fmt.Errorf(
+			"pending wakes: %s", strings.Join(failures, "; "))
+	}
+	return recovered, nil
+}
+
+func combineDecisionTriggerErrors(left, right error) error {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	return fmt.Errorf("%v; %v", left, right)
 }
 
 func evaluateCortexDecisionTriggers(
