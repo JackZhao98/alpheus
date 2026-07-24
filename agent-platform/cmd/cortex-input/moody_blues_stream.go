@@ -143,7 +143,8 @@ func registerMoodyBluesStreamHandlers(
 			path := "/internal/v1/moody-blues/providers/" +
 				"gexbot-classic/replays/" + replayID + "/next"
 			raw, status, code := requestMoodyBluesStream(
-				r, client, researchURL, researchToken, path, input,
+				r, client, researchURL, researchToken, path,
+				map[string]any{"generation": input.Generation},
 			)
 			if code != "" {
 				writeMoodyBluesStreamError(w, status, code)
