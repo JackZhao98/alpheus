@@ -115,7 +115,12 @@ func run() error {
 		return err
 	}
 	if apiKey != "" {
+		if _, err := time.LoadLocation("America/New_York"); err != nil {
+			_ = db.Close()
+			return fmt.Errorf("load GEXBOT collection timezone: %w", err)
+		}
 		p.startCollector(context.Background())
+		log.Printf("GEXBOT Provider collector enabled for SPX 09:00-16:00 America/New_York")
 	} else {
 		log.Printf("GEXBOT Provider started in push-only mode; no provider API key is mounted")
 	}

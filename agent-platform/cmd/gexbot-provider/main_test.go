@@ -40,3 +40,25 @@ func TestLiveFailsClosedWithoutCredential(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+func TestCollectionWindowUsesNewYorkMarketSession(t *testing.T) {
+	tests := []struct {
+		name string
+		at   time.Time
+		want bool
+	}{
+		{"before open", time.Date(2026, 7, 23, 12, 59, 59, 0, time.UTC), false},
+		{"at open", time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC), true},
+		{"before close", time.Date(2026, 7, 23, 19, 59, 59, 0, time.UTC), true},
+		{"at close", time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC), false},
+		{"weekend", time.Date(2026, 7, 25, 16, 0, 0, 0, time.UTC), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := collectionWindow(test.at); got != test.want {
+				t.Fatalf("collectionWindow(%s)=%t, want %t",
+					test.at, got, test.want)
+			}
+		})
+	}
+}
