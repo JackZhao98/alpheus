@@ -62,7 +62,7 @@ func (s *server) agentConsoleEnvironment() agentConsoleEnvironment {
 
 func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
 	portfolio := agentConsolePortfolio{}
-	if snapshot, err := s.captureProviderSnapshot(r.Context(), "agent_console"); err != nil {
+	if snapshot, err := s.captureProviderSnapshot(r.Context(), "read_model"); err != nil {
 		portfolio.ErrorCode = "portfolio_unavailable"
 	} else {
 		portfolio.Available = true
