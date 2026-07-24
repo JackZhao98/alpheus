@@ -16,6 +16,7 @@ type decisionTriggerEvaluationStoreProbe struct {
 	values   []json.Number
 	fired    bool
 	occurs   []string
+	wakes    []string
 }
 
 func (probe *decisionTriggerEvaluationStoreProbe) ListDecisionTriggers(
@@ -57,6 +58,21 @@ func (probe *decisionTriggerEvaluationStoreProbe) MaterializeDecisionTriggerOccu
 		OccurrenceDigest:   strings.Repeat("a", 64),
 		SourceRecordDigest: strings.Repeat("b", 64),
 		OccurredAt:         time.Now().UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+func (probe *decisionTriggerEvaluationStoreProbe) AdmitDecisionTriggerWake(
+	_ context.Context,
+	_ string,
+	_ inputgateway.DecisionTrigger,
+	_ inputgateway.DecisionTriggerSample,
+	occurrence inputgateway.DecisionTriggerOccurrence,
+) (inputgateway.DecisionTriggerWake, error) {
+	probe.wakes = append(probe.wakes, occurrence.OccurrenceID)
+	return inputgateway.DecisionTriggerWake{
+		Status: "admitted", OccurrenceID: occurrence.OccurrenceID,
+		RunID: "run-1", RootTaskID: "task-1",
+		RunState: "queued", TaskState: "ready",
 	}, nil
 }
 
@@ -135,8 +151,9 @@ func TestEvaluateCortexDecisionTriggersMaterializesOnlyFiredSample(
 		context.Background(), probe, fetch, "owner-1",
 	)
 	if err != nil || count != 1 || len(probe.occurs) != 1 ||
-		probe.occurs[0] != "sample-1" {
-		t.Fatalf("count=%d occurrences=%v err=%v",
-			count, probe.occurs, err)
+		probe.occurs[0] != "sample-1" ||
+		len(probe.wakes) != 1 || probe.wakes[0] != "occurrence-1" {
+		t.Fatalf("count=%d occurrences=%v wakes=%v err=%v",
+			count, probe.occurs, probe.wakes, err)
 	}
 }

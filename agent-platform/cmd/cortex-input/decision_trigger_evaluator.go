@@ -29,6 +29,11 @@ type decisionTriggerEvaluationStore interface {
 	MaterializeDecisionTriggerOccurrence(
 		context.Context, string,
 	) (inputgateway.DecisionTriggerOccurrence, error)
+	AdmitDecisionTriggerWake(
+		context.Context, string, inputgateway.DecisionTrigger,
+		inputgateway.DecisionTriggerSample,
+		inputgateway.DecisionTriggerOccurrence,
+	) (inputgateway.DecisionTriggerWake, error)
 }
 
 type cortexMonitorQuote struct {
@@ -121,12 +126,22 @@ func evaluateCortexDecisionTriggers(
 			continue
 		}
 		if sample.Fired {
-			if _, occurrenceErr := store.MaterializeDecisionTriggerOccurrence(
-				ctx, sample.SampleID,
-			); occurrenceErr != nil {
+			occurrence, occurrenceErr :=
+				store.MaterializeDecisionTriggerOccurrence(
+					ctx, sample.SampleID,
+				)
+			if occurrenceErr != nil {
 				failures = append(failures,
 					fmt.Sprintf("%s occurrence: %v",
 						trigger.TriggerID, occurrenceErr))
+				continue
+			}
+			if _, wakeErr := store.AdmitDecisionTriggerWake(
+				ctx, subjectID, trigger, sample, occurrence,
+			); wakeErr != nil {
+				failures = append(failures,
+					fmt.Sprintf("%s wake: %v",
+						trigger.TriggerID, wakeErr))
 				continue
 			}
 		}
