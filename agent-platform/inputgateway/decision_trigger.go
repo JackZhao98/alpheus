@@ -17,6 +17,7 @@ import (
 var (
 	decisionTriggerStrategyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 	decisionTriggerSymbolPattern   = regexp.MustCompile(`^[A-Z][A-Z0-9._^-]{0,15}$`)
+	decisionTriggerDigestPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type DecisionTrigger struct {
@@ -72,6 +73,16 @@ type DecisionTriggerSample struct {
 	ReasonCode   string       `json:"reason_code"`
 	ObservedAt   string       `json:"observed_at"`
 	CommittedAt  string       `json:"committed_at"`
+}
+
+type DecisionTriggerOccurrence struct {
+	Status             string `json:"status"`
+	SampleID           string `json:"sample_id"`
+	TriggerID          string `json:"trigger_id"`
+	OccurrenceID       string `json:"occurrence_id"`
+	OccurrenceDigest   string `json:"occurrence_digest"`
+	SourceRecordDigest string `json:"source_record_digest"`
+	OccurredAt         string `json:"occurred_at"`
 }
 
 func (adapter *PostgresAdapter) ListDecisionTriggers(
@@ -195,6 +206,39 @@ func (adapter *PostgresAdapter) RecordDecisionTriggerSample(
 	return sample, nil
 }
 
+func (adapter *PostgresAdapter) MaterializeDecisionTriggerOccurrence(
+	ctx context.Context,
+	sampleID string,
+) (DecisionTriggerOccurrence, error) {
+	if adapter == nil || adapter.db == nil ||
+		!validDecisionTriggerID(sampleID) {
+		return DecisionTriggerOccurrence{},
+			fmt.Errorf("invalid decision Trigger occurrence")
+	}
+	var raw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT agent_control.materialize_cortex_decision_trigger_occurrence(
+				$1
+			)::TEXT`,
+			sampleID,
+		).Scan(&raw)
+	}); err != nil {
+		return DecisionTriggerOccurrence{},
+			fmt.Errorf("materialize Cortex decision Trigger occurrence: %w", err)
+	}
+	var occurrence DecisionTriggerOccurrence
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&occurrence) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		validateDecisionTriggerOccurrence(occurrence) != nil {
+		return DecisionTriggerOccurrence{},
+			fmt.Errorf("invalid decision Trigger occurrence response")
+	}
+	return occurrence, nil
+}
+
 func validateDecisionTriggerCommand(value DecisionTriggerCommand) error {
 	state := "paused"
 	if value.Enabled {
@@ -311,6 +355,23 @@ func validDecisionTriggerReason(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validateDecisionTriggerOccurrence(
+	value DecisionTriggerOccurrence,
+) error {
+	occurred, occurredErr := time.Parse(time.RFC3339Nano, value.OccurredAt)
+	if value.Status != "materialized" ||
+		!validDecisionTriggerID(value.SampleID) ||
+		!validDecisionTriggerID(value.TriggerID) ||
+		!validDecisionTriggerID(value.OccurrenceID) ||
+		!decisionTriggerDigestPattern.MatchString(value.OccurrenceDigest) ||
+		!decisionTriggerDigestPattern.MatchString(value.SourceRecordDigest) ||
+		occurredErr != nil || occurred.IsZero() ||
+		occurred.Location() != time.UTC {
+		return fmt.Errorf("invalid decision Trigger occurrence")
+	}
+	return nil
 }
 
 func validDecisionTriggerID(value string) bool {

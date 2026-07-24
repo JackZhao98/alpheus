@@ -2,6 +2,7 @@ package inputgateway
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +107,25 @@ func TestDecisionTriggerSampleValidationEnforcesAuditInvariants(t *testing.T) {
 	value.ConditionMet = false
 	if err := validateDecisionTriggerSample(value); err == nil {
 		t.Fatal("fired sample without a met condition was accepted")
+	}
+}
+
+func TestDecisionTriggerOccurrenceValidationRequiresFrozenDigests(t *testing.T) {
+	value := DecisionTriggerOccurrence{
+		Status:             "materialized",
+		SampleID:           "22222222-2222-4222-8222-222222222222",
+		TriggerID:          "11111111-1111-4111-8111-111111111111",
+		OccurrenceID:       "33333333-3333-4333-8333-333333333333",
+		OccurrenceDigest:   strings.Repeat("a", 64),
+		SourceRecordDigest: strings.Repeat("b", 64),
+		OccurredAt:         "2026-07-24T06:34:07.409Z",
+	}
+	if err := validateDecisionTriggerOccurrence(value); err != nil {
+		t.Fatal(err)
+	}
+	value.OccurrenceDigest = "short"
+	if err := validateDecisionTriggerOccurrence(value); err == nil {
+		t.Fatal("short occurrence digest was accepted")
 	}
 }
 

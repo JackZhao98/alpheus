@@ -26,6 +26,9 @@ type decisionTriggerEvaluationStore interface {
 	RecordDecisionTriggerSample(
 		context.Context, string, json.Number, time.Time,
 	) (inputgateway.DecisionTriggerSample, error)
+	MaterializeDecisionTriggerOccurrence(
+		context.Context, string,
+	) (inputgateway.DecisionTriggerOccurrence, error)
 }
 
 type cortexMonitorQuote struct {
@@ -109,12 +112,23 @@ func evaluateCortexDecisionTriggers(
 				fmt.Sprintf("%s value: %v", trigger.TriggerID, valueErr))
 			continue
 		}
-		if _, recordErr := store.RecordDecisionTriggerSample(
+		sample, recordErr := store.RecordDecisionTriggerSample(
 			ctx, trigger.TriggerID, value, quote.ObservedAt,
-		); recordErr != nil {
+		)
+		if recordErr != nil {
 			failures = append(failures,
 				fmt.Sprintf("%s record: %v", trigger.TriggerID, recordErr))
 			continue
+		}
+		if sample.Fired {
+			if _, occurrenceErr := store.MaterializeDecisionTriggerOccurrence(
+				ctx, sample.SampleID,
+			); occurrenceErr != nil {
+				failures = append(failures,
+					fmt.Sprintf("%s occurrence: %v",
+						trigger.TriggerID, occurrenceErr))
+				continue
+			}
 		}
 		evaluated++
 	}
