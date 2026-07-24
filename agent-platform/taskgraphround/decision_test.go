@@ -57,3 +57,16 @@ func TestDecisionOutputSchemaIsClosedAndBounded(t *testing.T) {
 		t.Fatalf("round decision branches are not bounded: %#v", branches)
 	}
 }
+
+func TestCandidateDecisionAllowsOnlyFinalDeskCandidate(t *testing.T) {
+	raw := []byte(`{"schema_revision":2,"action":"answer","text":"paper decision","rationale":"","join_mode":"all_required","branches":[],"paper_candidate":{"schema_revision":1,"strategy_id":"acceptance","symbol":"SPY","kind":"equity","side":"buy","qty":0.001,"thesis":"bounded evidence","invalidation":"evidence expires","confidence_bps":6000}}`)
+	value, err := DecodeCandidateStrict(raw)
+	if err != nil || value.PaperCandidate == nil ||
+		value.PaperCandidate.Symbol != "SPY" {
+		t.Fatalf("value=%+v err=%v", value, err)
+	}
+	refine := []byte(`{"schema_revision":2,"action":"refine","text":"","rationale":"more evidence","join_mode":"all_required","branches":[{"role_id":"market_scout","objective":"verify price","tool_id":"kernel_equity_quotes"},{"role_id":"risk_scout","objective":"verify risk","tool_id":""}],"paper_candidate":{"schema_revision":1,"strategy_id":"acceptance","symbol":"SPY","kind":"equity","side":"buy","qty":0.001,"thesis":"x","invalidation":"y","confidence_bps":6000}}`)
+	if _, err := DecodeCandidateStrict(refine); err == nil {
+		t.Fatal("refinement was allowed to carry a Paper Candidate")
+	}
+}

@@ -169,7 +169,7 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 				},
 			},
 		},
-		1, 2, 1200,
+		1, 2, 1200, false,
 	)
 	instructions, ok := request["instructions"].(string)
 	if !ok || !strings.Contains(instructions, "immutable TaskGraph Join") ||
@@ -180,7 +180,7 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 		t.Fatalf("TaskGraph Decision Desk request is incomplete: %#v", request)
 	}
 	if request := taskGraphDecisionDeskRequest(
-		"model", "prompt", "objective", nil, 1, 2, 1000,
+		"model", "prompt", "objective", nil, 1, 2, 1000, false,
 	); request != nil {
 		t.Fatal("Decision Desk prompt accepted no Join inputs")
 	}
@@ -424,6 +424,7 @@ func TestTaskGraphToolMemoContainsReceiptBackedEvidence(t *testing.T) {
 func TestParseTaskGraphRoundDecisionOutputIsStrict(t *testing.T) {
 	answer, err := parseTaskGraphRoundDecisionOutput(
 		[]byte(`{"schema_revision":1,"action":"answer","text":"bounded synthesis","rationale":"","join_mode":"all_required","branches":[]}`),
+		false,
 	)
 	if err != nil || answer.Kind != "answer" ||
 		answer.Target != "user" || answer.Text != "bounded synthesis" {
@@ -434,9 +435,16 @@ func TestParseTaskGraphRoundDecisionOutputIsStrict(t *testing.T) {
 		[]byte(`{"schema_revision":1,"action":"answer","text":"ok","rationale":"","join_mode":"all_required","branches":[],"extra":true}`),
 		[]byte(`{"wrong":"answer"}`),
 	} {
-		if _, err := parseTaskGraphRoundDecisionOutput(raw); err == nil {
+		if _, err := parseTaskGraphRoundDecisionOutput(raw, false); err == nil {
 			t.Fatalf("invalid TaskGraph answer was accepted: %s", raw)
 		}
+	}
+	candidate, err := parseTaskGraphRoundDecisionOutput(
+		[]byte(`{"schema_revision":2,"action":"answer","text":"paper synthesis","rationale":"","join_mode":"all_required","branches":[],"paper_candidate":{"schema_revision":1,"strategy_id":"acceptance","symbol":"SPY","kind":"equity","side":"buy","qty":0.001,"thesis":"bounded evidence","invalidation":"evidence expires","confidence_bps":6000}}`),
+		true,
+	)
+	if err != nil || candidate.PaperCandidate == nil {
+		t.Fatalf("candidate=%+v err=%v", candidate, err)
 	}
 }
 
@@ -658,11 +666,11 @@ func TestShouldAdmitTaskGraph(t *testing.T) {
 	}) {
 		t.Fatal("ordinary research Run should use TaskGraph")
 	}
-	if shouldAdmitTaskGraph(workItem{
+	if !shouldAdmitTaskGraph(workItem{
 		TaskGraphProposalDigest: "proposal-digest",
 		PaperCandidateEnabled:   true,
 	}) {
-		t.Fatal("candidate Run cannot use answer-only TaskGraph contract")
+		t.Fatal("candidate Run should use candidate-aware TaskGraph")
 	}
 	if shouldAdmitTaskGraph(workItem{}) {
 		t.Fatal("Run without proposal contract cannot use TaskGraph")

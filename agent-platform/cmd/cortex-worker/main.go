@@ -336,8 +336,13 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 					taskGraphMemos, item.TaskGraphRound,
 					item.TaskGraphMaxRounds,
 					modelOutputTokenLimit(item),
+					item.PaperCandidateEnabled,
 				),
-				parseTaskGraphRoundDecisionOutput,
+				func(raw []byte) (workflowOutput, error) {
+					return parseTaskGraphRoundDecisionOutput(
+						raw, item.PaperCandidateEnabled,
+					)
+				},
 			)
 			if err != nil {
 				return err
@@ -408,8 +413,8 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 		if err != nil {
 			return fmt.Errorf("read TaskGraph round decision: %w", err)
 		}
-		decision, err := taskgraphround.DecodeStrict(decisionRaw)
-		if err != nil || decision.Action != taskgraphround.ActionRefine {
+		decision, err := taskgraphround.DecodeRefinement(decisionRaw)
+		if err != nil {
 			return fmt.Errorf("invalid TaskGraph round planner input")
 		}
 		proposalTurn, err := w.executeModelTurnWithContract(
@@ -628,14 +633,8 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 	return w.commitAttempt(ctx, item, claim, started.AttemptGeneration, intent)
 }
 
-// The current TaskGraph Decision Desk contract is intentionally effect-free
-// and answer-only. Candidate-enabled Runs therefore stay on the reviewed
-// linear Tool/Specialist/Decision Desk path until a candidate-aware TaskGraph
-// round contract is installed. This prevents a parallel answer contract from
-// silently discarding the final Paper Candidate.
 func shouldAdmitTaskGraph(item workItem) bool {
-	return item.TaskGraphProposalDigest != "" &&
-		!item.PaperCandidateEnabled
+	return item.TaskGraphProposalDigest != ""
 }
 
 type workflowOutput struct {
@@ -1163,6 +1162,7 @@ func taskGraphDecisionDeskRequest(
 	model, prompt, objective string, memos []taskGraphDeskMemo,
 	round, maxRounds int64,
 	maxOutputTokens int64,
+	paperCandidateEnabled bool,
 ) map[string]any {
 	if len(memos) == 0 || round < 1 || maxRounds < round ||
 		maxOutputTokens < 1 {
@@ -1196,6 +1196,13 @@ func taskGraphDecisionDeskRequest(
 	instructions += "For action=answer set a non-empty text, rationale=\"\", join_mode=all_required, and branches=[]. " +
 		"For action=refine set text=\"\", a specific rationale, a bounded join_mode and 2 to 4 branches. " +
 		"Never invent IDs, permissions, budgets, execution claims, or tools outside the installed schema. Return only JSON matching the round decision schema."
+	schema := taskgraphround.OutputSchema()
+	schemaName := "cortex_task_graph_round_decision"
+	if paperCandidateEnabled {
+		instructions += " This Run supports one effect-free equity Paper Candidate. Only action=answer may include it, and only when the user explicitly requested Paper execution and the joined receipt-backed evidence supports the exact bounded proposal. A Candidate is not approval or an order. Set paper_candidate=null when evidence is insufficient; action=refine must always set paper_candidate=null."
+		schema = taskgraphround.CandidateOutputSchema()
+		schemaName = "cortex_task_graph_candidate_round_decision"
+	}
 	return map[string]any{
 		"model":             model,
 		"instructions":      instructions,
@@ -1205,9 +1212,9 @@ func taskGraphDecisionDeskRequest(
 		"reasoning":         map[string]any{"effort": "low"},
 		"text": map[string]any{"format": map[string]any{
 			"type":   "json_schema",
-			"name":   "cortex_task_graph_round_decision",
+			"name":   schemaName,
 			"strict": true,
-			"schema": taskgraphround.OutputSchema(),
+			"schema": schema,
 		}},
 	}
 }
@@ -1858,7 +1865,23 @@ func parseScoutMemoOutput(raw []byte) (workflowOutput, error) {
 	return workflowOutput{Kind: "scout_memo"}, nil
 }
 
-func parseTaskGraphRoundDecisionOutput(raw []byte) (workflowOutput, error) {
+func parseTaskGraphRoundDecisionOutput(
+	raw []byte, paperCandidateEnabled bool,
+) (workflowOutput, error) {
+	if paperCandidateEnabled {
+		decision, err := taskgraphround.DecodeCandidateStrict(raw)
+		if err != nil {
+			return workflowOutput{},
+				fmt.Errorf("TaskGraph candidate round decision output is invalid")
+		}
+		if decision.Action == taskgraphround.ActionRefine {
+			return workflowOutput{Kind: "refine", Target: "desk"}, nil
+		}
+		return workflowOutput{
+			Kind: "answer", Target: "user", Text: decision.Text,
+			PaperCandidate: decision.PaperCandidate,
+		}, nil
+	}
 	decision, err := taskgraphround.DecodeStrict(raw)
 	if err != nil {
 		return workflowOutput{},

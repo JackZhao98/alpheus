@@ -1867,6 +1867,7 @@ type RuntimeDefinitions struct {
 	ScoutMemoOutputContractDigest          string
 	TaskGraphProposalOutputContractDigest  string
 	TaskGraphRoundOutputContractDigest     string
+	CandidateTaskGraphRoundContractDigest  string
 }
 
 func (adapter *PostgresAdapter) EnsureTaskGraphRoundOutputContract(
@@ -1902,6 +1903,44 @@ func (adapter *PostgresAdapter) EnsureTaskGraphRoundOutputContract(
 		len(response.OutputContractDigest) != 64 {
 		return "", fmt.Errorf(
 			"Cortex TaskGraph round output contract was not selected")
+	}
+	return response.OutputContractDigest, nil
+}
+
+func (adapter *PostgresAdapter) EnsureCandidateTaskGraphRoundOutputContract(
+	ctx context.Context, schema blob.BlobRef,
+) (string, error) {
+	if adapter == nil || adapter.db == nil || schema.Validate() != nil ||
+		schema.Origin.RecordType != "output_contract_schema" ||
+		schema.MediaType != controlJSONMediaType {
+		return "", fmt.Errorf(
+			"invalid Candidate TaskGraph round schema BlobRef")
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return "", err
+	}
+	var responseRaw []byte
+	if err := adapter.withRoleTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(
+			ctx,
+			`SELECT agent_control.ensure_cortex_task_graph_round_output_contract_v2(
+				$1::JSONB
+			)::TEXT`,
+			string(raw),
+		).Scan(&responseRaw)
+	}); err != nil {
+		return "", err
+	}
+	var response struct {
+		Status               string `json:"status"`
+		OutputContractDigest string `json:"output_contract_digest"`
+	}
+	if json.Unmarshal(responseRaw, &response) != nil ||
+		response.Status != "ready" ||
+		len(response.OutputContractDigest) != 64 {
+		return "", fmt.Errorf(
+			"Cortex Candidate TaskGraph round output contract was not selected")
 	}
 	return response.OutputContractDigest, nil
 }
@@ -2310,8 +2349,8 @@ func (adapter *PostgresAdapter) PrepareTaskGraphNextRound(
 		return TaskGraphRoundContinuation{},
 			fmt.Errorf("read TaskGraph round decision: %w", err)
 	}
-	decision, err := taskgraphround.DecodeStrict(decisionRaw)
-	if err != nil || decision.Action != taskgraphround.ActionRefine {
+	_, err = taskgraphround.DecodeRefinement(decisionRaw)
+	if err != nil {
 		return TaskGraphRoundContinuation{},
 			fmt.Errorf("TaskGraph round decision is not a refinement")
 	}

@@ -241,6 +241,8 @@ func run() error {
 	}
 	taskGraphProposalSchema := taskgraphproposal.OutputSchema()
 	taskGraphRoundSchema := taskgraphround.OutputSchema()
+	candidateTaskGraphRoundSchema :=
+		taskgraphround.CandidateOutputSchema()
 	answerSchemaRaw, err := json.Marshal(answerSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex answer schema: %w", err)
@@ -289,6 +291,13 @@ func run() error {
 	taskGraphRoundSchemaRaw, err := json.Marshal(taskGraphRoundSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex TaskGraph round schema: %w", err)
+	}
+	candidateTaskGraphRoundSchemaRaw, err := json.Marshal(
+		candidateTaskGraphRoundSchema,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"encode Cortex Candidate TaskGraph round schema: %w", err)
 	}
 	answerSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-text-output-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", answerSchema)
@@ -359,9 +368,29 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex TaskGraph round schema: %w", err)
 	}
+	candidateTaskGraphRoundSchemaRef, err := adapter.CommitControlJSON(
+		ctx, "output_contract_schema",
+		"cortex-task-graph-round-schema-v2",
+		"agent-platform.contract.output_contract_schema.v1",
+		candidateTaskGraphRoundSchema,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"commit Cortex Candidate TaskGraph round schema: %w", err)
+	}
 	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, candidateWorkflowSchemaRef, scoutMemoSchemaRef, taskGraphProposalSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
+	}
+	runtimeDefinitions.CandidateTaskGraphRoundContractDigest, err =
+		adapter.EnsureCandidateTaskGraphRoundOutputContract(
+			ctx, candidateTaskGraphRoundSchemaRef,
+		)
+	if err != nil {
+		return fmt.Errorf(
+			"select Cortex Candidate TaskGraph round output contract: %w",
+			err,
+		)
 	}
 	runtimeDefinitions.TaskGraphRoundOutputContractDigest, err =
 		adapter.EnsureTaskGraphRoundOutputContract(
@@ -384,6 +413,7 @@ func run() error {
 		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
 		runtimeDefinitions.TaskGraphProposalOutputContractDigest:  taskGraphProposalSchemaRaw,
 		runtimeDefinitions.TaskGraphRoundOutputContractDigest:     taskGraphRoundSchemaRaw,
+		runtimeDefinitions.CandidateTaskGraphRoundContractDigest:  candidateTaskGraphRoundSchemaRaw,
 	}
 	gateway, err := inputgateway.New(adapter, adapter)
 	if err != nil {

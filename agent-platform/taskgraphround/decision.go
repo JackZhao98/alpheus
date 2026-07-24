@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"strings"
 
+	"alpheus/agentplatform/papercandidate"
 	"alpheus/agentplatform/taskgraphproposal"
 )
 
 const SchemaRevisionV1 = 1
+const SchemaRevisionV2 = 2
 
 type Action string
 
@@ -33,6 +35,16 @@ type Decision struct {
 	Branches       []taskgraphproposal.Branch `json:"branches"`
 }
 
+type CandidateDecision struct {
+	SchemaRevision int                        `json:"schema_revision"`
+	Action         Action                     `json:"action"`
+	Text           string                     `json:"text"`
+	Rationale      string                     `json:"rationale"`
+	JoinMode       taskgraphproposal.JoinMode `json:"join_mode"`
+	Branches       []taskgraphproposal.Branch `json:"branches"`
+	PaperCandidate *papercandidate.Proposal   `json:"paper_candidate"`
+}
+
 func DecodeStrict(raw []byte) (Decision, error) {
 	var value Decision
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -47,6 +59,58 @@ func DecodeStrict(raw []byte) (Decision, error) {
 		return Decision{}, err
 	}
 	return value, nil
+}
+
+func DecodeCandidateStrict(raw []byte) (CandidateDecision, error) {
+	var value CandidateDecision
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return CandidateDecision{},
+			fmt.Errorf("%w: %v", ErrInvalidDecision, err)
+	}
+	if decoder.Decode(&struct{}{}) == nil ||
+		value.SchemaRevision != SchemaRevisionV2 {
+		return CandidateDecision{}, ErrInvalidDecision
+	}
+	base := Decision{
+		SchemaRevision: SchemaRevisionV1,
+		Action:         value.Action,
+		Text:           value.Text,
+		Rationale:      value.Rationale,
+		JoinMode:       value.JoinMode,
+		Branches:       value.Branches,
+	}
+	if base.Validate() != nil ||
+		value.Action == ActionRefine && value.PaperCandidate != nil ||
+		value.PaperCandidate != nil &&
+			value.PaperCandidate.Validate() != nil {
+		return CandidateDecision{}, ErrInvalidDecision
+	}
+	return value, nil
+}
+
+func DecodeRefinement(raw []byte) (Decision, error) {
+	if value, err := DecodeStrict(raw); err == nil {
+		if value.Action != ActionRefine {
+			return Decision{}, ErrInvalidDecision
+		}
+		return value, nil
+	}
+	value, err := DecodeCandidateStrict(raw)
+	if err != nil || value.Action != ActionRefine ||
+		value.PaperCandidate != nil {
+		return Decision{}, ErrInvalidDecision
+	}
+	return Decision{
+		SchemaRevision: SchemaRevisionV1,
+		Action:         value.Action,
+		Text:           value.Text,
+		Rationale:      value.Rationale,
+		JoinMode:       value.JoinMode,
+		Branches:       value.Branches,
+	}, nil
 }
 
 func (value Decision) Validate() error {
@@ -124,4 +188,22 @@ func OutputSchema() map[string]any {
 			},
 		},
 	}
+}
+
+func CandidateOutputSchema() map[string]any {
+	schema := OutputSchema()
+	schema["required"] = append(
+		schema["required"].([]string), "paper_candidate",
+	)
+	properties := schema["properties"].(map[string]any)
+	properties["schema_revision"] = map[string]any{
+		"type": "integer", "enum": []int{SchemaRevisionV2},
+	}
+	properties["paper_candidate"] = map[string]any{
+		"anyOf": []any{
+			map[string]any{"type": "null"},
+			papercandidate.OutputSchema(),
+		},
+	}
+	return schema
 }
