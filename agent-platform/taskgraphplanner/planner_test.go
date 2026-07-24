@@ -118,7 +118,7 @@ func TestBuildExpandsProposalIntoDeterministicFanoutJoin(t *testing.T) {
 	if len(first.Plan.Nodes) != 3 || len(first.Plan.Edges) != 2 ||
 		len(first.Plan.Joins) != 1 ||
 		first.Plan.AuthorizedLimit.MaxParallelism != 2 ||
-		first.Plan.Nodes[0].Limit.MaxModelCalls != 2 ||
+		first.Plan.Nodes[0].Limit.MaxModelCalls != 3 ||
 		first.Plan.Nodes[0].Limit.MaxToolCalls != 1 ||
 		first.Plan.Nodes[1].Limit.MaxModelCalls != 1 ||
 		first.Plan.Nodes[2].RoleID != "decision_desk" {

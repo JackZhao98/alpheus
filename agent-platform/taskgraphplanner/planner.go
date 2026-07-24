@@ -200,10 +200,12 @@ func specialistLimit(withTool bool) runtimecontract.BudgetLimit {
 		MaxParallelism: 1,
 	}
 	if withTool {
-		limit.MaxModelCalls = 2
-		limit.MaxOutputTokens = 4000
+		// Planner + one bounded argument correction + receipt-backed memo.
+		limit.MaxModelCalls = 3
+		limit.MaxInputTokens = 96000
+		limit.MaxOutputTokens = 4500
 		limit.MaxToolCalls = 1
-		limit.MaxWallTimeMS = 120000
+		limit.MaxWallTimeMS = 180000
 	}
 	return limit
 }

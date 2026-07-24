@@ -156,16 +156,16 @@ func TestTaskGraphDecisionDeskPromptContainsEveryJoinedMemo(t *testing.T) {
 
 func TestTaskGraphToolNodeSplitsOneFrozenOutputBudget(t *testing.T) {
 	planner, memo, err := taskGraphToolTokenLimits(workItem{
-		MaxModelCalls: 2, MaxOutputTokens: 2400,
+		MaxModelCalls: 3, MaxOutputTokens: 2400,
 	})
-	if err != nil || planner != 800 || memo != 1600 ||
-		planner+memo != 2400 {
+	if err != nil || planner != 400 || memo != 1600 ||
+		2*planner+memo != 2400 {
 		t.Fatalf("Tool token split=%d,%d err=%v", planner, memo, err)
 	}
 	if _, _, err := taskGraphToolTokenLimits(workItem{
-		MaxModelCalls: 1, MaxOutputTokens: 2400,
+		MaxModelCalls: 2, MaxOutputTokens: 2400,
 	}); err == nil {
-		t.Fatal("single-call Tool node budget was accepted")
+		t.Fatal("two-call Tool node budget was accepted")
 	}
 }
 
@@ -262,6 +262,41 @@ func TestTaskGraphToolPlannerNamesOnlyFrozenTool(t *testing.T) {
 		valid, "kernel_equity_quotes",
 	) {
 		t.Fatal("Tool substitution was accepted")
+	}
+}
+
+func TestTaskGraphToolCorrectionIsBoundedToFrozenTool(t *testing.T) {
+	invalid := workflowOutput{
+		Kind: "handoff", Target: "market_scout",
+		GEXBOTAction: "none", EarningsAction: "none",
+		KernelAction: "read", KernelToolID: "kernel_search",
+		KernelArguments: `{"query":"SPCX","asset_type":"equity"}`,
+	}
+	if issue := taskGraphKernelPlannerIssue(
+		invalid, "kernel_search",
+	); issue != "kernel_tool_asset_type_invalid" {
+		t.Fatalf("planner issue = %q", issue)
+	}
+	request := taskGraphToolCorrectionRequest(
+		"model", "prompt", "discovery_scout", "resolve SPCX",
+		"kernel_search", invalid, "kernel_tool_asset_type_invalid", 500,
+	)
+	instructions, ok := request["instructions"].(string)
+	if !ok ||
+		!strings.Contains(instructions, "one permitted argument corrector") ||
+		!strings.Contains(instructions, "kernel_tool_asset_type_invalid") ||
+		!strings.Contains(instructions, "never use equity") ||
+		!strings.Contains(instructions, `asset_type`) ||
+		!strings.Contains(instructions, `equity`) ||
+		request["max_output_tokens"] != int64(500) {
+		t.Fatalf("Tool correction request is incomplete: %#v", request)
+	}
+	invalid.KernelArguments = `{"symbols":["TSLA"],"start_time":"2026-07-20T00:00:00Z","interval":"1h"}`
+	invalid.KernelToolID = "kernel_equity_historicals"
+	if issue := taskGraphKernelPlannerIssue(
+		invalid, "kernel_equity_historicals",
+	); issue != "kernel_tool_interval_invalid" {
+		t.Fatalf("historicals planner issue = %q", issue)
 	}
 }
 

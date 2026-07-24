@@ -266,7 +266,7 @@ func (w *worker) execute(ctx context.Context, item workItem) error {
 					tool.Effect != item.TaskGraphToolEffect ||
 					item.TaskGraphToolEffect != "read_only" ||
 					item.TaskGraphToolPlannerDigest == "" ||
-					item.MaxModelCalls < 2 ||
+					item.MaxModelCalls < 3 ||
 					!taskGraphRoleOwnsTool(role.ID, tool.ID) {
 					return fmt.Errorf("invalid TaskGraph Tool grant")
 				}
@@ -1190,17 +1190,19 @@ func taskGraphRoleOwnsTool(
 }
 
 func taskGraphToolTokenLimits(item workItem) (int64, int64, error) {
-	if item.MaxModelCalls < 2 || item.MaxOutputTokens < 768 {
+	if item.MaxModelCalls < 3 || item.MaxOutputTokens < 1024 {
 		return 0, 0, fmt.Errorf("TaskGraph Tool budget is insufficient")
 	}
-	planner := item.MaxOutputTokens / 3
+	// Freeze enough output budget for two parameter-planning calls even when
+	// the first one needs its single permitted semantic correction.
+	planner := item.MaxOutputTokens / 6
 	if planner > 1000 {
 		planner = 1000
 	}
 	if planner < 256 {
 		planner = 256
 	}
-	memo := item.MaxOutputTokens - planner
+	memo := item.MaxOutputTokens - (2 * planner)
 	if memo > 3000 {
 		memo = 3000
 	}
@@ -1251,6 +1253,42 @@ func taskGraphToolPlannerRequest(
 	}
 	instructions += " Return kind=handoff, target=" + role +
 		", a non-empty objective and rationale, empty text, and every required schema field."
+	request := workflowRequest(
+		model, instructions, prompt, true, true, true, true, true,
+	)
+	request["max_output_tokens"] = maxOutputTokens
+	return request
+}
+
+func taskGraphToolCorrectionRequest(
+	model, prompt, role, objective, toolID string,
+	invalid workflowOutput, issue string, maxOutputTokens int64,
+) map[string]any {
+	spec, found := capability.KernelReadToolSpecForID(
+		capability.ToolID(toolID),
+	)
+	if !found || issue == "" || maxOutputTokens < 1 {
+		return nil
+	}
+	identity, _ := json.Marshal(map[string]string{
+		"role": role, "tool_id": toolID, "objective": objective,
+	})
+	observation, _ := json.Marshal(map[string]string{
+		"validation_issue": issue,
+		"kernel_action":    invalid.KernelAction,
+		"kernel_tool_id":   invalid.KernelToolID,
+		"kernel_arguments": bounded(invalid.KernelArguments),
+	})
+	instructions := "You are the one permitted argument corrector for an already-frozen Cortex TaskGraph Tool. " +
+		"The immutable identity is " + string(identity) +
+		". The first parameter plan was rejected locally before Tool authorization. " +
+		"The bounded rejection is " + string(observation) +
+		". Correct only the arguments using this exact contract: " +
+		spec.ArgumentGuide + ". Keep the exact Tool and role; do not substitute, " +
+		"delegate, add an action, or claim execution. Set kernel_action=read, " +
+		"kernel_tool_id to the immutable Tool ID, and kernel_arguments to one compact JSON object. " +
+		"Set gexbot and earnings actions to none. Return kind=handoff, target=" +
+		role + ", a non-empty objective and rationale, empty text, and every required schema field."
 	request := workflowRequest(
 		model, instructions, prompt, true, true, true, true, true,
 	)
@@ -1605,27 +1643,47 @@ func kernelReadRequest(output workflowOutput) (capability.KernelReadRequest, boo
 		return capability.KernelReadRequest{}, false, nil
 	}
 	if output.KernelAction != "read" {
-		return capability.KernelReadRequest{}, false, fmt.Errorf("invalid Kernel read action")
+		return capability.KernelReadRequest{}, false,
+			kernelReadArgumentError{code: "kernel_tool_action_invalid"}
 	}
 	spec, ok := capability.KernelReadToolSpecForID(capability.ToolID(output.KernelToolID))
 	if !ok || strings.TrimSpace(output.KernelArguments) != output.KernelArguments || output.KernelArguments == "" {
-		return capability.KernelReadRequest{}, false, fmt.Errorf("invalid Kernel read Tool")
+		return capability.KernelReadRequest{}, false,
+			kernelReadArgumentError{code: "kernel_tool_identity_invalid"}
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.KernelArguments))
 	decoder.UseNumber()
 	var arguments map[string]any
 	if decoder.Decode(&arguments) != nil || decoder.Decode(&struct{}{}) != io.EOF || arguments == nil {
-		return capability.KernelReadRequest{}, false, fmt.Errorf("invalid Kernel read arguments")
+		return capability.KernelReadRequest{}, false,
+			kernelReadArgumentError{code: "kernel_tool_arguments_json_invalid"}
 	}
 	request := capability.KernelReadRequest{
 		ToolID:     spec.ToolID,
 		SourceTool: spec.SourceTool,
 		Arguments:  arguments,
 	}
-	if request.Validate() != nil {
-		return capability.KernelReadRequest{}, false, fmt.Errorf("invalid Kernel read request")
+	if issue := request.ValidationIssue(); issue != "" {
+		return capability.KernelReadRequest{}, false,
+			kernelReadArgumentError{code: issue}
 	}
 	return request, true, nil
+}
+
+type kernelReadArgumentError struct {
+	code string
+}
+
+func (value kernelReadArgumentError) Error() string {
+	return value.code
+}
+
+func kernelReadArgumentIssue(err error) (string, bool) {
+	var target kernelReadArgumentError
+	if !errors.As(err, &target) || target.code == "" {
+		return "", false
+	}
+	return target.code, true
 }
 
 type scoutMemoOutput struct {
@@ -2162,6 +2220,45 @@ func (w *worker) executeTaskGraphToolNode(
 		planner.Workflow.Target != item.Role {
 		return fmt.Errorf("TaskGraph Tool planner changed its frozen role")
 	}
+	if issue := taskGraphKernelPlannerIssue(
+		planner.Workflow, capability.ToolID(item.TaskGraphToolID),
+	); issue != "" {
+		corrected, correctionErr := w.executeModelTurnWithContract(
+			ctx, item, claim, attemptGeneration,
+			taskGraphToolCorrectionRequest(
+				w.model, prompt, item.Role, objective,
+				item.TaskGraphToolID, planner.Workflow, issue, plannerTokens,
+			),
+			func(raw []byte) (workflowOutput, error) {
+				return parseWorkflowOutput(
+					raw, true, true, true, true, true, true,
+				)
+			},
+			item.TaskGraphToolPlannerDigest, plannerTokens,
+		)
+		if correctionErr != nil {
+			return correctionErr
+		}
+		planner = corrected
+		if planner.Workflow.Kind != "handoff" ||
+			planner.Workflow.Target != item.Role {
+			return fmt.Errorf("TaskGraph Tool corrector changed its frozen role")
+		}
+		if remaining := taskGraphKernelPlannerIssue(
+			planner.Workflow, capability.ToolID(item.TaskGraphToolID),
+		); remaining != "" {
+			failure := contracts.Failure{
+				Code:      remaining,
+				Message:   "TaskGraph Tool arguments remained invalid after one correction",
+				Retryable: false,
+			}
+			_ = w.failAfterResolved(
+				ctx, item, claim, attemptGeneration,
+				runtimecontract.RetryInvalidOutput, failure,
+			)
+			return fmt.Errorf("%s", remaining)
+		}
+	}
 	toolResult, err := w.executeTaskGraphGrantedTool(
 		ctx, item, claim, attemptGeneration, planner, prompt,
 	)
@@ -2189,6 +2286,28 @@ func (w *worker) executeTaskGraphToolNode(
 	}
 	return w.commitScoutAttempt(
 		ctx, item, claim, attemptGeneration, memo)
+}
+
+func taskGraphKernelPlannerIssue(
+	output workflowOutput, expected capability.ToolID,
+) string {
+	if _, kernelTool := capability.KernelReadToolSpecForID(expected); !kernelTool {
+		return ""
+	}
+	if taskGraphPlannerHasUnexpectedAction(output, expected) {
+		return "kernel_tool_identity_invalid"
+	}
+	request, found, err := kernelReadRequest(output)
+	if err != nil {
+		if issue, classified := kernelReadArgumentIssue(err); classified {
+			return issue
+		}
+		return "kernel_tool_arguments_invalid"
+	}
+	if !found || request.ToolID != expected {
+		return "kernel_tool_identity_invalid"
+	}
+	return ""
 }
 
 func (w *worker) executeTaskGraphGrantedTool(
