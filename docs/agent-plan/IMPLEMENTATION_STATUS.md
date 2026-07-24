@@ -153,6 +153,24 @@
   replay returned the same cancellation response. The current operations
   snapshot is healthy with zero stalled Runs, expired Runs/leases,
   unacknowledged Tool calls, terminal open Sessions and terminal slot leaks.
+- The first product-facing Agent workspace is deployed at `/agent`; Agent Lab
+  remains the separate diagnostic and precision-test surface. Agent Rooms are
+  durable Control-owned projections over immutable Cortex Conversations, not
+  browser state or Kernel query jobs. The authenticated UI can create, list,
+  search, restore, pause and resume Rooms; submit a first request or a
+  continuation; cancel an active Run; and render the persisted Agent/Tool
+  Trace without exposing prompts, credentials or raw Provider payloads.
+  Migration `0105` stores only Room metadata, state, generation and last-Run
+  identity with subject ownership, compare-and-swap updates and archive
+  terminality. Commits `3540fbd`, `115682e` and `51a3dd7` add the database,
+  Cortex/Kernel APIs and formal responsive Web UI respectively. Browser
+  acceptance on 2026-07-23 verified desktop and 390px mobile layouts, Room
+  pause across reload, Run Trace recovery, and a real two-exchange
+  conversation across a full browser refresh. The second request recovered
+  the first request's `Aurora` context. Conversation creation timestamps are
+  canonicalized to PostgreSQL microsecond precision before immutable digest
+  construction so a restored Room preserves the exact Conversation identity.
+  No browser storage is used and the surface remains effect `none`.
 - AP2-1 has begun with strict in-memory contracts for immutable Cortex
   `Conversation` and raw `UserRequest` facts.  They bind user/control-api
   identity, exact BlobRef-backed input/attachments, referenced-record
@@ -170,7 +188,7 @@
   submission adapters, exact transport-retry recovery, and a separately
   provisioned `cortex-control-1` NOINHERIT LOGIN/container on localhost port
   8400. All Agent Platform race tests, vet, shell syntax, Compose validation,
-  the current 108-migration disposable PostgreSQL replay/role probe, container
+  the current 109-migration disposable PostgreSQL replay/role probe, container
   health, owner-only Blob mode, and exact duplicate HTTP write smoke pass. The
   Blob root remains mode 0700 and content is mode 0400 under `cortex:cortex`.
   IntentDraft, PolicyResolution, question and confirmation remain later work;

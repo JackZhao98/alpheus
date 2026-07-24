@@ -609,6 +609,12 @@ Control Plane and Worker packages.
 **Goal:** give the user a visible, durable control surface before complex
 autonomy exists.
 
+**Current delivered slice:** `/agent` now provides the first durable,
+responsive Agent Room workspace over immutable Cortex Conversations and
+persisted Run activity. It deliberately exposes only the installed `research`
+mode; SPX Gamma, Equity Discovery and Watchlist Monitor are visible roadmap
+modes, not simulated capabilities. Agent Lab remains the diagnostic surface.
+
 **Deliverables:**
 
 - deterministic Input Gateway, LLM IntentDraft, deterministic Policy Resolver;
