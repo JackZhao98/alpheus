@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpheus Strategy Playground</title>
+  <meta name="description" content="Paper-only strategy replay and Agent simulation">
+  <link rel="stylesheet" href="/assets/agent-console.css">
+  <link rel="stylesheet" href="/assets/agent-playground.css">
+</head>
+<body>
+  <div id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-card">
+      <span class="eyebrow">ALPHEUS ACCESS</span>
+      <h1>进入 Strategy Playground</h1>
+      <p>使用 Agent Web 凭据进入受保护的 Paper 沙盘。</p>
+      <input id="login-password" type="password" autocomplete="current-password" placeholder="访问密码" required>
+      <button type="submit">继续</button>
+      <span id="login-error" class="form-error" role="alert"></span>
+    </form>
+  </div>
+
+  <div class="playground-shell">
+    <nav class="nav-rail" aria-label="主导航">
+      <a class="brand-mark" href="/agent/console" aria-label="Alpheus Console">A</a>
+      <div class="nav-group">
+        <a class="nav-item" href="/agent/console"><span>⌁</span><small>CONSOLE</small></a>
+        <a class="nav-item active" href="/agent/playground"><span>△</span><small>PLAY</small></a>
+        <a class="nav-item" href="/agent"><span>◫</span><small>CHAT</small></a>
+        <a class="nav-item" href="/gex"><span>∿</span><small>GEX</small></a>
+      </div>
+      <div id="system-dot" class="system-dot"><i></i><span>CORTEX</span></div>
+    </nav>
+
+    <main class="playground-main">
+      <header class="playground-header">
+        <div>
+          <span class="eyebrow">PAPER STRATEGY PLAYGROUND</span>
+          <h1>策略验证沙盘</h1>
+          <p>历史数据、数学检测器、完整 Cortex 决策链与隔离 Paper 账户。</p>
+        </div>
+        <div class="paper-boundary"><i></i><span>ENVIRONMENT</span><strong>PAPER ONLY</strong></div>
+      </header>
+
+      <div id="playground-error" class="console-error" role="alert"></div>
+
+      <section class="setup-grid">
+        <article class="panel experiment-panel">
+          <header class="panel-header">
+            <div><span class="eyebrow">EXPERIMENT SETUP</span><h2>新建实验</h2></div>
+            <span class="count-pill">ISOLATED LEDGER</span>
+          </header>
+          <div class="setup-fields">
+            <label>初始资金
+              <div class="money-input"><span>$</span><input id="initial-cash" type="number" min="1000" max="10000000" step="1000" value="100000"></div>
+            </label>
+            <label>FROM<input id="replay-start" type="datetime-local" step="1"></label>
+            <label>TO<input id="replay-end" type="datetime-local" step="1"></label>
+            <label>数据序列
+              <select id="replay-category">
+                <option value="gex_full">SPX FULL GEX</option>
+                <option value="gex_zero">SPX 0DTE GEX</option>
+                <option value="gex_one">SPX 1DTE GEX</option>
+              </select>
+            </label>
+            <label>回放速度
+              <select id="replay-speed">
+                <option value="30000">1× REALTIME</option>
+                <option value="3000" selected>10×</option>
+                <option value="500">60×</option>
+              </select>
+            </label>
+          </div>
+          <div class="setup-actions">
+            <button id="replay-create" class="primary-action" type="button">创建 Paper 实验</button>
+            <span>创建后，资金、策略与结果永久绑定到本次 Session。</span>
+          </div>
+        </article>
+
+        <article class="panel detector-picker">
+          <header class="panel-header">
+            <div><span class="eyebrow">SIGNAL DETECTORS</span><h2>数学策略</h2></div>
+            <span id="detector-count" class="count-pill">LOADING</span>
+          </header>
+          <div id="detector-list" class="detector-list">
+            <div class="empty-module"><strong>正在读取检测器</strong><p>这里只选择数学模型；模型命中后才产生 Signal 并唤醒 AI。</p></div>
+          </div>
+          <div class="strategy-compiler">
+            <div><span class="eyebrow">AI STRATEGY COMPILER</span><strong>自然语言 → 可审查 Detector</strong></div>
+            <button type="button" disabled title="编译和审查边界正在建设">COMING NEXT</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel simulation-panel">
+        <header class="simulation-head">
+          <div class="stream-identity"><span class="stream-mark">MB</span><div><span class="eyebrow">MOODY BLUES · VIRTUAL MARKET</span><strong id="session-title">等待创建实验</strong></div></div>
+          <div class="simulation-controls">
+            <button id="replay-next" type="button" disabled>下一帧</button>
+            <button id="replay-play" type="button" disabled>自动播放</button>
+          </div>
+          <div class="stream-clock"><span>VIRTUAL CLOCK</span><strong id="replay-clock">未启动</strong><small id="replay-state">NO SESSION</small></div>
+        </header>
+
+        <div class="simulation-metrics">
+          <div><span>SPOT</span><strong id="replay-spot">—</strong></div>
+          <div><span>ZERO Γ</span><strong id="replay-zero">—</strong></div>
+          <div><span>CALL WALL</span><strong id="replay-call">—</strong></div>
+          <div><span>PUT WALL</span><strong id="replay-put">—</strong></div>
+          <div class="signal-metric"><span>SIGNAL ENGINE</span><strong id="replay-trigger-state">IDLE</strong></div>
+        </div>
+
+        <div class="session-lane" aria-label="Paper 策略验证链">
+          <div id="session-data" class="session-node"><span>01 · FRAME</span><strong>未启动</strong><small>Moody Blues</small></div><i></i>
+          <div id="session-trigger" class="session-node"><span>02 · DETECTOR</span><strong>等待帧</strong><small>数学模型</small></div><i></i>
+          <div id="session-cortex" class="session-node"><span>03 · CORTEX</span><strong>休眠</strong><small>Multi-Agent</small></div><i></i>
+          <div id="session-decision" class="session-node"><span>04 · DECISION</span><strong>无候选</strong><small>Decision Desk</small></div><i></i>
+          <div id="session-effect" class="session-node"><span>05 · PAPER EFFECT</span><strong>未执行</strong><small>隔离账户</small></div>
+        </div>
+      </section>
+
+      <section class="results-grid">
+        <article class="panel paper-account-panel">
+          <header class="panel-header"><div><span class="eyebrow">ISOLATED PAPER ACCOUNT</span><h2>实验账户</h2></div><span id="account-id" class="count-pill">NOT CREATED</span></header>
+          <div class="account-metrics">
+            <div><span>STARTING CASH</span><strong id="starting-cash">—</strong></div>
+            <div><span>PORTFOLIO VALUE</span><strong id="portfolio-value">—</strong></div>
+            <div><span>RETURN</span><strong id="portfolio-return">0.00%</strong></div>
+            <div><span>TRADES</span><strong id="trade-count">0</strong></div>
+          </div>
+          <p class="boundary-copy">该账户不共享默认 Paper 余额，不接触 Robinhood Live，也不会污染其他实验。</p>
+        </article>
+
+        <article class="panel event-panel">
+          <header class="panel-header"><div><span class="eyebrow">EXPERIMENT EVIDENCE</span><h2>运行记录</h2></div><span id="event-count" class="count-pill">0 EVENTS</span></header>
+          <div id="event-list" class="event-list"><div class="table-empty">创建实验后，这里会显示 Frame、Signal、Wake 与决策证据。</div></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <script src="/assets/agent-playground.js" defer></script>
+</body>
+</html>

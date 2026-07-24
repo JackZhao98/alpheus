@@ -24,6 +24,7 @@
       <a class="brand-mark" href="/agent/console" aria-label="Alpheus Console">A</a>
       <div class="nav-group">
         <a class="nav-item active" href="/agent/console" aria-label="控制台"><span>⌁</span><small>CONSOLE</small></a>
+        <a class="nav-item" href="/agent/playground" aria-label="Paper 策略沙盘"><span>△</span><small>PLAY</small></a>
         <a class="nav-item" href="/agent" aria-label="Agent 对话"><span>◫</span><small>CHAT</small></a>
         <a class="nav-item" href="/gex" aria-label="GEX 数据"><span>∿</span><small>GEX</small></a>
         <a class="nav-item" href="/agent-lab" aria-label="Agent Lab"><span>⌘</span><small>LAB</small></a>
@@ -102,96 +103,23 @@
         <article class="panel trigger-panel">
           <header class="panel-header">
             <div>
-              <span class="eyebrow">WAKE CONDITIONS</span>
-              <h2>AI Trigger Points</h2>
+              <span class="eyebrow">SIGNAL ENGINE</span>
+              <h2>Strategy Detectors</h2>
             </div>
             <span id="trigger-count" class="count-pill">0 ACTIVE</span>
           </header>
           <div id="trigger-list" class="trigger-list">
             <div class="empty-module">
               <span class="empty-orbit"><i></i></span>
-              <strong>正在读取触发器</strong>
-              <p>数学条件达到阈值后，才会唤醒 Agent 进入下一轮决策。</p>
+              <strong>正在读取数学检测器</strong>
+              <p>每秒市场 Frame 进入模型；只有产生 Signal 才会唤醒 Agent。</p>
             </div>
           </div>
           <footer class="module-foot">
-            <span>策略是可插拔模块</span>
-            <strong>Gamma = Strategy Module</strong>
+            <span>FRAME → DETECTOR → SIGNAL</span>
+            <strong>Signal 才能唤醒 AI</strong>
           </footer>
         </article>
-      </section>
-
-      <section class="stream-strip panel" aria-label="Moody Blues 数据回放">
-        <div class="stream-identity">
-          <span class="stream-mark">MB</span>
-          <div>
-            <span class="eyebrow">MOODY BLUES · DATA STREAM</span>
-            <strong>历史市场逐帧回放</strong>
-          </div>
-        </div>
-        <div class="stream-range">
-          <label>FROM<input id="replay-start" type="datetime-local" step="1"></label>
-          <label>TO<input id="replay-end" type="datetime-local" step="1"></label>
-          <label>SERIES
-            <select id="replay-category">
-              <option value="gex_full">FULL GEX</option>
-              <option value="gex_zero">0DTE GEX</option>
-              <option value="gex_one">1DTE GEX</option>
-            </select>
-          </label>
-        </div>
-        <div class="stream-controls">
-          <button id="replay-create" type="button">创建回放</button>
-          <button id="replay-next" type="button" disabled>下一帧</button>
-          <button id="replay-play" type="button" disabled>自动播放</button>
-          <select id="replay-speed" aria-label="回放速度">
-            <option value="30000">1× REALTIME</option>
-            <option value="3000" selected>10×</option>
-            <option value="500">60×</option>
-          </select>
-        </div>
-        <div class="stream-clock">
-          <span>VIRTUAL CLOCK</span>
-          <strong id="replay-clock">未启动</strong>
-          <small id="replay-state">PROVIDER CURSOR</small>
-          <small id="replay-trigger-state">CORTEX TRIGGER · IDLE</small>
-        </div>
-        <div class="stream-metrics">
-          <div><span>SPOT</span><strong id="replay-spot">—</strong></div>
-          <div><span>ZERO Γ</span><strong id="replay-zero">—</strong></div>
-          <div><span>CALL WALL</span><strong id="replay-call">—</strong></div>
-          <div><span>PUT WALL</span><strong id="replay-put">—</strong></div>
-        </div>
-        <div class="session-flow">
-          <header class="session-flow-header">
-            <div>
-              <span class="eyebrow">INTRADAY SESSION</span>
-              <strong id="session-title">等待数据流</strong>
-            </div>
-            <span id="session-identity">DATABASE BACKED</span>
-          </header>
-          <div class="session-lane" aria-label="日内 Agent 决策链">
-            <div id="session-data" class="session-node">
-              <span>01 · DATA</span><strong>未启动</strong><small>Moody Blues</small>
-            </div>
-            <i></i>
-            <div id="session-trigger" class="session-node">
-              <span>02 · TRIGGER</span><strong>等待帧</strong><small>数学唤醒条件</small>
-            </div>
-            <i></i>
-            <div id="session-cortex" class="session-node">
-              <span>03 · CORTEX</span><strong>休眠</strong><small>Run / Multi-Agent</small>
-            </div>
-            <i></i>
-            <div id="session-decision" class="session-node">
-              <span>04 · DECISION</span><strong>无候选</strong><small>Decision Desk</small>
-            </div>
-            <i></i>
-            <div id="session-effect" class="session-node">
-              <span>05 · EFFECT</span><strong>未执行</strong><small>Paper Ledger</small>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section class="account-strip panel">

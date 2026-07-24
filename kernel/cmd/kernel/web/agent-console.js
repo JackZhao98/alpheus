@@ -369,7 +369,6 @@ function renderActivity(activity) {
       ? "还没有 Agent 买卖或 Kernel 决策记录。"
       : "Kernel 操作记录暂时不可用。";
     list.append(empty);
-    renderSessionFlow();
     return;
   }
   for (const order of paperOrders.slice(0,8)) {
@@ -408,7 +407,6 @@ function renderActivity(activity) {
     item.append(copy,status);
     list.append(item);
   }
-  renderSessionFlow();
 }
 
 function renderCandidates(payload) {
@@ -429,7 +427,6 @@ function renderCandidates(payload) {
         ? "目前没有 Cortex 候选交易。"
         : "Cortex 候选交易暂时不可用。";
     list.append(empty);
-    renderSessionFlow();
     return;
   }
   for (const candidate of items.slice(0,5)) {
@@ -500,7 +497,6 @@ function renderCandidates(payload) {
     }
     list.append(item);
   }
-  renderSessionFlow();
 }
 
 function sessionNode(id,stateName,title,detail) {
@@ -663,14 +659,14 @@ async function reviewCandidate(candidate,decision,button) {
 
 function renderTriggers(triggers) {
   const items = Array.isArray(triggers?.items) ? triggers.items : [];
-  text("trigger-count",`${items.filter((item) => item.enabled).length} ACTIVE`);
+  text("trigger-count",`${items.filter((item) => item.enabled).length} DETECTORS`);
   const list = byId("trigger-list");
   if (!items.length) {
     list.innerHTML = `
       <div class="empty-module">
         <span class="empty-orbit"><i></i></span>
-        <strong>${triggers?.available ? "目前没有激活条件" : "Trigger Registry 尚未接入"}</strong>
-        <p>${triggers?.available ? "数学条件达到阈值后，Agent 会在这里被唤醒。" : "这里不会伪造触发点；注册器上线后显示真实条件、阈值与触发记录。"}</p>
+        <strong>${triggers?.available ? "目前没有已安装检测器" : "Signal Detector Registry 尚未接入"}</strong>
+        <p>${triggers?.available ? "数学模型会消费秒级市场 Frame，命中后产生可审计 Signal。" : "注册器上线后显示真实 Detector、版本、输入与 Signal 记录。"}</p>
       </div>`;
     return;
   }
@@ -682,7 +678,7 @@ function renderTriggers(triggers) {
     const copy = document.createElement("div");
     copy.className = "trigger-copy";
     const title = document.createElement("strong");
-    title.textContent = trigger.title || trigger.strategy_id || "Trigger";
+    title.textContent = trigger.title || trigger.strategy_id || "Detector";
     const detail = document.createElement("span");
     const comparator = {
       gte:"≥",lte:"≤",crosses_above:"↗ crosses",crosses_below:"↘ crosses",
@@ -844,6 +840,20 @@ async function loadMarket() {
   }
 }
 
+async function refreshLiveQuote() {
+  try {
+    const quote = await request(
+      `/agent/console/market/quote/${encodeURIComponent(state.symbol)}`,
+    );
+    const mid = (Number(quote.bid)+Number(quote.ask))/2;
+    text("quote-price",money(mid));
+    text("quote-spread",
+      `${money(quote.bid)} / ${money(quote.ask)} · ${when(quote.as_of)}`);
+  } catch {
+    text("quote-spread","实时 Frame 暂时不可用");
+  }
+}
+
 async function selectSymbol(symbol) {
   state.symbol = String(symbol || "SPY").toUpperCase();
   byId("symbol-input").value = state.symbol;
@@ -861,7 +871,6 @@ async function loadSnapshot() {
   renderEnvironment(snapshot.environment,snapshot.autonomy);
   renderPortfolio(snapshot.portfolio);
   renderActivity(snapshot.activity);
-  renderSessionFlow();
 }
 
 async function loadTriggers() {
@@ -1083,7 +1092,7 @@ async function restore() {
   byId("login-screen").hidden = true;
   const results = await Promise.allSettled([
     loadSnapshot().then(loadCandidates),
-    loadTriggers(),loadRooms(),loadHealth(),loadMarket(),loadSessions(),
+    loadTriggers(),loadRooms(),loadHealth(),loadMarket(),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) showError(failure.reason);
@@ -1103,11 +1112,7 @@ byId("chat-symbol").addEventListener("input",(event) => {
 });
 byId("refresh-console").addEventListener("click",() => Promise.allSettled([
   loadSnapshot().then(loadCandidates),loadTriggers(),loadHealth(),loadMarket(),
-  loadSessions(),
 ]));
-byId("replay-create").addEventListener("click",createReplay);
-byId("replay-next").addEventListener("click",advanceReplay);
-byId("replay-play").addEventListener("click",toggleReplayPlayback);
 for (const button of byId("environment-switch").querySelectorAll("button")) {
   button.addEventListener("click",async () => {
     if (button.disabled || button.dataset.environment === state.environment) return;
@@ -1116,7 +1121,6 @@ for (const button of byId("environment-switch").querySelectorAll("button")) {
     try {
       await loadSnapshot();
       await loadCandidates();
-      await loadSessions();
     } catch (error) {
       showError(error);
     }
@@ -1175,8 +1179,12 @@ byId("login-form").addEventListener("submit",async (event) => {
   }
 });
 
-initializeReplayRange();
 restore();
+setInterval(() => {
+  if (byId("login-screen").hidden) {
+    refreshLiveQuote();
+  }
+},1000);
 setInterval(() => {
   if (byId("login-screen").hidden) {
     Promise.allSettled([loadCandidates(),loadTriggers(),loadHealth(),loadMarket()]);

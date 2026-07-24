@@ -18,12 +18,10 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 	response := routeRequest(s.routes(), http.MethodGet, "/agent/console", "", "")
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), "交易决策控制台") ||
-		!strings.Contains(response.Body.String(), "AI Trigger Points") ||
-		!strings.Contains(response.Body.String(), "MOODY BLUES · DATA STREAM") ||
-		!strings.Contains(response.Body.String(), "自动播放") ||
-		!strings.Contains(response.Body.String(), `aria-label="回放速度"`) ||
-		!strings.Contains(response.Body.String(), "CORTEX TRIGGER · IDLE") ||
-		!strings.Contains(response.Body.String(), "INTRADAY SESSION") ||
+		!strings.Contains(response.Body.String(), "Strategy Detectors") ||
+		!strings.Contains(response.Body.String(), "FRAME → DETECTOR → SIGNAL") ||
+		!strings.Contains(response.Body.String(), `href="/agent/playground"`) ||
+		strings.Contains(response.Body.String(), "创建回放") ||
 		!strings.Contains(response.Body.String(), "Agent Channel") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -35,12 +33,35 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(script.Body.String(),
 			"`/agent/console/candidates?environment=${encodeURIComponent(environment)}`") ||
 		!strings.Contains(script.Body.String(), "trigger.last_value") ||
-		!strings.Contains(script.Body.String(), "advanceReplay") ||
-		!strings.Contains(script.Body.String(), "toggleReplayPlayback") ||
-		!strings.Contains(script.Body.String(), "renderReplayTriggerEvaluations") ||
-		!strings.Contains(script.Body.String(), "loadSessions") ||
-		!strings.Contains(script.Body.String(), "renderSessionFlow") ||
+		!strings.Contains(script.Body.String(), "refreshLiveQuote") ||
 		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
+		t.Fatalf("script status=%d body=%s",
+			script.Code, script.Body.String())
+	}
+}
+
+func TestAgentPlaygroundServesPaperOnlyStrategySurface(t *testing.T) {
+	s := &server{}
+	response := routeRequest(
+		s.routes(), http.MethodGet, "/agent/playground", "", "",
+	)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "策略验证沙盘") ||
+		!strings.Contains(response.Body.String(), "PAPER ONLY") ||
+		!strings.Contains(response.Body.String(), "初始资金") ||
+		!strings.Contains(response.Body.String(), "SIGNAL DETECTORS") ||
+		!strings.Contains(response.Body.String(), "ISOLATED PAPER ACCOUNT") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	script := routeRequest(
+		s.routes(), http.MethodGet, "/assets/agent-playground.js", "", "",
+	)
+	if script.Code != http.StatusOK ||
+		!strings.Contains(script.Body.String(), "initial_cash:cash") ||
+		!strings.Contains(script.Body.String(),
+			"detector_ids:selectedDetectorIDs()") ||
+		!strings.Contains(script.Body.String(),
+			`environment:"paper"`) {
 		t.Fatalf("script status=%d body=%s",
 			script.Code, script.Body.String())
 	}
