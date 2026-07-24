@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+
+	"alpheus/kernel/internal/units"
+	"github.com/lib/pq"
 )
 
 var (
@@ -20,24 +24,27 @@ var agentIntradayUUIDPattern = regexp.MustCompile(
 )
 
 type AgentIntradaySession struct {
-	SessionID           string    `json:"session_id"`
-	Subject             string    `json:"-"`
-	Environment         string    `json:"environment"`
-	RequestID           string    `json:"request_id"`
-	ReplayID            string    `json:"replay_id"`
-	ProviderID          string    `json:"provider_id"`
-	Symbol              string    `json:"symbol"`
-	Category            string    `json:"category"`
-	StartAvailableAt    time.Time `json:"start_available_at"`
-	EndAvailableAt      time.Time `json:"end_available_at"`
-	AsOf                time.Time `json:"as_of"`
-	State               string    `json:"state"`
-	ReplayGeneration    int64     `json:"replay_generation"`
-	LastSourceTimestamp time.Time `json:"last_source_timestamp,omitempty"`
-	LastAvailableAt     time.Time `json:"last_available_at,omitempty"`
-	LatestWakeRunID     string    `json:"latest_wake_run_id,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	SessionID           string       `json:"session_id"`
+	Subject             string       `json:"-"`
+	Environment         string       `json:"environment"`
+	RequestID           string       `json:"request_id"`
+	ReplayID            string       `json:"replay_id"`
+	ProviderID          string       `json:"provider_id"`
+	Symbol              string       `json:"symbol"`
+	Category            string       `json:"category"`
+	StartAvailableAt    time.Time    `json:"start_available_at"`
+	EndAvailableAt      time.Time    `json:"end_available_at"`
+	AsOf                time.Time    `json:"as_of"`
+	State               string       `json:"state"`
+	ReplayGeneration    int64        `json:"replay_generation"`
+	PaperAccountID      string       `json:"paper_account_id,omitempty"`
+	InitialCash         units.Micros `json:"initial_cash"`
+	DetectorIDs         []string     `json:"detector_ids"`
+	LastSourceTimestamp time.Time    `json:"last_source_timestamp,omitempty"`
+	LastAvailableAt     time.Time    `json:"last_available_at,omitempty"`
+	LatestWakeRunID     string       `json:"latest_wake_run_id,omitempty"`
+	CreatedAt           time.Time    `json:"created_at"`
+	UpdatedAt           time.Time    `json:"updated_at"`
 }
 
 type AgentIntradaySessionCreate struct {
@@ -53,6 +60,8 @@ type AgentIntradaySessionCreate struct {
 	AsOf             time.Time
 	State            string
 	ReplayGeneration int64
+	InitialCash      units.Micros
+	DetectorIDs      []string
 	Payload          json.RawMessage
 }
 
@@ -100,19 +109,62 @@ func (s *Store) CreateAgentIntradaySession(
 			_ = tx.Rollback()
 		}
 	}()
+	existing, existingErr := agentIntradaySessionByRequestTx(
+		ctx, tx, input.Subject, input.RequestID,
+	)
+	if existingErr == nil {
+		if !agentIntradayCreateMatches(existing, input) {
+			return AgentIntradaySession{}, ErrAgentIntradaySessionConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return AgentIntradaySession{}, normalizeDBError(err)
+		}
+		committed = true
+		return existing, nil
+	}
+	if !errors.Is(existingErr, sql.ErrNoRows) {
+		return AgentIntradaySession{}, existingErr
+	}
 	sessionID := NewID()
+	accountID := "playground-" + strings.ReplaceAll(sessionID, "-", "")
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_paper_account (
+		account_id,account_type,starting_cash_micros,cash_micros,
+		buying_power_micros,generation,created_at,updated_at
+	) VALUES ($1,'paper',$2,$2,$2,1,$3,$3)`,
+		accountID, int64(input.InitialCash), now,
+	); err != nil {
+		return AgentIntradaySession{}, normalizeDBError(err)
+	}
+	accountPayload, err := json.Marshal(map[string]any{
+		"schema_revision":      1,
+		"starting_cash_micros": int64(input.InitialCash),
+		"reason_code":          "strategy_playground_initialized",
+	})
+	if err != nil {
+		return AgentIntradaySession{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_paper_event (
+		event_id,account_id,generation,event_type,payload,occurred_at
+	) VALUES ($1::uuid,$2,1,'account_created',$3::jsonb,$4)`,
+		NewID(), accountID, accountPayload, now,
+	); err != nil {
+		return AgentIntradaySession{}, normalizeDBError(err)
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO agent_intraday_session (
 		session_id,subject,environment,request_id,replay_id,provider_id,
 		symbol,category,start_available_at,end_available_at,as_of,state,
-		replay_generation,created_at,updated_at
+		replay_generation,paper_account_id,initial_cash_micros,detector_ids,
+		created_at,updated_at
 	) VALUES (
 		$1::uuid,$2,$3,$4,$5::uuid,$6,$7,$8,$9,$10,$11,$12,$13,
-		clock_timestamp(),clock_timestamp()
-	) ON CONFLICT (subject,request_id) DO NOTHING`,
+		$14,$15,$16,clock_timestamp(),clock_timestamp()
+	)`,
 		sessionID, input.Subject, input.Environment, input.RequestID,
 		input.ReplayID, input.ProviderID, input.Symbol, input.Category,
 		input.StartAvailableAt, input.EndAvailableAt, input.AsOf,
-		input.State, input.ReplayGeneration,
+		input.State, input.ReplayGeneration, accountID,
+		int64(input.InitialCash), pq.Array(input.DetectorIDs),
 	)
 	if err != nil {
 		return AgentIntradaySession{}, normalizeDBError(err)
@@ -222,6 +274,7 @@ func (s *Store) RecordAgentIntradaySessionFrame(
 		RETURNING session_id::text,subject,environment,request_id,
 		  replay_id::text,provider_id,symbol,category,start_available_at,
 		  end_available_at,as_of,state,replay_generation,
+		  COALESCE(paper_account_id,''),initial_cash_micros,detector_ids,
 		  COALESCE(last_source_timestamp,'0001-01-01T00:00:00Z'),
 		  COALESCE(last_available_at,'0001-01-01T00:00:00Z'),
 		  COALESCE(latest_wake_run_id::text,''),created_at,updated_at`,
@@ -270,6 +323,7 @@ func (s *Store) ListAgentIntradaySessions(
 		session_id::text,subject,environment,request_id,replay_id::text,
 		provider_id,symbol,category,start_available_at,end_available_at,
 		as_of,state,replay_generation,
+		COALESCE(paper_account_id,''),initial_cash_micros,detector_ids,
 		COALESCE(last_source_timestamp,'0001-01-01T00:00:00Z'),
 		COALESCE(last_available_at,'0001-01-01T00:00:00Z'),
 		COALESCE(latest_wake_run_id::text,''),created_at,updated_at
@@ -353,6 +407,7 @@ func agentIntradaySessionByRequestTx(
 		session_id::text,subject,environment,request_id,replay_id::text,
 		provider_id,symbol,category,start_available_at,end_available_at,
 		as_of,state,replay_generation,
+		COALESCE(paper_account_id,''),initial_cash_micros,detector_ids,
 		COALESCE(last_source_timestamp,'0001-01-01T00:00:00Z'),
 		COALESCE(last_available_at,'0001-01-01T00:00:00Z'),
 		COALESCE(latest_wake_run_id::text,''),created_at,updated_at
@@ -381,6 +436,7 @@ func agentIntradaySessionByReplayTx(
 		session_id::text,subject,environment,request_id,replay_id::text,
 		provider_id,symbol,category,start_available_at,end_available_at,
 		as_of,state,replay_generation,
+		COALESCE(paper_account_id,''),initial_cash_micros,detector_ids,
 		COALESCE(last_source_timestamp,'0001-01-01T00:00:00Z'),
 		COALESCE(last_available_at,'0001-01-01T00:00:00Z'),
 		COALESCE(latest_wake_run_id::text,''),created_at,updated_at
@@ -407,7 +463,9 @@ func agentIntradaySessionScanTargets(
 		&session.RequestID, &session.ReplayID, &session.ProviderID,
 		&session.Symbol, &session.Category, &session.StartAvailableAt,
 		&session.EndAvailableAt, &session.AsOf, &session.State,
-		&session.ReplayGeneration, &session.LastSourceTimestamp,
+		&session.ReplayGeneration, &session.PaperAccountID,
+		&session.InitialCash, pq.Array(&session.DetectorIDs),
+		&session.LastSourceTimestamp,
 		&session.LastAvailableAt, &session.LatestWakeRunID,
 		&session.CreatedAt, &session.UpdatedAt,
 	}
@@ -422,11 +480,12 @@ func normalizeAgentIntradayCreate(input *AgentIntradaySessionCreate) {
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
 	input.Category = strings.TrimSpace(input.Category)
 	input.State = strings.TrimSpace(input.State)
+	input.DetectorIDs = normalizeAgentDetectorIDs(input.DetectorIDs)
 }
 
 func validAgentIntradayCreate(input AgentIntradaySessionCreate) bool {
 	return input.Subject != "" && len(input.Subject) <= 200 &&
-		validAgentEnvironment(input.Environment) &&
+		input.Environment == "paper" &&
 		input.RequestID != "" && len(input.RequestID) <= 200 &&
 		agentIntradayUUIDPattern.MatchString(input.ReplayID) &&
 		input.ProviderID == "gexbot-classic" &&
@@ -434,6 +493,10 @@ func validAgentIntradayCreate(input AgentIntradaySessionCreate) bool {
 		validAgentIntradayCategory(input.Category) &&
 		validAgentIntradayState(input.State) &&
 		input.ReplayGeneration > 0 &&
+		input.InitialCash >= units.MustMicros("1000") &&
+		input.InitialCash <= units.MustMicros("10000000") &&
+		len(input.DetectorIDs) <= 32 &&
+		validAgentDetectorIDs(input.DetectorIDs) &&
 		!input.StartAvailableAt.IsZero() &&
 		!input.EndAvailableAt.Before(input.StartAvailableAt) &&
 		!input.AsOf.Before(input.EndAvailableAt) &&
@@ -480,5 +543,48 @@ func agentIntradayCreateMatches(
 		session.Category == input.Category &&
 		session.StartAvailableAt.Equal(input.StartAvailableAt) &&
 		session.EndAvailableAt.Equal(input.EndAvailableAt) &&
-		session.AsOf.Equal(input.AsOf)
+		session.AsOf.Equal(input.AsOf) &&
+		session.InitialCash == input.InitialCash &&
+		equalAgentDetectorIDs(session.DetectorIDs, input.DetectorIDs)
+}
+
+func normalizeAgentDetectorIDs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func validAgentDetectorIDs(values []string) bool {
+	for _, value := range values {
+		if len(value) > 200 ||
+			(!agentIntradayUUIDPattern.MatchString(value) &&
+				!regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`).MatchString(value)) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalAgentDetectorIDs(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

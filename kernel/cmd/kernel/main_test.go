@@ -220,7 +220,11 @@ func (m *memoryStore) CreateAgentIntradaySession(
 		StartAvailableAt: input.StartAvailableAt,
 		EndAvailableAt:   input.EndAvailableAt, AsOf: input.AsOf,
 		State: input.State, ReplayGeneration: input.ReplayGeneration,
-		CreatedAt: now, UpdatedAt: now,
+		PaperAccountID: "playground-" +
+			strings.ReplaceAll(input.ReplayID, "-", ""),
+		InitialCash: input.InitialCash,
+		DetectorIDs: append([]string(nil), input.DetectorIDs...),
+		CreatedAt:   now, UpdatedAt: now,
 	}
 	m.agentIntradaySessions[input.ReplayID] = session
 	m.agentIntradayEvents[session.SessionID] = []store.AgentIntradaySessionEvent{{

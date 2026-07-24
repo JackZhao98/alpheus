@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"alpheus/kernel/internal/units"
 )
 
 func TestAgentIntradaySessionContractsRejectUnsafeProjection(t *testing.T) {
@@ -17,6 +19,8 @@ func TestAgentIntradaySessionContractsRejectUnsafeProjection(t *testing.T) {
 		EndAvailableAt: start.Add(time.Hour),
 		AsOf:           start.Add(2 * time.Hour), State: "active",
 		ReplayGeneration: 1,
+		InitialCash:      units.MustMicros("100000"),
+		DetectorIDs:      []string{"gex-cross"},
 		Payload:          json.RawMessage(`{"state":"active","generation":1}`),
 	}
 	normalizeAgentIntradayCreate(&valid)
@@ -37,6 +41,11 @@ func TestAgentIntradaySessionContractsRejectUnsafeProjection(t *testing.T) {
 	unsafe.EndAvailableAt = unsafe.StartAvailableAt.Add(-time.Second)
 	if validAgentIntradayCreate(unsafe) {
 		t.Fatal("reversed temporal boundary accepted")
+	}
+	unsafe = valid
+	unsafe.Environment = "live"
+	if validAgentIntradayCreate(unsafe) {
+		t.Fatal("Replay accepted outside Paper")
 	}
 }
 

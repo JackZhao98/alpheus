@@ -77,13 +77,15 @@ type agentConsoleCandidateReviewCommand struct {
 }
 
 type agentConsoleReplayCreateCommand struct {
-	RequestID   string `json:"request_id"`
-	Environment string `json:"environment"`
-	Symbol      string `json:"symbol"`
-	Category    string `json:"category"`
-	Start       string `json:"start_available_at"`
-	End         string `json:"end_available_at"`
-	AsOf        string `json:"as_of"`
+	RequestID   string       `json:"request_id"`
+	Environment string       `json:"environment"`
+	Symbol      string       `json:"symbol"`
+	Category    string       `json:"category"`
+	Start       string       `json:"start_available_at"`
+	End         string       `json:"end_available_at"`
+	AsOf        string       `json:"as_of"`
+	InitialCash units.Micros `json:"initial_cash"`
+	DetectorIDs []string     `json:"detector_ids"`
 }
 
 type agentConsoleReplayStepCommand struct {
@@ -478,11 +480,14 @@ func (s *server) postAgentConsoleReplay(
 	input.Start = strings.TrimSpace(input.Start)
 	input.End = strings.TrimSpace(input.End)
 	input.AsOf = strings.TrimSpace(input.AsOf)
-	if input.Environment != "paper" && input.Environment != "live" {
+	if input.InitialCash == 0 {
+		input.InitialCash = units.MustMicros("100000")
+	}
+	if input.Environment != "paper" {
 		writeAgentQueryError(
 			w, http.StatusBadRequest,
-			"agent_intraday_session_invalid",
-			"Intraday session environment is invalid",
+			"strategy_playground_paper_only",
+			"Strategy Playground is available only in Paper",
 		)
 		return
 	}
@@ -547,6 +552,8 @@ func (s *server) postAgentConsoleReplay(
 				AsOf:             asOf.UTC(),
 				State:            envelope.State,
 				ReplayGeneration: envelope.Generation,
+				InitialCash:      input.InitialCash,
+				DetectorIDs:      input.DetectorIDs,
 				Payload:          raw,
 			},
 		)
@@ -580,9 +587,10 @@ func (s *server) postAgentConsoleReplayNext(
 		return
 	}
 	if s.store != nil {
-		if _, err := s.store.AgentIntradaySessionByReplay(
+		session, err := s.store.AgentIntradaySessionByReplay(
 			authenticatedSubject(r), replayID,
-		); err != nil {
+		)
+		if err != nil {
 			writeAgentQueryError(
 				w, http.StatusNotFound,
 				"agent_intraday_session_not_found",
@@ -590,6 +598,22 @@ func (s *server) postAgentConsoleReplayNext(
 			)
 			return
 		}
+		body, err := json.Marshal(map[string]any{
+			"generation":   input.Generation,
+			"detector_ids": session.DetectorIDs,
+		})
+		if err != nil {
+			writeInternalError(w, "encode Strategy Playground cursor", err)
+			return
+		}
+		raw, status, code := s.agentRoomUpstream(
+			r.Context(), http.MethodPost,
+			"/v1/data-streams/gexbot/replays/"+replayID+"/next", body,
+		)
+		s.finishAgentConsoleReplayNext(
+			w, r, replayID, raw, status, code,
+		)
+		return
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -600,6 +624,17 @@ func (s *server) postAgentConsoleReplayNext(
 		r.Context(), http.MethodPost,
 		"/v1/data-streams/gexbot/replays/"+replayID+"/next", body,
 	)
+	s.finishAgentConsoleReplayNext(w, r, replayID, raw, status, code)
+}
+
+func (s *server) finishAgentConsoleReplayNext(
+	w http.ResponseWriter,
+	r *http.Request,
+	replayID string,
+	raw json.RawMessage,
+	status int,
+	code string,
+) {
 	if code != "" {
 		writeAgentQueryError(
 			w, http.StatusServiceUnavailable,
