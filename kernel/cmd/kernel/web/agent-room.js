@@ -151,11 +151,41 @@ const stageLabels = {
   decision_desk_completed:"Decision Desk 已形成回答",
   tool_call_authorized:"工具调用已授权",
   tool_receipt_succeeded:"工具返回已验证",
+  tool_branch_failed:"工具分支失败",
+  cortex_attempt_failed:"Cortex 执行失败",
+  task_graph_branch_failed:"并行 Agent 分支失败",
   task_graph_round_started:"并行 Agent 轮次启动",
   task_graph_join_completed:"并行结果已汇合",
 };
 
+const failureLabels = {
+  kernel_tool_action_invalid:"工具动作不符合已冻结契约",
+  kernel_tool_identity_invalid:"工具身份与已授权工具不一致",
+  kernel_tool_arguments_json_invalid:"工具参数不是有效 JSON",
+  kernel_tool_arguments_invalid:"工具参数未通过校验",
+  kernel_tool_argument_unknown:"工具包含未注册参数",
+  kernel_tool_argument_required:"工具缺少必填参数",
+  kernel_tool_argument_shape_invalid:"工具参数结构不正确",
+  kernel_tool_asset_type_invalid:"资产类型无效；股票与 ETF 应使用 instrument",
+  kernel_tool_interval_invalid:"历史行情间隔无效；应使用 hour 或 day 等正式值",
+  kernel_tool_start_time_invalid:"历史行情开始时间不是 RFC3339 UTC",
+  kernel_tool_end_time_invalid:"历史行情结束时间无效或早于开始时间",
+  kernel_tool_bounds_invalid:"行情时段参数不受支持",
+  kernel_tool_adjustment_type_invalid:"复权参数不受支持",
+  kernel_tool_adjustment_interval_invalid:"all 复权只能用于日内间隔",
+  kernel_tool_symbols_invalid:"股票代码列表无效",
+  kernel_tool_query_invalid:"搜索关键词无效",
+  kernel_tool_limit_invalid:"搜索数量必须是 1–20 的整数",
+  task_graph_tool_failed:"已授权工具执行失败或数据提供方拒绝请求",
+  task_graph_admission_failed:"并行 Agent 任务未能建立",
+  task_graph_join_failed:"并行 Agent 结果未达到汇合条件",
+  runtime_deadline_expired:"运行超过了冻结的截止时间",
+};
+
 function humanStage(event) {
+  if (event.error_code) {
+    return failureLabels[event.error_code] || `Cortex 失败：${event.error_code}`;
+  }
   if (stageLabels[event.stage]) return stageLabels[event.stage];
   if (event.stage?.startsWith("handoff_to_")) {
     return `交接给 ${event.stage.slice(11).replaceAll("_"," ")}`;
@@ -167,6 +197,7 @@ function humanStage(event) {
 }
 
 function eventKind(event) {
+  if (event.error_code || event.stage?.endsWith("_failed")) return "failure";
   if (event.tool_id || event.stage?.startsWith("tool_")) return "tool";
   if (event.stage?.startsWith("handoff_") || event.target_role) return "agent";
   if (event.stage?.endsWith("_completed")) return "done";
@@ -183,7 +214,10 @@ function renderActivity(runState = "") {
     copy.append(element("strong","",humanStage(event)));
     const facts = [];
     if (event.target_role) facts.push(event.target_role.replaceAll("_"," "));
+    if (event.role_id) facts.push(event.role_id.replaceAll("_"," "));
     if (event.tool_id) facts.push(event.tool_id);
+    if (event.error_code) facts.push(event.error_code);
+    if (event.retryable === false) facts.push("已停止自动重试");
     if (event.state) facts.push(event.state);
     if (!facts.length && (event.at || event.created_at)) facts.push(formatWhen(event.at || event.created_at));
     copy.append(element("span","",facts.join(" · ") || "已持久化"));
@@ -197,8 +231,17 @@ function renderActivity(runState = "") {
     events.push(empty);
   }
   byId("activity-timeline").replaceChildren(...events);
-  byId("run-banner").hidden = !state.runID || terminal;
-  if (state.runID && !terminal) {
+  const failed = runState === "failed";
+  const banner = byId("run-banner");
+  banner.classList.toggle("failed",failed);
+  banner.hidden = (!state.runID && !failed) || (terminal && !failed);
+  byId("cancel-run").hidden = terminal;
+  if (failed) {
+    const failure = [...state.trace].reverse().find((event) => event.error_code);
+    byId("run-status").textContent = "本次运行未完成";
+    byId("run-stage").textContent = failure ?
+      humanStage(failure) : "Cortex 已安全停止，但没有可公开的详细原因。";
+  } else if (state.runID && !terminal) {
     const last = state.trace[state.trace.length-1];
     byId("run-stage").textContent = last ? humanStage(last) : "等待执行记录…";
     byId("run-status").textContent = runState === "canceling" ? "正在停止运行" : "Cortex 正在工作";

@@ -381,6 +381,14 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 .run-banner small { grid-column:2; margin-top:2px; color:#68756b; font-size:9px; }
 .run-pulse { width:6px; height:6px; border-radius:50%; background:var(--green); animation:pulse 1.6s infinite; }
 .run-banner button { border:0; background:transparent; color:#9c7772; font-size:9px; cursor:pointer; }
+.run-banner.failed { border-color:#683c38; background:#251716; }
+.run-banner.failed .run-pulse {
+  background:var(--danger);
+  animation:none;
+  box-shadow:0 0 0 1px #874d47;
+}
+.run-banner.failed strong { color:#e2aaa4; }
+.run-banner.failed small { color:#9f7773; }
 @keyframes pulse { 50% { opacity:.35; box-shadow:0 0 0 5px rgba(145,214,173,.12); } }
 .activity-header { display:flex; justify-content:space-between; align-items:start; padding-bottom:23px; border-bottom:1px solid var(--line); }
 .activity-header h2 { margin:6px 0 0; font-family:Georgia,"Times New Roman",serif; font-size:20px; font-weight:400; }
@@ -418,6 +426,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible 
 }
 .activity-event.tool > i { background:var(--amber); box-shadow:0 0 0 1px #836a40; }
 .activity-event.agent > i,.activity-event.done > i { background:var(--green); box-shadow:0 0 0 1px #5d8d70; }
+.activity-event.failure > i { background:var(--danger); box-shadow:0 0 0 1px #874d47; }
+.activity-event.failure strong { color:#d79a94; }
 .activity-event strong { display:block; color:#b9c2bb; font-size:10px; line-height:1.35; }
 .activity-event span { display:block; margin-top:3px; color:#59635b; font-size:9px; line-height:1.4; overflow-wrap:anywhere; }
 .context-list { display:grid; gap:10px; margin:17px 0 0; }
