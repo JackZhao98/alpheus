@@ -194,7 +194,12 @@ function renderTriggers(triggers) {
     const title = document.createElement("strong");
     title.textContent = trigger.title || trigger.strategy_id || "Trigger";
     const detail = document.createElement("span");
-    detail.textContent = trigger.condition || trigger.description || "已激活";
+    const comparator = {
+      gte:"≥",lte:"≤",crosses_above:"↗ crosses",crosses_below:"↘ crosses",
+    }[trigger.comparator] || trigger.comparator || "";
+    const metric = (trigger.metric || "metric").replaceAll("_"," ");
+    detail.textContent = trigger.condition || trigger.description ||
+      `${trigger.symbol || ""} · ${metric} ${comparator} ${trigger.threshold ?? "—"} · ${trigger.cooldown_seconds || 0}s cooldown`;
     copy.append(title,detail);
     const stateLabel = document.createElement("span");
     stateLabel.textContent = (trigger.state || "ARMED").toUpperCase();
@@ -350,7 +355,20 @@ async function loadSnapshot() {
   renderEnvironment(snapshot.environment,snapshot.autonomy);
   renderPortfolio(snapshot.portfolio);
   renderActivity(snapshot.activity);
-  renderTriggers(snapshot.triggers);
+}
+
+async function loadTriggers() {
+  try {
+    const triggers = await request("/agent/console/triggers");
+    renderTriggers(triggers);
+  } catch (error) {
+    renderTriggers({
+      available:false,
+      items:[],
+      reason:"cortex_trigger_registry_unavailable",
+    });
+    throw error;
+  }
 }
 
 function roomRunning(room) {
@@ -543,7 +561,7 @@ async function restore() {
     return;
   }
   byId("login-screen").hidden = true;
-  const results = await Promise.allSettled([loadSnapshot(),loadRooms(),loadHealth(),loadMarket()]);
+  const results = await Promise.allSettled([loadSnapshot(),loadTriggers(),loadRooms(),loadHealth(),loadMarket()]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) showError(failure.reason);
   if (state.rooms.length) await selectRoom(state.rooms[0].conversation_id);
@@ -560,7 +578,7 @@ byId("symbol-input").addEventListener("input",(event) => {
 byId("chat-symbol").addEventListener("input",(event) => {
   event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9.^_-]/g,"");
 });
-byId("refresh-console").addEventListener("click",() => Promise.allSettled([loadSnapshot(),loadHealth(),loadMarket()]));
+byId("refresh-console").addEventListener("click",() => Promise.allSettled([loadSnapshot(),loadTriggers(),loadHealth(),loadMarket()]));
 byId("room-select").addEventListener("change",(event) => selectRoom(event.target.value).catch(showError));
 byId("new-room").addEventListener("click",() => selectRoom(""));
 byId("composer").addEventListener("submit",submitMessage);

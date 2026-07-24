@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,6 +20,14 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(response.Body.String(), "AI Trigger Points") ||
 		!strings.Contains(response.Body.String(), "Agent Channel") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	script := routeRequest(s.routes(), http.MethodGet,
+		"/assets/agent-console.js", "", "")
+	if script.Code != http.StatusOK ||
+		!strings.Contains(script.Body.String(),
+			`request("/agent/console/triggers")`) {
+		t.Fatalf("script status=%d body=%s",
+			script.Code, script.Body.String())
 	}
 }
 
@@ -98,5 +109,86 @@ func TestAgentConsoleMarketRoutesUseAgentWebAuthorization(t *testing.T) {
 		"/agent/console/market/bars/SPY?days=5", "", "")
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAgentConsoleTriggerRegistryUsesCortexAuthority(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
+			}
+			switch {
+			case r.Method == http.MethodGet &&
+				r.URL.Path == "/v1/decision-triggers":
+				writeJSON(w, http.StatusOK, map[string]any{
+					"available": true,
+					"items": []any{map[string]any{
+						"trigger_id": "trigger-1",
+						"title":      "SPY downside review",
+					}},
+				})
+			case r.Method == http.MethodPut &&
+				r.URL.Path == "/v1/decision-triggers/trigger-1":
+				var command agentConsoleTriggerCommand
+				if json.NewDecoder(r.Body).Decode(&command) != nil ||
+					command.Symbol != "SPY" ||
+					command.Threshold.String() != "730" {
+					t.Fatalf("command=%+v", command)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"status": "registered",
+					"trigger": map[string]any{
+						"trigger_id": "trigger-1",
+						"title":      command.Title,
+					},
+				})
+			default:
+				t.Fatalf("unexpected upstream request: %s %s",
+					r.Method, r.URL.Path)
+			}
+		}))
+	defer upstream.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cortex-token")
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{
+		cortexURL:       upstream.URL,
+		cortexTokenFile: tokenPath,
+		runtimeHTTP:     upstream.Client(),
+	}
+	getResponse := httptest.NewRecorder()
+	s.getAgentConsoleTriggers(getResponse,
+		httptest.NewRequest(http.MethodGet,
+			"/agent/console/triggers", nil))
+	if getResponse.Code != http.StatusOK ||
+		!strings.Contains(getResponse.Body.String(), "SPY downside review") {
+		t.Fatalf("GET status=%d body=%s",
+			getResponse.Code, getResponse.Body.String())
+	}
+	putResponse := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut,
+		"/agent/console/triggers/trigger-1",
+		strings.NewReader(`{
+				"expected_generation":0,
+				"title":"SPY downside review",
+				"strategy_id":"price_monitor",
+				"data_source":"kernel_quote",
+				"symbol":"spy",
+				"metric":"mid_price",
+				"comparator":"crosses_below",
+				"threshold":730,
+				"cooldown_seconds":900,
+				"objective":"Reassess SPY.",
+				"enabled":true
+			}`))
+	putRequest.SetPathValue("id", "trigger-1")
+	putRequest.Header.Set("Content-Type", "application/json")
+	s.putAgentConsoleTrigger(putResponse, putRequest)
+	if putResponse.Code != http.StatusOK ||
+		!strings.Contains(putResponse.Body.String(), `"status":"registered"`) {
+		t.Fatalf("PUT status=%d body=%s",
+			putResponse.Code, putResponse.Body.String())
 	}
 }

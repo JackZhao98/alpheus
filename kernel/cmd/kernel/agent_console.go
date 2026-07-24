@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"alpheus/kernel/internal/config"
@@ -38,6 +40,20 @@ type agentConsoleActivity struct {
 	Available  bool                 `json:"available"`
 	ErrorCode  string               `json:"error_code,omitempty"`
 	Operations []store.OperationRow `json:"operations"`
+}
+
+type agentConsoleTriggerCommand struct {
+	ExpectedGeneration int64       `json:"expected_generation"`
+	Title              string      `json:"title"`
+	StrategyID         string      `json:"strategy_id"`
+	DataSource         string      `json:"data_source"`
+	Symbol             string      `json:"symbol"`
+	Metric             string      `json:"metric"`
+	Comparator         string      `json:"comparator"`
+	Threshold          json.Number `json:"threshold"`
+	CooldownSeconds    int64       `json:"cooldown_seconds"`
+	Objective          string      `json:"objective"`
+	Enabled            bool        `json:"enabled"`
 }
 
 func (s *server) agentConsoleEnvironment() agentConsoleEnvironment {
@@ -96,4 +112,62 @@ func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request)
 		"generated_at": time.Now().UTC(),
 		"source":       "kernel_console_projection",
 	})
+}
+
+func (s *server) getAgentConsoleTriggers(w http.ResponseWriter, r *http.Request) {
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodGet, "/v1/decision-triggers", nil)
+	if code != "" || status != http.StatusOK {
+		writeAgentQueryError(w, http.StatusServiceUnavailable,
+			"cortex_trigger_registry_unavailable",
+			"Decision Trigger Registry is unavailable")
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func (s *server) putAgentConsoleTrigger(w http.ResponseWriter, r *http.Request) {
+	triggerID := strings.TrimSpace(r.PathValue("id"))
+	var input agentConsoleTriggerCommand
+	if !validCortexConversationID(triggerID) ||
+		!decodeJSONBody(w, r, &input) {
+		if !validCortexConversationID(triggerID) {
+			writeAgentQueryError(w, http.StatusBadRequest,
+				"cortex_trigger_invalid", "Decision Trigger is invalid")
+		}
+		return
+	}
+	input.Title = strings.TrimSpace(input.Title)
+	input.StrategyID = strings.TrimSpace(input.StrategyID)
+	input.DataSource = strings.TrimSpace(input.DataSource)
+	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
+	input.Metric = strings.TrimSpace(input.Metric)
+	input.Comparator = strings.TrimSpace(input.Comparator)
+	input.Objective = strings.TrimSpace(input.Objective)
+	body, err := json.Marshal(input)
+	if err != nil {
+		writeInternalError(w, "encode decision Trigger", err)
+		return
+	}
+	raw, status, code := s.agentRoomUpstream(
+		r.Context(), http.MethodPut,
+		"/v1/decision-triggers/"+triggerID, body)
+	if code != "" {
+		writeAgentQueryError(w, http.StatusServiceUnavailable,
+			"cortex_trigger_registry_unavailable",
+			"Decision Trigger Registry is unavailable")
+		return
+	}
+	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func writeAgentConsoleUpstream(
+	w http.ResponseWriter,
+	raw json.RawMessage,
+	status int,
+) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
 }
