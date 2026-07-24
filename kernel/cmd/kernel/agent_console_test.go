@@ -128,6 +128,7 @@ func TestAgentConsolePaperPortfolioIsIndependentAndDurable(t *testing.T) {
 		!strings.Contains(body, `"selected":"paper"`) ||
 		!strings.Contains(body, `"source":"agent-paper-ledger"`) ||
 		!strings.Contains(body, `"equity":100000`) ||
+		!strings.Contains(body, `"paper_orders":[]`) ||
 		strings.Contains(body, "robinhood-mcp") {
 		t.Fatalf("status=%d body=%s", response.Code, body)
 	}

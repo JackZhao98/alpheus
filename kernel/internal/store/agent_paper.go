@@ -147,6 +147,43 @@ func (s *Store) AgentPaperPortfolio(
 	return account, positions, nil
 }
 
+func (s *Store) ListAgentPaperOrders(
+	accountID string,
+	limit int,
+) ([]AgentPaperOrder, error) {
+	if strings.TrimSpace(accountID) == "" || limit < 1 || limit > 100 {
+		return nil, ErrAgentPaperOrder
+	}
+	ctx, cancel := s.deadline()
+	defer cancel()
+	rows, err := s.DB.QueryContext(ctx, `SELECT
+		order_id,account_id,idempotency_key,request_hash,actor_kind,actor_id,
+		symbol,kind,side,multiplier,qty,fill_price_micros,notional_micros,
+		quote_bid_micros,quote_ask_micros,quote_source,quote_observed_at,
+		state,generation,created_at,filled_at
+		FROM agent_paper_order
+		WHERE account_id=$1
+		ORDER BY filled_at DESC,order_id DESC LIMIT $2`,
+		accountID, limit,
+	)
+	if err != nil {
+		return nil, normalizeDBError(err)
+	}
+	defer rows.Close()
+	orders := make([]AgentPaperOrder, 0)
+	for rows.Next() {
+		order, scanErr := scanAgentPaperOrder(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		orders = append(orders, *order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, normalizeDBError(err)
+	}
+	return orders, nil
+}
+
 func (s *Store) ExecuteAgentPaperOrder(
 	input AgentPaperOrderInput,
 ) (AgentPaperOrderResult, error) {

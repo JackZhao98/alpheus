@@ -40,9 +40,10 @@ type agentConsolePortfolio struct {
 }
 
 type agentConsoleActivity struct {
-	Available  bool                 `json:"available"`
-	ErrorCode  string               `json:"error_code,omitempty"`
-	Operations []store.OperationRow `json:"operations"`
+	Available   bool                    `json:"available"`
+	ErrorCode   string                  `json:"error_code,omitempty"`
+	Operations  []store.OperationRow    `json:"operations"`
+	PaperOrders []store.AgentPaperOrder `json:"paper_orders"`
 }
 
 type agentConsoleTriggerCommand struct {
@@ -107,11 +108,19 @@ func (s *server) getAgentConsoleSnapshot(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	activity := agentConsoleActivity{Operations: []store.OperationRow{}}
+	activity := agentConsoleActivity{
+		Operations:  []store.OperationRow{},
+		PaperOrders: []store.AgentPaperOrder{},
+	}
 	if environment.Selected == "paper" {
-		// Paper events are independent from legacy/live Kernel operations.
-		// Until the Paper execution slice lands there are truthfully no trades.
-		activity.Available = true
+		if orders, err := s.store.ListAgentPaperOrders(
+			"agent-default", agentConsoleOperationLimit,
+		); err != nil {
+			activity.ErrorCode = "paper_activity_unavailable"
+		} else {
+			activity.Available = true
+			activity.PaperOrders = orders
+		}
 	} else {
 		if operations, err := s.store.ListOperations(
 			"", agentConsoleOperationLimit, nil,

@@ -90,6 +90,7 @@ type storeAPI interface {
 	AgentPaperPortfolio(string) (
 		store.AgentPaperAccount, []store.AgentPaperPosition, error,
 	)
+	ListAgentPaperOrders(string, int) ([]store.AgentPaperOrder, error)
 	ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
 	TopLessons(limit int) ([]store.Lesson, error)

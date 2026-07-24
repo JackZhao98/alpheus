@@ -120,6 +120,13 @@ func (m *memoryStore) AgentPaperPortfolio(
 	}, []store.AgentPaperPosition{}, nil
 }
 
+func (m *memoryStore) ListAgentPaperOrders(
+	_ string,
+	_ int,
+) ([]store.AgentPaperOrder, error) {
+	return []store.AgentPaperOrder{}, nil
+}
+
 func newMemoryStore() *memoryStore {
 	now := time.Now().UTC()
 	testPolicy := dualLedgerLimits()

@@ -143,10 +143,11 @@ function operationSummary(operation) {
 
 function renderActivity(activity) {
   const operations = activity.available && Array.isArray(activity.operations) ? activity.operations : [];
-  text("activity-count",`${operations.length} EVENTS`);
+  const paperOrders = activity.available && Array.isArray(activity.paper_orders) ? activity.paper_orders : [];
+  text("activity-count",`${operations.length + paperOrders.length} EVENTS`);
   const list = byId("operation-list");
   list.replaceChildren();
-  if (!operations.length) {
+  if (!operations.length && !paperOrders.length) {
     const empty = document.createElement("div");
     empty.className = "table-empty";
     empty.textContent = activity.available
@@ -154,6 +155,25 @@ function renderActivity(activity) {
       : "Kernel 操作记录暂时不可用。";
     list.append(empty);
     return;
+  }
+  for (const order of paperOrders.slice(0,8)) {
+    const item = document.createElement("div");
+    item.className = `operation-item ${order.state || ""}`;
+    item.append(document.createElement("i"));
+    const copy = document.createElement("div");
+    copy.className = "operation-copy";
+    const title = document.createElement("strong");
+    title.textContent = `${String(order.side || "trade").toUpperCase()} ${order.symbol || "—"} × ${order.qty ?? "—"} @ ${money(order.fill_price)}`;
+    const meta = document.createElement("span");
+    const actor = order.actor_kind === "agent" ? "Cortex Agent" :
+      order.actor_kind === "trigger" ? "Trigger Wake" : "User";
+    meta.textContent = `${actor} · ${when(order.filled_at,true)} · PAPER · ${order.quote_source || "quote"}`;
+    copy.append(title,meta);
+    const status = document.createElement("span");
+    status.className = "operation-state";
+    status.textContent = (order.state || "UNKNOWN").replaceAll("_"," ").toUpperCase();
+    item.append(copy,status);
+    list.append(item);
   }
   for (const operation of operations.slice(0,8)) {
     const item = document.createElement("div");
