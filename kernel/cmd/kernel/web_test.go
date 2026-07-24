@@ -89,8 +89,8 @@ func TestAgentRoomIsAProductSurfaceAndHardened(t *testing.T) {
 		t.Fatalf("Agent Room status=%d body=%s", page.Code, page.Body.String())
 	}
 	for _, required := range []string{
-		"Agent Room", "Research", "SPX Gamma", "Equity Discovery",
-		"Watchlist Monitor", "Agent 活动", "message-input",
+		"Agent Room", "Research Room", "Monitor Session", "Copilot Session",
+		"Agentic Session", "Gamma 只是可插拔策略之一", "Agent 活动", "message-input",
 	} {
 		if !strings.Contains(page.Body.String(), required) {
 			t.Fatalf("Agent Room missing %q", required)
