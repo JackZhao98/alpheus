@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpheus Command Console</title>
+  <meta name="description" content="Alpheus Agent trading command console">
+  <link rel="stylesheet" href="/assets/agent-console.css">
+</head>
+<body>
+  <div id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-card">
+      <span class="eyebrow">ALPHEUS ACCESS</span>
+      <h1>进入 Command Console</h1>
+      <p>使用 Agent Web 凭据进入受保护的控制台。</p>
+      <input id="login-password" type="password" autocomplete="current-password" placeholder="访问密码" required>
+      <button type="submit">继续</button>
+      <span id="login-error" class="form-error" role="alert"></span>
+    </form>
+  </div>
+
+  <div class="console-shell">
+    <nav class="nav-rail" aria-label="主导航">
+      <a class="brand-mark" href="/agent/console" aria-label="Alpheus Console">A</a>
+      <div class="nav-group">
+        <a class="nav-item active" href="/agent/console" aria-label="控制台"><span>⌁</span><small>CONSOLE</small></a>
+        <a class="nav-item" href="/agent" aria-label="Agent 对话"><span>◫</span><small>CHAT</small></a>
+        <a class="nav-item" href="/gex" aria-label="GEX 数据"><span>∿</span><small>GEX</small></a>
+        <a class="nav-item" href="/agent-lab" aria-label="Agent Lab"><span>⌘</span><small>LAB</small></a>
+      </div>
+      <div id="system-dot" class="system-dot" title="系统状态"><i></i><span>CORTEX</span></div>
+    </nav>
+
+    <main class="command-center">
+      <header class="command-header">
+        <div>
+          <span class="eyebrow">COMMAND CONSOLE</span>
+          <h1>交易决策控制台</h1>
+        </div>
+        <div class="header-controls">
+          <div class="control-block">
+            <span>ENVIRONMENT</span>
+            <div id="environment-switch" class="segmented environment-switch">
+              <button data-environment="paper" type="button">PAPER</button>
+              <button data-environment="live" type="button">LIVE</button>
+            </div>
+          </div>
+          <div class="control-block">
+            <span>AUTONOMY</span>
+            <div id="autonomy-switch" class="segmented">
+              <button data-autonomy="observe" type="button">OBSERVE</button>
+              <button data-autonomy="copilot" type="button">COPILOT</button>
+              <button data-autonomy="agentic" type="button">AGENTIC</button>
+            </div>
+          </div>
+          <div id="execution-state" class="execution-state">
+            <i></i>
+            <div><span>EXECUTION</span><strong>CHECKING</strong></div>
+          </div>
+        </div>
+      </header>
+
+      <div id="console-error" class="console-error" role="alert"></div>
+
+      <section class="market-row">
+        <article class="panel chart-panel">
+          <header class="panel-header">
+            <div class="instrument-heading">
+              <label for="symbol-input">INSTRUMENT</label>
+              <input id="symbol-input" value="SPY" maxlength="12" aria-label="图表股票代码">
+              <span id="quote-price" class="quote-price">—</span>
+              <span id="quote-spread" class="quote-spread">等待行情</span>
+            </div>
+            <div class="chart-tools">
+              <div class="range-switch">
+                <button type="button" data-days="1">1D</button>
+                <button type="button" data-days="5" class="active">5D</button>
+                <button type="button" data-days="30">1M</button>
+              </div>
+              <button id="refresh-console" class="icon-button" type="button" aria-label="刷新控制台">↻</button>
+            </div>
+          </header>
+          <div class="chart-meta">
+            <div><span>HIGH</span><strong id="chart-high">—</strong></div>
+            <div><span>LOW</span><strong id="chart-low">—</strong></div>
+            <div><span>VOLUME</span><strong id="chart-volume">—</strong></div>
+            <div><span>SOURCE</span><strong id="chart-source">—</strong></div>
+          </div>
+          <div class="chart-stage">
+            <canvas id="price-chart" aria-label="真实历史行情图"></canvas>
+            <div id="chart-empty" class="chart-empty">
+              <span>MARKET DATA</span>
+              <strong>正在读取真实行情</strong>
+            </div>
+          </div>
+          <footer class="watch-strip">
+            <span>WATCHING</span>
+            <div id="watchlist" class="watchlist"></div>
+          </footer>
+        </article>
+
+        <article class="panel trigger-panel">
+          <header class="panel-header">
+            <div>
+              <span class="eyebrow">WAKE CONDITIONS</span>
+              <h2>AI Trigger Points</h2>
+            </div>
+            <span id="trigger-count" class="count-pill">0 ACTIVE</span>
+          </header>
+          <div id="trigger-list" class="trigger-list">
+            <div class="empty-module">
+              <span class="empty-orbit"><i></i></span>
+              <strong>正在读取触发器</strong>
+              <p>数学条件达到阈值后，才会唤醒 Agent 进入下一轮决策。</p>
+            </div>
+          </div>
+          <footer class="module-foot">
+            <span>策略是可插拔模块</span>
+            <strong>Gamma 不是总流程</strong>
+          </footer>
+        </article>
+      </section>
+
+      <section class="account-strip panel">
+        <div class="metric primary">
+          <span>PORTFOLIO VALUE</span>
+          <strong id="account-equity">—</strong>
+          <small id="account-source">等待账户</small>
+        </div>
+        <div class="metric">
+          <span>BUYING POWER</span>
+          <strong id="buying-power">—</strong>
+          <small>Kernel observed</small>
+        </div>
+        <div class="metric">
+          <span>CASH</span>
+          <strong id="account-cash">—</strong>
+          <small id="account-as-of">—</small>
+        </div>
+        <div class="metric">
+          <span>POSITIONS</span>
+          <strong id="position-count">—</strong>
+          <small id="order-count">— open orders</small>
+        </div>
+        <div class="metric boundary">
+          <span>SAFETY BOUNDARY</span>
+          <strong id="kernel-mode">—</strong>
+          <small id="data-scope">—</small>
+        </div>
+      </section>
+
+      <section class="ledger-row">
+        <article class="panel positions-panel">
+          <header class="panel-header">
+            <div>
+              <span class="eyebrow">PORTFOLIO</span>
+              <h2>当前持仓</h2>
+            </div>
+            <span id="portfolio-status" class="status-label">LOADING</span>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>标的</th><th>类型</th><th>数量</th><th>成本</th><th>来源</th></tr></thead>
+              <tbody id="positions-body">
+                <tr><td colspan="5" class="table-empty">正在读取账户持仓…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel decisions-panel">
+          <header class="panel-header">
+            <div>
+              <span class="eyebrow">AGENT ACTIVITY</span>
+              <h2>决策与买卖</h2>
+            </div>
+            <span id="activity-count" class="status-label">0 EVENTS</span>
+          </header>
+          <div id="operation-list" class="operation-list">
+            <div class="table-empty">正在读取 Kernel 操作记录…</div>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <aside class="agent-dock">
+      <header class="dock-header">
+        <div>
+          <span class="eyebrow">CORTEX LINK</span>
+          <h2>Agent Channel</h2>
+        </div>
+        <span id="agent-status" class="agent-status"><i></i> CHECKING</span>
+      </header>
+      <div class="room-picker">
+        <label for="room-select">CONVERSATION</label>
+        <div>
+          <select id="room-select" aria-label="选择 Agent Room"></select>
+          <button id="new-room" type="button" title="新会话">＋</button>
+        </div>
+      </div>
+      <div id="run-state" class="run-state" hidden>
+        <i></i>
+        <div><strong>Cortex 正在工作</strong><span id="run-stage">请求已提交</span></div>
+      </div>
+      <div id="message-list" class="dock-messages">
+        <div class="dock-empty">
+          <span>A</span>
+          <strong>对话在这里，决策在左边。</strong>
+          <p>你可以随时询问、纠正或加入交易流程。Agent 的回答与历史仍会永久保存。</p>
+        </div>
+      </div>
+      <form id="composer" class="dock-composer">
+        <input id="chat-symbol" maxlength="12" placeholder="代码（可选）" aria-label="对话股票代码">
+        <textarea id="message-input" rows="3" maxlength="4000" placeholder="询问 Agent，或参与当前决策…" required></textarea>
+        <div>
+          <span id="composer-state">OBSERVE · 只读</span>
+          <button id="send-message" type="submit">发送 ↗</button>
+        </div>
+      </form>
+      <footer class="dock-footer">
+        <a href="/agent">打开完整对话界面</a>
+        <span id="room-persistence">DATABASE BACKED</span>
+      </footer>
+    </aside>
+  </div>
+  <script src="/assets/agent-console.js" defer></script>
+</body>
+</html>

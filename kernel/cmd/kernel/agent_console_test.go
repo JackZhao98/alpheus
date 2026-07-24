@@ -3,10 +3,22 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"alpheus/kernel/internal/config"
 )
+
+func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
+	s := &server{}
+	response := routeRequest(s.routes(), http.MethodGet, "/agent/console", "", "")
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "交易决策控制台") ||
+		!strings.Contains(response.Body.String(), "AI Trigger Points") ||
+		!strings.Contains(response.Body.String(), "Agent Channel") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestAgentConsoleSnapshotProjectsRealKernelState(t *testing.T) {
 	venue := newFake("300")
