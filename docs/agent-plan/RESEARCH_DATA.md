@@ -204,12 +204,13 @@ does not fabricate a precise observation: with a 30-second collector, an
 not an invented `10:05:17Z` sample. PostgreSQL-backed temporal requests are
 canonicalized to UTC microsecond precision.
 
-The first registered Provider is `gexbot_classic`. It currently declares
-`as_of` and `replay`, but **not** `live`: the collector may read the official
-API to build the archive, yet no general current-read Tool has been activated.
-Future Providers must register their own truthful capability declaration; they
-may not inherit GEXBOT's historical guarantees merely by being reachable
-through Research Gateway.
+The first registered Provider is `gexbot_classic`. It declares `live`, `as_of`
+and `replay`. `live` performs one credential-isolated official API read and
+archives that exact observation before returning its compact form; `as_of`
+selects only archived evidence behind the requested fence; `replay` consumes
+that archive in deterministic order. Future Providers must register their own
+truthful capability declaration; they may not inherit GEXBOT's temporal
+guarantees merely by being reachable through Research Gateway.
 
 The canonical internal management paths are intentionally Provider-specific:
 `GET /internal/v1/moody-blues/providers`, then the declared GEXBOT
@@ -219,7 +220,7 @@ credentials. Existing `/internal/v1/gexbot/*` routes are bounded compatibility
 aliases; they do not add a generic Provider proxy or expose raw payloads,
 credentials, or collection controls to Cortex.
 
-### Future deterministic analytics slot (reserved, not implemented)
+### Deterministic analytics slot
 
 A future pure-math preprocessing module may derive filtered GEX features before
 evidence reaches an Agent. Its reserved position is:
@@ -227,18 +228,21 @@ evidence reaches an Agent. Its reserved position is:
 ```text
 Provider raw archive
   -> Moody Blues point-in-time selection / replay
-  -> deterministic Research transform (future)
+  -> deterministic Research transform
   -> versioned derived evidence and receipt
   -> Cortex Agent
 ```
 
 Moody Blues remains the authority for collection time, `as_of`, availability,
-and replay order. The future transform is a pure deterministic function: it
+and replay order. The first deployed transform is `gex_compact_v1`: it keeps
+the immutable temporal/provenance envelope, removes raw payload bytes, and
+selects the reviewed `spot`, `zero_gamma`, and major positive/negative
+open-interest/volume levels. Every transform is a pure deterministic function: it
 must have no LLM, credentials, routing decision, user prompt, or external side
 effect. Every derived result must bind the transform ID/version, parameters,
 input observation IDs and digests, output digest, and the original
-`observed_at` / `available_at` fence so the exact result is replayable. This
-reservation creates no service or container today.
+`observed_at` / `available_at` fence so the exact result is replayable. It
+runs inside Research Gateway and creates no additional service or container.
 
 ## GEXBot options-data Plugin reservation
 
@@ -261,8 +265,13 @@ Cortex Intent can propose one `research_gexbot_as_of` SPX snapshot, Cortex
 Control binds the Tool intent/budget/lease, and Research Gateway persists a
 normalized evidence/receipt pair before Decision Desk sees it. The model has
 no Provider URL, credential, raw payload, collection control, replay cursor or
-generic query surface. Replay remains a Provider/Gateway simulation API for
-evaluation work; it is not yet an Agent-facing stream Tool or a Scout grant.
+generic query surface. The live official read is separately registered as
+`market_gexbot_live`. The Decision Trigger evaluator can consume only a recent
+`gex_full` Moody Blues archive observation and deterministically maps
+`major_pos_oi`, `major_neg_oi`, and `zero_gamma` to Call Wall, Put Wall, and
+Zero Gamma wake metrics. Stale observations are rejected rather than sampled.
+Replay remains a Provider/Gateway simulation API for evaluation work; it is not
+yet an Agent-facing stream Tool or a Scout grant.
 The Plugin must not receive a Robinhood mutation credential, a Kernel mutation
 path, or a Delegation grant.
 

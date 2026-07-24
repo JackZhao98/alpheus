@@ -219,6 +219,7 @@
 | Copilot 人工确认 | 已部署 | Candidate 状态为 `proposed → approved/rejected`，只有 Paper + Copilot 显示批准/拒绝；Kernel 在 Observe/Agentic 拒绝人工审批。决定按 generation 防并发并支持同决定重放，Cortex 校验用户归属和来源 Run 已成功，审计事件 append-only。批准本身仍不成交 |
 | Agentic Paper 自动执行 | 已部署 | 只有 `paper + agentic` 且来源 Run 已成功、Candidate 合法、Control Authorization 与当前 Kernel mode generation 一致时才调用 Effect Bridge。已用 SPY 0.001 股完成真实 Paper 买入/卖出闭环并清仓；同时验收了一次行情不可用的 502 失败收据。Live 始终保持 Observe，未产生 Live 订单 |
 | Candidate + 并行 TaskGraph | 已部署 | Candidate Run 已使用独立 v2 round contract：模型可并行派发 2–4 条只读 Specialist/Tool 分支，等待 Join 后仅允许最终 Decision Desk 携带一个 effect-free Candidate；refine 和 Specialist 均不能携带 Candidate。普通研究继续固定在不可变 v1 answer contract。真实 Observe 验收完成了双分支、两轮证据补充、Join、候选生成；Candidate 无 Authorization/Receipt，Paper 与 Live 均无成交 |
+| Moody Blues GEX Trigger 输入 | 已部署 | `research_gexbot` Trigger 已接入最新 Moody Blues `gex_full` 归档；确定性映射 Call Wall=`major_pos_oi`、Put Wall=`major_neg_oi`、Zero Gamma=`zero_gamma`，继续复用阈值、cross、cooldown、Occurrence 和 Cortex 唤醒链。超过 2 分钟的归档拒绝采样，非交易时段不会把昨日日终数据伪装成当前信号 |
 | 数据流与日内循环 | 待完成 | Moody Blues replay/stream → 数学 Trigger → Cortex 决策 → Paper Candidate/成交 → Portfolio/活动更新；用户可在右侧对话中途参与 |
 | Live 执行 | 未开放 | 继续强制 Observe；必须在 Paper 日内循环验收、限额、Kill Switch、确认和收据链完整后单独启用，不由 UI 按钮自行放开 |
 

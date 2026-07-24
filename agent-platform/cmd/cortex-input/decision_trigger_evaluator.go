@@ -51,25 +51,76 @@ type cortexMonitorQuote struct {
 	AvailableAt    time.Time `json:"available_at"`
 }
 
-type decisionTriggerQuoteFetch func(
+type cortexMonitorGEX struct {
+	Available        bool                   `json:"available"`
+	SchemaRevision   uint16                 `json:"schema_revision"`
+	ObservationID    string                 `json:"observation_id"`
+	Provider         string                 `json:"provider"`
+	ProviderRevision string                 `json:"provider_revision"`
+	SourceKind       string                 `json:"source_kind"`
+	Symbol           string                 `json:"symbol"`
+	Category         string                 `json:"category"`
+	SourceTimestamp  time.Time              `json:"source_timestamp"`
+	ObservedAt       time.Time              `json:"observed_at"`
+	FetchedAt        time.Time              `json:"fetched_at"`
+	AvailableAt      time.Time              `json:"available_at"`
+	IngestedAt       time.Time              `json:"ingested_at"`
+	Raw              cortexMonitorGEXRaw    `json:"raw"`
+	Metrics          map[string]json.Number `json:"metrics"`
+	QualityState     string                 `json:"quality_state"`
+	RecordDigest     string                 `json:"record_digest"`
+}
+
+type cortexMonitorGEXRaw struct {
+	BlobID        string `json:"blob_id"`
+	ContentDigest string `json:"content_digest"`
+	SizeBytes     int64  `json:"size_bytes"`
+}
+
+type decisionTriggerValueFetch func(
 	context.Context, inputgateway.DecisionTrigger,
-) (cortexMonitorQuote, error)
+) (json.Number, time.Time, error)
 
 func startCortexDecisionTriggerEvaluator(
 	ctx context.Context,
 	store decisionTriggerEvaluationStore,
-	client *http.Client,
+	kernelClient *http.Client,
 	kernelURL string,
 	serviceToken string,
+	researchClient *http.Client,
+	researchURL string,
+	researchToken string,
 	subjectID string,
 ) {
 	fetch := func(
 		callCtx context.Context,
 		trigger inputgateway.DecisionTrigger,
-	) (cortexMonitorQuote, error) {
-		return fetchCortexMonitorQuote(
-			callCtx, client, kernelURL, serviceToken, trigger,
-		)
+	) (json.Number, time.Time, error) {
+		switch trigger.DataSource {
+		case "kernel_quote":
+			quote, err := fetchCortexMonitorQuote(
+				callCtx, kernelClient, kernelURL, serviceToken, trigger,
+			)
+			if err != nil {
+				return "", time.Time{}, err
+			}
+			value, err := decisionTriggerQuoteValue(trigger.Metric, quote)
+			return value, quote.ObservedAt, err
+		case "research_gexbot":
+			observation, err := fetchCortexMonitorGEX(
+				callCtx, researchClient, researchURL, researchToken, trigger,
+			)
+			if err != nil {
+				return "", time.Time{}, err
+			}
+			value, err := decisionTriggerGEXValue(
+				trigger.Metric, observation,
+			)
+			return value, observation.AvailableAt, err
+		default:
+			return "", time.Time{}, fmt.Errorf(
+				"unsupported Trigger data source")
+		}
 	}
 	go func() {
 		for {
@@ -140,7 +191,7 @@ func combineDecisionTriggerErrors(left, right error) error {
 func evaluateCortexDecisionTriggers(
 	ctx context.Context,
 	store decisionTriggerEvaluationStore,
-	fetch decisionTriggerQuoteFetch,
+	fetch decisionTriggerValueFetch,
 	subjectID string,
 ) (int, error) {
 	triggers, err := store.ListDecisionTriggers(
@@ -152,23 +203,18 @@ func evaluateCortexDecisionTriggers(
 	evaluated := 0
 	var failures []string
 	for _, trigger := range triggers {
-		if !trigger.Enabled || trigger.DataSource != "kernel_quote" {
+		if !trigger.Enabled {
 			continue
 		}
-		quote, quoteErr := fetch(ctx, trigger)
-		if quoteErr != nil {
+		value, observedAt, fetchErr := fetch(ctx, trigger)
+		if fetchErr != nil {
 			failures = append(failures,
-				fmt.Sprintf("%s quote: %v", trigger.TriggerID, quoteErr))
-			continue
-		}
-		value, valueErr := decisionTriggerQuoteValue(trigger.Metric, quote)
-		if valueErr != nil {
-			failures = append(failures,
-				fmt.Sprintf("%s value: %v", trigger.TriggerID, valueErr))
+				fmt.Sprintf("%s observation: %v",
+					trigger.TriggerID, fetchErr))
 			continue
 		}
 		sample, recordErr := store.RecordDecisionTriggerSample(
-			ctx, trigger.TriggerID, value, quote.ObservedAt,
+			ctx, trigger.TriggerID, value, observedAt,
 		)
 		if recordErr != nil {
 			failures = append(failures,
@@ -222,6 +268,33 @@ func decisionTriggerQuoteValue(
 	if _, err := number.Float64(); err != nil || raw == "" ||
 		strings.ContainsAny(raw, "eE") {
 		return "", fmt.Errorf("invalid quote value")
+	}
+	return number, nil
+}
+
+func decisionTriggerGEXValue(
+	metric string,
+	observation cortexMonitorGEX,
+) (json.Number, error) {
+	var key string
+	switch metric {
+	case "gex_call_wall":
+		key = "major_pos_oi"
+	case "gex_put_wall":
+		key = "major_neg_oi"
+	case "gex_zero_gamma":
+		key = "zero_gamma"
+	default:
+		return "", fmt.Errorf("unsupported GEX metric")
+	}
+	number, found := observation.Metrics[key]
+	if !found {
+		return "", fmt.Errorf("GEX metric unavailable")
+	}
+	raw := number.String()
+	if _, err := number.Float64(); err != nil || raw == "" ||
+		strings.ContainsAny(raw, "eE") {
+		return "", fmt.Errorf("invalid GEX value")
 	}
 	return number, nil
 }
@@ -283,4 +356,106 @@ func fetchCortexMonitorQuote(
 		return cortexMonitorQuote{}, err
 	}
 	return quote, nil
+}
+
+func fetchCortexMonitorGEX(
+	ctx context.Context,
+	client *http.Client,
+	researchURL string,
+	researchToken string,
+	trigger inputgateway.DecisionTrigger,
+) (cortexMonitorGEX, error) {
+	if client == nil || researchURL == "" || researchToken == "" ||
+		trigger.Symbol != "SPX" {
+		return cortexMonitorGEX{}, fmt.Errorf(
+			"Moody Blues monitor bridge unavailable")
+	}
+	asOf := time.Now().UTC().Truncate(time.Microsecond)
+	body, err := json.Marshal(map[string]string{
+		"symbol": trigger.Symbol, "category": "gex_full",
+		"as_of": asOf.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return cortexMonitorGEX{}, err
+	}
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		strings.TrimRight(researchURL, "/")+
+			"/internal/v1/moody-blues/providers/gexbot-classic/as-of",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return cortexMonitorGEX{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+researchToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return cortexMonitorGEX{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, (16<<10)+1))
+	if err != nil || len(raw) == 0 || len(raw) > 16<<10 ||
+		response.StatusCode != http.StatusOK {
+		return cortexMonitorGEX{},
+			fmt.Errorf("Moody Blues monitor bridge rejected")
+	}
+	var observation cortexMonitorGEX
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&observation) != nil ||
+		decoder.Decode(&struct{}{}) != io.EOF ||
+		!validCortexMonitorGEX(observation, asOf) {
+		return cortexMonitorGEX{},
+			fmt.Errorf("invalid Moody Blues GEX observation")
+	}
+	if _, err := decisionTriggerGEXValue(
+		trigger.Metric, observation,
+	); err != nil {
+		return cortexMonitorGEX{}, err
+	}
+	return observation, nil
+}
+
+func validCortexMonitorGEX(
+	value cortexMonitorGEX,
+	asOf time.Time,
+) bool {
+	return value.Available && value.SchemaRevision == 1 &&
+		value.ObservationID != "" &&
+		value.Provider == "gexbot_classic" &&
+		value.ProviderRevision != "" &&
+		value.SourceKind != "" && value.Symbol == "SPX" &&
+		value.Category == "gex_full" &&
+		value.QualityState == "accepted" &&
+		validCortexMonitorDigest(value.RecordDigest) &&
+		value.Raw.BlobID != "" &&
+		validCortexMonitorDigest(value.Raw.ContentDigest) &&
+		value.Raw.SizeBytes > 0 && len(value.Metrics) > 0 &&
+		!value.SourceTimestamp.IsZero() &&
+		!value.ObservedAt.IsZero() && !value.FetchedAt.IsZero() &&
+		!value.AvailableAt.IsZero() && !value.IngestedAt.IsZero() &&
+		value.SourceTimestamp.Location() == time.UTC &&
+		value.ObservedAt.Location() == time.UTC &&
+		value.FetchedAt.Location() == time.UTC &&
+		value.AvailableAt.Location() == time.UTC &&
+		value.IngestedAt.Location() == time.UTC &&
+		!value.FetchedAt.Before(value.ObservedAt) &&
+		!value.AvailableAt.Before(value.FetchedAt) &&
+		!value.AvailableAt.After(asOf) &&
+		asOf.Sub(value.AvailableAt) <= 2*time.Minute
+}
+
+func validCortexMonitorDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') &&
+			(char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }

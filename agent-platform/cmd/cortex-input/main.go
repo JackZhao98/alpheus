@@ -90,7 +90,10 @@ func run() error {
 	startCortexExpiredRunRecovery(recoveryContext, adapter)
 	startCortexRunCancellationRecovery(recoveryContext, adapter)
 	startCortexDecisionTriggerEvaluator(
-		recoveryContext, adapter, kernelHTTP, kernelURL, serviceToken, subjectID,
+		recoveryContext, adapter,
+		kernelHTTP, kernelURL, serviceToken,
+		researchHTTP, researchURL, researchToken,
+		subjectID,
 	)
 	startPaperCandidateExecutionRecovery(
 		recoveryContext, adapter, kernelHTTP, kernelURL,

@@ -206,5 +206,6 @@ run_sql agent-platform/migrations/0123_cortex_paper_decimal_digest.sql 0123_cort
 run_sql agent-platform/migrations/0124_cortex_paper_sha256.sql 0124_cortex_paper_sha256
 run_sql agent-platform/migrations/0125_cortex_paper_effect_trace.sql 0125_cortex_paper_effect_trace
 run_sql agent-platform/migrations/0126_cortex_candidate_task_graph_round.sql 0126_cortex_candidate_task_graph_round
+run_sql agent-platform/migrations/0127_cortex_gexbot_decision_trigger_sampling.sql 0127_cortex_gexbot_decision_trigger_sampling
 
 echo "agent-platform migration bootstrap complete"
