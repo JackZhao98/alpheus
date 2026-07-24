@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -533,6 +534,57 @@ func TestParseWorkflowOutputEnforcesSemanticRoute(t *testing.T) {
 	}
 	if _, err := parseWorkflowOutput([]byte(`{"kind":"handoff","target":"desk","objective":"read quotes","rationale":"current quotes matter","text":"","gexbot_action":"as_of","gexbot_symbol":"SPX","gexbot_category":"gex_full","gexbot_as_of":"current","earnings_action":"none","earnings_symbol":"","kernel_action":"read","kernel_tool_id":"kernel_equity_quotes","kernel_arguments":"{\"symbols\":[\"AAPL\"]}"}`), true, true, true, true); err == nil {
 		t.Fatal("multiple Tool proposals were accepted")
+	}
+}
+
+func TestWorkflowSchemaAndParserGatePaperCandidates(t *testing.T) {
+	schema := workflowSchema(false, false, false, false, false, true)
+	required, ok := schema["required"].([]string)
+	if !ok || !slices.Contains(required, "paper_candidate") {
+		t.Fatalf("Paper Candidate is not required by v9 schema: %#v", schema)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok || properties["paper_candidate"] == nil {
+		t.Fatalf("Paper Candidate schema is missing: %#v", schema)
+	}
+
+	raw := []byte(`{
+		"kind":"answer",
+		"target":"user",
+		"objective":"simulate a bounded paper entry",
+		"rationale":"the user explicitly requested a paper simulation",
+		"text":"I prepared a candidate for review.",
+		"paper_candidate":{
+			"schema_revision":1,
+			"strategy_id":"manual",
+			"symbol":"SPY",
+			"kind":"equity",
+			"side":"buy",
+			"qty":0.25,
+			"thesis":"The reviewed evidence supports a bounded paper entry.",
+			"invalidation":"Cancel if the reviewed trigger no longer holds.",
+			"confidence_bps":6100
+		}
+	}`)
+	output, err := parseWorkflowOutput(
+		raw, false, false,
+		false, false, false, false, true, true,
+	)
+	if err != nil || output.PaperCandidate == nil ||
+		output.PaperCandidate.Symbol != "SPY" {
+		t.Fatalf("output=%+v err=%v", output, err)
+	}
+	if _, err := parseWorkflowOutput(
+		raw, false, false,
+		false, false, false, false, false, false,
+	); err == nil {
+		t.Fatal("accepted a Candidate without immutable installation")
+	}
+	if _, err := parseWorkflowOutput(
+		raw, false, false,
+		false, false, false, false, true, false,
+	); err == nil {
+		t.Fatal("accepted a Candidate from a non-Desk workflow step")
 	}
 }
 

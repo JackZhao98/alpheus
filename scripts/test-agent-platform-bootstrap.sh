@@ -59,7 +59,7 @@ docker exec --interactive "$CONTAINER" psql --no-psqlrc --set ON_ERROR_STOP=1 \
 	--username postgres --dbname probe <"$ROOT/audit/repro/ap2_submit_user_request.sql" \
 	>"$ARTIFACT_DIR/submit-user-request.txt"
 
-if ! grep -q 'agent-platform migration already applied: 0115_cortex_paper_trade_candidate' \
+if ! grep -q 'agent-platform migration already applied: 0117_cortex_paper_candidate_worker_flags' \
 	"$ARTIFACT_DIR/second.txt"; then
 	echo "FAIL reason=second_execution_replayed_or_incomplete artifacts=$ARTIFACT_DIR" >&2
 	exit 1
@@ -68,11 +68,11 @@ fi
 count=$(docker exec "$CONTAINER" psql --no-psqlrc --username postgres --dbname probe \
 	--tuples-only --no-align --command 'SELECT count(*) FROM agent_control.schema_migration' \
 	| tr -d '[:space:]')
-if [ "$count" != 119 ]; then
+if [ "$count" != 121 ]; then
 	echo "FAIL reason=migration_ledger_count count=$count artifacts=$ARTIFACT_DIR" >&2
 	exit 1
 fi
 
-printf '{"status":"PASS","probe":"agent-platform-bootstrap","migration_files":115,"ledger_entries":119,"second_execution":"digest-verified-no-ddl-replay"}\n' \
+printf '{"status":"PASS","probe":"agent-platform-bootstrap","migration_files":117,"ledger_entries":121,"second_execution":"digest-verified-no-ddl-replay"}\n' \
 	>"$ARTIFACT_DIR/summary.json"
 cat "$ARTIFACT_DIR/summary.json"

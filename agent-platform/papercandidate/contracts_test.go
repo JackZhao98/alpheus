@@ -3,6 +3,8 @@ package papercandidate
 import (
 	"encoding/json"
 	"testing"
+
+	"alpheus/agentplatform/canonical"
 )
 
 func TestProposalIsEffectFreeAndStrict(t *testing.T) {
@@ -40,6 +42,15 @@ func TestProposalRejectsAuthorityAndQuantityExpansion(t *testing.T) {
 		if _, err := DecodeProposal([]byte(raw)); err == nil {
 			t.Fatalf("accepted invalid proposal: %s", raw)
 		}
+	}
+}
+
+func TestOutputSchemaIsCanonicalControlJSON(t *testing.T) {
+	if _, err := canonical.Digest(
+		"agent-platform.test.paper-candidate-schema.v1",
+		OutputSchema(),
+	); err != nil {
+		t.Fatalf("Paper Candidate schema is not canonical: %v", err)
 	}
 }
 

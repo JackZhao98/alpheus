@@ -197,6 +197,27 @@ func run() error {
 		return fmt.Errorf("clone Cortex GEXBOT live workflow schema")
 	}
 	liveWorkflowSchema["properties"].(map[string]any)["gexbot_action"] = map[string]any{"type": "string", "enum": []string{"none", "as_of", "live"}}
+	candidateWorkflowSchemaRaw, err := json.Marshal(liveWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf("clone Cortex Paper Candidate workflow schema: %w", err)
+	}
+	var candidateWorkflowSchema map[string]any
+	if json.Unmarshal(
+		candidateWorkflowSchemaRaw, &candidateWorkflowSchema,
+	) != nil {
+		return fmt.Errorf("clone Cortex Paper Candidate workflow schema")
+	}
+	candidateRequired := candidateWorkflowSchema["required"].([]any)
+	candidateWorkflowSchema["required"] = append(
+		candidateRequired, "paper_candidate",
+	)
+	candidateWorkflowSchema["properties"].(map[string]any)["paper_candidate"] =
+		map[string]any{
+			"anyOf": []any{
+				map[string]any{"type": "null"},
+				papercandidate.OutputSchema(),
+			},
+		}
 	scoutMemoSchema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
@@ -241,6 +262,11 @@ func run() error {
 	liveWorkflowSchemaRaw, err = json.Marshal(liveWorkflowSchema)
 	if err != nil {
 		return fmt.Errorf("encode Cortex GEXBOT live workflow schema: %w", err)
+	}
+	candidateWorkflowSchemaRaw, err = json.Marshal(candidateWorkflowSchema)
+	if err != nil {
+		return fmt.Errorf(
+			"encode Cortex Paper Candidate workflow schema: %w", err)
 	}
 	scoutMemoSchemaRaw, err := json.Marshal(scoutMemoSchema)
 	if err != nil {
@@ -294,6 +320,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex GEXBOT live workflow schema: %w", err)
 	}
+	candidateWorkflowSchemaRef, err := adapter.CommitControlJSON(
+		ctx, "output_contract_schema",
+		"cortex-workflow-output-schema-v9",
+		"agent-platform.contract.output_contract_schema.v1",
+		candidateWorkflowSchema,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"commit Cortex Paper Candidate workflow schema: %w", err)
+	}
 	scoutMemoSchemaRef, err := adapter.CommitControlJSON(ctx, "output_contract_schema", "cortex-scout-research-memo-schema-v1",
 		"agent-platform.contract.output_contract_schema.v1", scoutMemoSchema)
 	if err != nil {
@@ -313,7 +349,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("commit Cortex TaskGraph round schema: %w", err)
 	}
-	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, scoutMemoSchemaRef, taskGraphProposalSchemaRef)
+	runtimeDefinitions, err := adapter.EnsureRuntimeDefinitions(ctx, answerSchemaRef, workflowSchemaRef, scoutWorkflowSchemaRef, gexbotWorkflowSchemaRef, earningsWorkflowSchemaRef, kernelWorkflowSchemaRef, specialistWorkflowSchemaRef, liveWorkflowSchemaRef, candidateWorkflowSchemaRef, scoutMemoSchemaRef, taskGraphProposalSchemaRef)
 	if err != nil {
 		return fmt.Errorf("select Cortex runtime definitions: %w", err)
 	}
@@ -334,6 +370,7 @@ func run() error {
 		runtimeDefinitions.KernelWorkflowOutputContractDigest:     kernelWorkflowSchemaRaw,
 		runtimeDefinitions.SpecialistWorkflowOutputContractDigest: specialistWorkflowSchemaRaw,
 		runtimeDefinitions.LiveWorkflowOutputContractDigest:       liveWorkflowSchemaRaw,
+		runtimeDefinitions.CandidateWorkflowOutputContractDigest:  candidateWorkflowSchemaRaw,
 		runtimeDefinitions.ScoutMemoOutputContractDigest:          scoutMemoSchemaRaw,
 		runtimeDefinitions.TaskGraphProposalOutputContractDigest:  taskGraphProposalSchemaRaw,
 		runtimeDefinitions.TaskGraphRoundOutputContractDigest:     taskGraphRoundSchemaRaw,

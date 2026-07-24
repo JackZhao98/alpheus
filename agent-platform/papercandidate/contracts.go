@@ -100,7 +100,7 @@ func OutputSchema() map[string]any {
 			},
 			"qty": map[string]any{
 				"type": "number", "exclusiveMinimum": 0,
-				"maximum": 1000, "multipleOf": 0.000001,
+				"maximum": 1000,
 			},
 			"thesis": map[string]any{
 				"type": "string", "minLength": 1, "maxLength": 4000,
