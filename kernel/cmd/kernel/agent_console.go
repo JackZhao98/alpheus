@@ -77,16 +77,32 @@ type agentConsoleCandidateReviewCommand struct {
 }
 
 type agentConsoleReplayCreateCommand struct {
-	RequestID string `json:"request_id"`
-	Symbol    string `json:"symbol"`
-	Category  string `json:"category"`
-	Start     string `json:"start_available_at"`
-	End       string `json:"end_available_at"`
-	AsOf      string `json:"as_of"`
+	RequestID   string `json:"request_id"`
+	Environment string `json:"environment"`
+	Symbol      string `json:"symbol"`
+	Category    string `json:"category"`
+	Start       string `json:"start_available_at"`
+	End         string `json:"end_available_at"`
+	AsOf        string `json:"as_of"`
 }
 
 type agentConsoleReplayStepCommand struct {
 	Generation int64 `json:"generation"`
+}
+
+type agentConsoleReplayEnvelope struct {
+	ReplayID    string `json:"replay_id"`
+	State       string `json:"state"`
+	Generation  int64  `json:"generation"`
+	Observation *struct {
+		SourceTimestamp time.Time `json:"source_timestamp"`
+		AvailableAt     time.Time `json:"available_at"`
+	} `json:"observation"`
+	TriggerEvaluations []struct {
+		Wake *struct {
+			RunID string `json:"run_id"`
+		} `json:"wake"`
+	} `json:"trigger_evaluations"`
 }
 
 func (s *server) agentConsoleEnvironment(
@@ -97,8 +113,7 @@ func (s *server) agentConsoleEnvironment(
 	live := s.robinhoodEnabled
 	selected := "paper"
 	dataScope := "paper"
-	if requested == "live" && live ||
-		requested == "" && live {
+	if requested == "live" && live {
 		selected = "live"
 		dataScope = "live"
 	}
@@ -454,12 +469,40 @@ func (s *server) postAgentConsoleReplay(
 		return
 	}
 	input.RequestID = strings.TrimSpace(input.RequestID)
+	input.Environment = strings.TrimSpace(input.Environment)
+	if input.Environment == "" {
+		input.Environment = "paper"
+	}
 	input.Symbol = strings.ToUpper(strings.TrimSpace(input.Symbol))
 	input.Category = strings.TrimSpace(input.Category)
 	input.Start = strings.TrimSpace(input.Start)
 	input.End = strings.TrimSpace(input.End)
 	input.AsOf = strings.TrimSpace(input.AsOf)
-	body, err := json.Marshal(input)
+	if input.Environment != "paper" && input.Environment != "live" {
+		writeAgentQueryError(
+			w, http.StatusBadRequest,
+			"agent_intraday_session_invalid",
+			"Intraday session environment is invalid",
+		)
+		return
+	}
+	if s.agentConsoleEnvironment(input.Environment).Selected !=
+		input.Environment {
+		writeAgentQueryError(
+			w, http.StatusConflict,
+			"agent_intraday_session_environment_unavailable",
+			"Intraday session environment is unavailable",
+		)
+		return
+	}
+	body, err := json.Marshal(map[string]any{
+		"request_id":         input.RequestID,
+		"symbol":             input.Symbol,
+		"category":           input.Category,
+		"start_available_at": input.Start,
+		"end_available_at":   input.End,
+		"as_of":              input.AsOf,
+	})
 	if err != nil {
 		writeInternalError(w, "encode Moody Blues replay", err)
 		return
@@ -475,6 +518,46 @@ func (s *server) postAgentConsoleReplay(
 			"Moody Blues replay is unavailable",
 		)
 		return
+	}
+	if status >= 200 && status < 300 && s.store != nil {
+		envelope, envelopeErr := decodeAgentConsoleReplayEnvelope(raw)
+		start, startErr := time.Parse(time.RFC3339Nano, input.Start)
+		end, endErr := time.Parse(time.RFC3339Nano, input.End)
+		asOf, asOfErr := time.Parse(time.RFC3339Nano, input.AsOf)
+		if envelopeErr != nil || startErr != nil || endErr != nil ||
+			asOfErr != nil {
+			writeAgentQueryError(
+				w, http.StatusBadGateway,
+				"moody_blues_response_invalid",
+				"Moody Blues replay response is invalid",
+			)
+			return
+		}
+		_, persistErr := s.store.CreateAgentIntradaySession(
+			store.AgentIntradaySessionCreate{
+				Subject:          authenticatedSubject(r),
+				Environment:      input.Environment,
+				RequestID:        input.RequestID,
+				ReplayID:         envelope.ReplayID,
+				ProviderID:       "gexbot-classic",
+				Symbol:           input.Symbol,
+				Category:         input.Category,
+				StartAvailableAt: start.UTC(),
+				EndAvailableAt:   end.UTC(),
+				AsOf:             asOf.UTC(),
+				State:            envelope.State,
+				ReplayGeneration: envelope.Generation,
+				Payload:          raw,
+			},
+		)
+		if persistErr != nil {
+			writeAgentQueryError(
+				w, http.StatusServiceUnavailable,
+				"agent_intraday_session_unavailable",
+				"Intraday session could not be persisted",
+			)
+			return
+		}
 	}
 	writeAgentConsoleUpstream(w, raw, status)
 }
@@ -496,6 +579,18 @@ func (s *server) postAgentConsoleReplayNext(
 		}
 		return
 	}
+	if s.store != nil {
+		if _, err := s.store.AgentIntradaySessionByReplay(
+			authenticatedSubject(r), replayID,
+		); err != nil {
+			writeAgentQueryError(
+				w, http.StatusNotFound,
+				"agent_intraday_session_not_found",
+				"Intraday session was not found",
+			)
+			return
+		}
+	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		writeInternalError(w, "encode Moody Blues replay cursor", err)
@@ -513,7 +608,127 @@ func (s *server) postAgentConsoleReplayNext(
 		)
 		return
 	}
+	if status >= 200 && status < 300 && s.store != nil {
+		envelope, envelopeErr := decodeAgentConsoleReplayEnvelope(raw)
+		if envelopeErr != nil {
+			writeAgentQueryError(
+				w, http.StatusBadGateway,
+				"moody_blues_response_invalid",
+				"Moody Blues replay response is invalid",
+			)
+			return
+		}
+		sourceTimestamp := time.Time{}
+		availableAt := time.Time{}
+		if envelope.Observation != nil {
+			sourceTimestamp = envelope.Observation.SourceTimestamp.UTC()
+			availableAt = envelope.Observation.AvailableAt.UTC()
+		}
+		wakeRunID := ""
+		for _, evaluation := range envelope.TriggerEvaluations {
+			if evaluation.Wake != nil {
+				wakeRunID = strings.TrimSpace(evaluation.Wake.RunID)
+			}
+		}
+		if _, err := s.store.RecordAgentIntradaySessionFrame(
+			store.AgentIntradaySessionFrame{
+				Subject:          authenticatedSubject(r),
+				ReplayID:         replayID,
+				State:            envelope.State,
+				ReplayGeneration: envelope.Generation,
+				SourceTimestamp:  sourceTimestamp,
+				AvailableAt:      availableAt,
+				LatestWakeRunID:  wakeRunID,
+				Payload:          raw,
+			},
+		); err != nil {
+			writeAgentQueryError(
+				w, http.StatusServiceUnavailable,
+				"agent_intraday_session_unavailable",
+				"Intraday session frame could not be persisted",
+			)
+			return
+		}
+	}
 	writeAgentConsoleUpstream(w, raw, status)
+}
+
+func (s *server) getAgentConsoleSessions(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if s.store == nil {
+		writeAgentQueryError(
+			w, http.StatusServiceUnavailable,
+			"agent_intraday_session_unavailable",
+			"Intraday session projection is unavailable",
+		)
+		return
+	}
+	subject := authenticatedSubject(r)
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
+	if environment != "" && environment != "paper" &&
+		environment != "live" {
+		writeAgentQueryError(
+			w, http.StatusBadRequest,
+			"agent_intraday_session_invalid",
+			"Intraday session environment is invalid",
+		)
+		return
+	}
+	allSessions, err := s.store.ListAgentIntradaySessions(subject, 20)
+	if err != nil {
+		writeAgentQueryError(
+			w, http.StatusServiceUnavailable,
+			"agent_intraday_session_unavailable",
+			"Intraday sessions could not be read",
+		)
+		return
+	}
+	sessions := make([]store.AgentIntradaySession, 0, 10)
+	for _, session := range allSessions {
+		if environment != "" && session.Environment != environment {
+			continue
+		}
+		sessions = append(sessions, session)
+		if len(sessions) == 10 {
+			break
+		}
+	}
+	events := []store.AgentIntradaySessionEvent{}
+	if len(sessions) > 0 {
+		events, err = s.store.ListAgentIntradaySessionEvents(
+			subject, sessions[0].SessionID, 200,
+		)
+		if err != nil {
+			writeAgentQueryError(
+				w, http.StatusServiceUnavailable,
+				"agent_intraday_session_unavailable",
+				"Intraday session events could not be read",
+			)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available": true,
+		"items":     sessions,
+		"events":    events,
+	})
+}
+
+func decodeAgentConsoleReplayEnvelope(
+	raw json.RawMessage,
+) (agentConsoleReplayEnvelope, error) {
+	var envelope agentConsoleReplayEnvelope
+	if json.Unmarshal(raw, &envelope) != nil ||
+		!validCortexConversationID(strings.TrimSpace(envelope.ReplayID)) ||
+		(envelope.State != "active" && envelope.State != "complete" &&
+			envelope.State != "failed") ||
+		envelope.Generation < 1 {
+		return agentConsoleReplayEnvelope{},
+			errors.New("invalid Moody Blues replay envelope")
+	}
+	return envelope, nil
 }
 
 func writeAgentConsoleUpstream(

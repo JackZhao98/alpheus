@@ -99,6 +99,21 @@ type storeAPI interface {
 	SetAgentAutonomy(string, string, int64, string) (
 		store.AgentAutonomyProfile, error,
 	)
+	CreateAgentIntradaySession(store.AgentIntradaySessionCreate) (
+		store.AgentIntradaySession, error,
+	)
+	RecordAgentIntradaySessionFrame(store.AgentIntradaySessionFrame) (
+		store.AgentIntradaySession, error,
+	)
+	AgentIntradaySessionByReplay(string, string) (
+		store.AgentIntradaySession, error,
+	)
+	ListAgentIntradaySessions(string, int) (
+		[]store.AgentIntradaySession, error,
+	)
+	ListAgentIntradaySessionEvents(string, string, int) (
+		[]store.AgentIntradaySessionEvent, error,
+	)
 	ListControlWarnings(pendingBefore, claimBefore time.Time, limit int) ([]store.ControlWarning, error)
 	InsertJournal(operationID string, hypothesis, outcome, promptVersions any, shadow bool) error
 	TopLessons(limit int) ([]store.Lesson, error)

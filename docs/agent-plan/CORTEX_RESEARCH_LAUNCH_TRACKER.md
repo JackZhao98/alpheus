@@ -129,6 +129,17 @@ Moody Blues `live` / `as_of` / replay 和 Agent Lab 两层验收。旧
   页面显示 Wake Run `9c8a5503-58c1-4728-8376-b9e1a82d0080`。验收 Trigger
   已暂停，Paper / Observe / Execution Locked 已恢复，Effect Authorization
   数量为 0。
+- Kernel migration 0035 已增加用户与环境隔离的永久 Intraday Session
+  投影。Console 将最新 Replay generation、帧时间、Trigger Wake Run、
+  Candidate 和 Paper Effect 状态组合成
+  `DATA → TRIGGER → CORTEX → DECISION → EFFECT`，刷新后从 PostgreSQL
+  恢复，不使用 localStorage。默认环境已改为 Paper；Live 只有显式选择才会
+  进入且仍强制 Observe。
+- 真实 Paper Session `3289a395-1c9a-42fe-979d-ed661833d9bb` 从 replay
+  generation 2 刷新恢复后推进至 generation 3，Trigger Wake Run
+  `690c6c77-3d2f-4f8f-a56f-52389fb26276` 在页面中从 running / 0 Trace
+  自动跟踪至 succeeded / 11 Trace。该 Run 没有 Candidate，Authorization、
+  Receipt 和 Paper 成交均为 0；验收 Trigger 随后在 generation 6 暂停。
 - Agent Platform 的 `go test -race ./...` 与 `go vet ./...`、140 个 Agent
   migration 文件对应 144 条 ledger 记录的幂等回放均通过。暂停验收 Trigger
   会按设计立即撤销旧 generation 的 Runtime Authority；Control 恢复器现会在

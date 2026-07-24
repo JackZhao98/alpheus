@@ -16,6 +16,14 @@ const state = {
   replay:null,
   replayTimer:null,
   replayPlaying:false,
+  sessions:[],
+  session:null,
+  sessionEvents:[],
+  sessionRun:null,
+  candidates:[],
+  sessionTimer:null,
+  sessionFollowRunID:"",
+  sessionFollowAttempts:0,
 };
 
 async function request(path,options = {}) {
@@ -77,6 +85,20 @@ function initializeReplayRange() {
   byId("replay-end").value = localDateTimeValue(end);
 }
 
+function clearReplayView() {
+  pauseReplay();
+  state.replay = null;
+  byId("replay-next").disabled = true;
+  byId("replay-play").disabled = true;
+  text("replay-clock","未启动");
+  text("replay-state","PROVIDER CURSOR");
+  text("replay-trigger-state","CORTEX TRIGGER · IDLE");
+  text("replay-spot","—");
+  text("replay-zero","—");
+  text("replay-call","—");
+  text("replay-put","—");
+}
+
 function renderReplay(payload) {
   state.replay = {
     replay_id:payload.replay_id,
@@ -103,6 +125,7 @@ function renderReplay(payload) {
   text("replay-zero",replayNumber(metrics.zero_gamma));
   text("replay-call",replayNumber(metrics.major_pos_oi));
   text("replay-put",replayNumber(metrics.major_neg_oi));
+  renderSessionFlow();
 }
 
 function renderReplayTriggerEvaluations(evaluations) {
@@ -149,6 +172,7 @@ async function createReplay() {
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           request_id:requestID,
+          environment:state.environment || "paper",
           symbol:"SPX",
           category:byId("replay-category").value,
           start_available_at:start.toISOString(),
@@ -158,6 +182,7 @@ async function createReplay() {
       },
     );
     renderReplay(payload);
+    await loadSessions();
   } catch (error) {
     showError(error);
   } finally {
@@ -180,6 +205,7 @@ async function advanceReplay() {
       },
     );
     renderReplay(payload);
+    await loadSessions();
     return true;
   } catch (error) {
     showError(error);
@@ -243,6 +269,8 @@ function showError(error) {
     moody_blues_replay_unavailable:"Moody Blues 历史回放暂时不可用。",
     moody_blues_generation_conflict:"回放游标已前进，请重新创建或恢复该回放。",
     moody_blues_cursor_invalid:"回放游标无效。",
+    agent_intraday_session_unavailable:"日内 Session 暂时无法永久保存。",
+    agent_intraday_session_not_found:"这个回放不属于当前日内 Session。",
   };
   text("console-error",known[error?.code] || error?.message || "请求失败");
 }
@@ -341,6 +369,7 @@ function renderActivity(activity) {
       ? "还没有 Agent 买卖或 Kernel 决策记录。"
       : "Kernel 操作记录暂时不可用。";
     list.append(empty);
+    renderSessionFlow();
     return;
   }
   for (const order of paperOrders.slice(0,8)) {
@@ -379,11 +408,13 @@ function renderActivity(activity) {
     item.append(copy,status);
     list.append(item);
   }
+  renderSessionFlow();
 }
 
 function renderCandidates(payload) {
   const items = payload?.available && Array.isArray(payload.items) ?
     payload.items : [];
+  state.candidates = items;
   const proposed = items.filter((item) =>
     item.status === "proposed" && item.eligible);
   text("candidate-count",`${proposed.length} PROPOSED`);
@@ -398,6 +429,7 @@ function renderCandidates(payload) {
         ? "目前没有 Cortex 候选交易。"
         : "Cortex 候选交易暂时不可用。";
     list.append(empty);
+    renderSessionFlow();
     return;
   }
   for (const candidate of items.slice(0,5)) {
@@ -467,6 +499,136 @@ function renderCandidates(payload) {
       item.append(copy,status);
     }
     list.append(item);
+  }
+  renderSessionFlow();
+}
+
+function sessionNode(id,stateName,title,detail) {
+  const node = byId(id);
+  node.className = `session-node ${stateName || ""}`;
+  node.querySelector("strong").textContent = title;
+  node.querySelector("small").textContent = detail;
+}
+
+function renderSessionFlow() {
+  const session = state.session;
+  if (!session) {
+    text("session-title","等待数据流");
+    text("session-identity","DATABASE BACKED");
+    sessionNode("session-data","","未启动","Moody Blues");
+    sessionNode("session-trigger","","等待帧","数学唤醒条件");
+    sessionNode("session-cortex","","休眠","Run / Multi-Agent");
+    sessionNode("session-decision","","无候选","Decision Desk");
+    sessionNode("session-effect","","未执行","Paper Ledger");
+    return;
+  }
+  const frame = state.sessionEvents.find((event) => event.kind === "frame");
+  const payload = frame?.payload || {};
+  const evaluations = Array.isArray(payload.trigger_evaluations) ?
+    payload.trigger_evaluations : [];
+  const wake = evaluations.find((item) => item?.wake?.run_id);
+  const runID = session.latest_wake_run_id || wake?.wake?.run_id || "";
+  const run = state.sessionRun?.run_id === runID ? state.sessionRun : null;
+  const candidate = state.candidates.find((item) => item.run_id === runID);
+  const execution = candidate?.execution || null;
+
+  text("session-title",
+    `${session.symbol} · ${String(session.category || "").replace("gex_","").toUpperCase()} · ${String(session.state).toUpperCase()}`);
+  text("session-identity",
+    `SESSION ${String(session.session_id).slice(0,8)} · GEN ${session.replay_generation}`);
+  sessionNode(
+    "session-data",
+    session.state === "active" ? "active" : "",
+    `FRAME ${session.replay_generation}`,
+    frame ? `${when(frame.source_timestamp || frame.available_at,true)} · ${session.provider_id}` :
+      `${when(session.start_available_at,true)} → ${when(session.end_available_at,true)}`,
+  );
+  sessionNode(
+    "session-trigger",
+    wake ? "active" : evaluations.length ? "waiting" : "",
+    wake ? "WAKE COMMITTED" : evaluations.length ? "已评估，未命中" : "等待有效帧",
+    wake ? `${wake.metric || "condition"} · ${String(runID).slice(0,8)}` :
+      `${evaluations.length} evaluations`,
+  );
+  const runStatus = run?.status || (runID ? "loading" : "sleeping");
+  const runClass = ["failed","canceled","dead_lettered"].includes(runStatus) ?
+    "failed" : ["queued","running","waiting","canceling","loading"].includes(runStatus) ?
+      "waiting" : runStatus === "succeeded" ? "active" : "";
+  sessionNode(
+    "session-cortex",runClass,
+    runID ? String(runStatus).replaceAll("_"," ").toUpperCase() : "休眠",
+    runID ? `RUN ${String(runID).slice(0,8)} · ${run?.trace?.length || 0} trace` :
+      "等待 Trigger Wake",
+  );
+  const candidateState = candidate?.status || "";
+  sessionNode(
+    "session-decision",
+    candidate ? candidateState === "source_not_committed" ? "failed" :
+      candidateState === "proposed" ? "waiting" : "active" : "",
+    candidate ? String(candidateState).replaceAll("_"," ").toUpperCase() :
+      runStatus === "succeeded" ? "NO CANDIDATE" : "等待决策",
+    candidate ? `${candidate.proposal?.side || "review"} ${candidate.proposal?.symbol || "—"} × ${candidate.proposal?.qty ?? "—"}` :
+      "Decision Desk",
+  );
+  sessionNode(
+    "session-effect",
+    execution?.outcome === "failed" ? "failed" :
+      execution?.outcome === "succeeded" ? "active" :
+        execution ? "waiting" : "",
+    execution ? String(execution.outcome || "authorized").toUpperCase() :
+      "未执行",
+    execution?.outcome === "succeeded" ?
+      `PAPER ${money(execution.order?.fill_price)} · receipt` :
+      execution?.failure_code || `${String(session.environment).toUpperCase()} · ${state.autonomy?.selected?.toUpperCase() || "OBSERVE"}`,
+  );
+}
+
+async function loadSessions() {
+  if (state.sessionTimer) clearTimeout(state.sessionTimer);
+  state.sessionTimer = null;
+  const payload = await request(
+    `/agent/console/sessions?environment=${encodeURIComponent(state.environment || "paper")}`,
+  );
+  state.sessions = Array.isArray(payload.items) ? payload.items : [];
+  state.session = state.sessions[0] || null;
+  state.sessionEvents = Array.isArray(payload.events) ? payload.events : [];
+  const latestFrame = state.sessionEvents.find((event) => event.kind === "frame");
+  if (latestFrame?.payload?.replay_id) {
+    renderReplay(latestFrame.payload);
+  } else if (!state.session) {
+    clearReplayView();
+  }
+  const runID = state.session?.latest_wake_run_id;
+  if (runID !== state.sessionFollowRunID) {
+    state.sessionFollowRunID = runID || "";
+    state.sessionFollowAttempts = 0;
+  }
+  state.sessionRun = null;
+  if (runID) {
+    try {
+      state.sessionRun = await request(
+        `/agent/cortex-runs/${encodeURIComponent(runID)}`,
+      );
+      state.sessionRun.run_id = runID;
+    } catch {
+      state.sessionRun = {run_id:runID,status:"unavailable",trace:[]};
+    }
+  }
+  renderSessionFlow();
+  const runStatus = state.sessionRun?.status;
+  const candidate = state.candidates.find((item) => item.run_id === runID);
+  const shouldFollow = runID &&
+    state.sessionFollowAttempts < 120 &&
+    (["queued","running","waiting","canceling"].includes(runStatus) ||
+      runStatus === "succeeded" && !candidate &&
+        state.sessionFollowAttempts < 4);
+  if (shouldFollow) {
+    state.sessionFollowAttempts += 1;
+    state.sessionTimer = setTimeout(async () => {
+      await Promise.allSettled([
+        loadSessions(),loadCandidates(),loadSnapshot(),
+      ]);
+    },1500);
   }
 }
 
@@ -699,6 +861,7 @@ async function loadSnapshot() {
   renderEnvironment(snapshot.environment,snapshot.autonomy);
   renderPortfolio(snapshot.portfolio);
   renderActivity(snapshot.activity);
+  renderSessionFlow();
 }
 
 async function loadTriggers() {
@@ -920,7 +1083,7 @@ async function restore() {
   byId("login-screen").hidden = true;
   const results = await Promise.allSettled([
     loadSnapshot().then(loadCandidates),
-    loadTriggers(),loadRooms(),loadHealth(),loadMarket(),
+    loadTriggers(),loadRooms(),loadHealth(),loadMarket(),loadSessions(),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) showError(failure.reason);
@@ -940,6 +1103,7 @@ byId("chat-symbol").addEventListener("input",(event) => {
 });
 byId("refresh-console").addEventListener("click",() => Promise.allSettled([
   loadSnapshot().then(loadCandidates),loadTriggers(),loadHealth(),loadMarket(),
+  loadSessions(),
 ]));
 byId("replay-create").addEventListener("click",createReplay);
 byId("replay-next").addEventListener("click",advanceReplay);
@@ -952,6 +1116,7 @@ for (const button of byId("environment-switch").querySelectorAll("button")) {
     try {
       await loadSnapshot();
       await loadCandidates();
+      await loadSessions();
     } catch (error) {
       showError(error);
     }

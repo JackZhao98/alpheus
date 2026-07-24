@@ -109,6 +109,9 @@ type memoryStore struct {
 	agentAutonomy            map[string]store.AgentAutonomyProfile
 	agentPaperOrderMu        sync.Mutex
 	agentPaperOrders         map[string]store.AgentPaperOrder
+	agentIntradayMu          sync.Mutex
+	agentIntradaySessions    map[string]store.AgentIntradaySession
+	agentIntradayEvents      map[string][]store.AgentIntradaySessionEvent
 }
 
 func (m *memoryStore) AgentPaperPortfolio(
@@ -200,6 +203,116 @@ func (m *memoryStore) SetAgentAutonomy(
 	return profile, nil
 }
 
+func (m *memoryStore) CreateAgentIntradaySession(
+	input store.AgentIntradaySessionCreate,
+) (store.AgentIntradaySession, error) {
+	m.agentIntradayMu.Lock()
+	defer m.agentIntradayMu.Unlock()
+	if existing, ok := m.agentIntradaySessions[input.ReplayID]; ok {
+		return existing, nil
+	}
+	now := time.Now().UTC()
+	session := store.AgentIntradaySession{
+		SessionID: store.NewID(), Subject: input.Subject,
+		Environment: input.Environment, RequestID: input.RequestID,
+		ReplayID: input.ReplayID, ProviderID: input.ProviderID,
+		Symbol: input.Symbol, Category: input.Category,
+		StartAvailableAt: input.StartAvailableAt,
+		EndAvailableAt:   input.EndAvailableAt, AsOf: input.AsOf,
+		State: input.State, ReplayGeneration: input.ReplayGeneration,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	m.agentIntradaySessions[input.ReplayID] = session
+	m.agentIntradayEvents[session.SessionID] = []store.AgentIntradaySessionEvent{{
+		EventID: store.NewID(), SessionID: session.SessionID,
+		Kind: "created", ReplayGeneration: input.ReplayGeneration,
+		Payload: input.Payload, OccurredAt: now,
+	}}
+	return session, nil
+}
+
+func (m *memoryStore) RecordAgentIntradaySessionFrame(
+	input store.AgentIntradaySessionFrame,
+) (store.AgentIntradaySession, error) {
+	m.agentIntradayMu.Lock()
+	defer m.agentIntradayMu.Unlock()
+	session, ok := m.agentIntradaySessions[input.ReplayID]
+	if !ok || session.Subject != input.Subject {
+		return store.AgentIntradaySession{},
+			store.ErrAgentIntradaySessionInvalid
+	}
+	now := time.Now().UTC()
+	session.State = input.State
+	session.ReplayGeneration = input.ReplayGeneration
+	session.LastSourceTimestamp = input.SourceTimestamp
+	session.LastAvailableAt = input.AvailableAt
+	if input.LatestWakeRunID != "" {
+		session.LatestWakeRunID = input.LatestWakeRunID
+	}
+	session.UpdatedAt = now
+	m.agentIntradaySessions[input.ReplayID] = session
+	m.agentIntradayEvents[session.SessionID] = append(
+		m.agentIntradayEvents[session.SessionID],
+		store.AgentIntradaySessionEvent{
+			EventID: store.NewID(), SessionID: session.SessionID,
+			Kind: "frame", ReplayGeneration: input.ReplayGeneration,
+			RunID:           input.LatestWakeRunID,
+			SourceTimestamp: input.SourceTimestamp,
+			AvailableAt:     input.AvailableAt, Payload: input.Payload,
+			OccurredAt: now,
+		},
+	)
+	return session, nil
+}
+
+func (m *memoryStore) AgentIntradaySessionByReplay(
+	subject string,
+	replayID string,
+) (store.AgentIntradaySession, error) {
+	m.agentIntradayMu.Lock()
+	defer m.agentIntradayMu.Unlock()
+	session, ok := m.agentIntradaySessions[replayID]
+	if !ok || session.Subject != subject {
+		return store.AgentIntradaySession{},
+			store.ErrAgentIntradaySessionInvalid
+	}
+	return session, nil
+}
+
+func (m *memoryStore) ListAgentIntradaySessions(
+	subject string,
+	limit int,
+) ([]store.AgentIntradaySession, error) {
+	m.agentIntradayMu.Lock()
+	defer m.agentIntradayMu.Unlock()
+	items := make([]store.AgentIntradaySession, 0)
+	for _, session := range m.agentIntradaySessions {
+		if session.Subject == subject && len(items) < limit {
+			items = append(items, session)
+		}
+	}
+	return items, nil
+}
+
+func (m *memoryStore) ListAgentIntradaySessionEvents(
+	subject string,
+	sessionID string,
+	limit int,
+) ([]store.AgentIntradaySessionEvent, error) {
+	m.agentIntradayMu.Lock()
+	defer m.agentIntradayMu.Unlock()
+	for _, session := range m.agentIntradaySessions {
+		if session.SessionID == sessionID && session.Subject == subject {
+			items := m.agentIntradayEvents[sessionID]
+			if len(items) > limit {
+				items = items[len(items)-limit:]
+			}
+			return append([]store.AgentIntradaySessionEvent(nil), items...), nil
+		}
+	}
+	return nil, store.ErrAgentIntradaySessionInvalid
+}
+
 func newMemoryStore() *memoryStore {
 	now := time.Now().UTC()
 	testPolicy := dualLedgerLimits()
@@ -255,10 +368,12 @@ func newMemoryStore() *memoryStore {
 				UpdatedBy: "system-bootstrap", CreatedAt: now, UpdatedAt: now,
 			},
 		},
-		agentPaperOrders: map[string]store.AgentPaperOrder{},
-		eventPayloads:    map[string][]any{},
-		dayOpenEquity:    map[string]units.Micros{},
-		realizedPnL:      map[string]units.Micros{},
+		agentPaperOrders:      map[string]store.AgentPaperOrder{},
+		agentIntradaySessions: map[string]store.AgentIntradaySession{},
+		agentIntradayEvents:   map[string][]store.AgentIntradaySessionEvent{},
+		eventPayloads:         map[string][]any{},
+		dayOpenEquity:         map[string]units.Micros{},
+		realizedPnL:           map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},

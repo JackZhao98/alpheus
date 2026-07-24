@@ -162,6 +162,36 @@
           <div><span>CALL WALL</span><strong id="replay-call">—</strong></div>
           <div><span>PUT WALL</span><strong id="replay-put">—</strong></div>
         </div>
+        <div class="session-flow">
+          <header class="session-flow-header">
+            <div>
+              <span class="eyebrow">INTRADAY SESSION</span>
+              <strong id="session-title">等待数据流</strong>
+            </div>
+            <span id="session-identity">DATABASE BACKED</span>
+          </header>
+          <div class="session-lane" aria-label="日内 Agent 决策链">
+            <div id="session-data" class="session-node">
+              <span>01 · DATA</span><strong>未启动</strong><small>Moody Blues</small>
+            </div>
+            <i></i>
+            <div id="session-trigger" class="session-node">
+              <span>02 · TRIGGER</span><strong>等待帧</strong><small>数学唤醒条件</small>
+            </div>
+            <i></i>
+            <div id="session-cortex" class="session-node">
+              <span>03 · CORTEX</span><strong>休眠</strong><small>Run / Multi-Agent</small>
+            </div>
+            <i></i>
+            <div id="session-decision" class="session-node">
+              <span>04 · DECISION</span><strong>无候选</strong><small>Decision Desk</small>
+            </div>
+            <i></i>
+            <div id="session-effect" class="session-node">
+              <span>05 · EFFECT</span><strong>未执行</strong><small>Paper Ledger</small>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="account-strip panel">

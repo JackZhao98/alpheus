@@ -26,6 +26,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /agent/console/autonomy/{environment}", s.authorizeAgentWeb(s.putAgentConsoleAutonomy))
 	mux.HandleFunc("GET /agent/console/triggers", s.authorizeAgentWeb(s.getAgentConsoleTriggers))
 	mux.HandleFunc("GET /agent/console/candidates", s.authorizeAgentWeb(s.getAgentConsoleCandidates))
+	mux.HandleFunc("GET /agent/console/sessions", s.authorizeAgentWeb(s.getAgentConsoleSessions))
 	mux.HandleFunc("POST /agent/console/candidates/{id}/review", s.authorizeAgentWeb(s.postAgentConsoleCandidateReview))
 	mux.HandleFunc("POST /agent/console/data-streams/gexbot/replays", s.authorizeAgentWeb(s.postAgentConsoleReplay))
 	mux.HandleFunc("POST /agent/console/data-streams/gexbot/replays/{id}/next", s.authorizeAgentWeb(s.postAgentConsoleReplayNext))

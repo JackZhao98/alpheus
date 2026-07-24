@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(response.Body.String(), "自动播放") ||
 		!strings.Contains(response.Body.String(), `aria-label="回放速度"`) ||
 		!strings.Contains(response.Body.String(), "CORTEX TRIGGER · IDLE") ||
+		!strings.Contains(response.Body.String(), "INTRADAY SESSION") ||
 		!strings.Contains(response.Body.String(), "Agent Channel") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -36,6 +38,8 @@ func TestAgentConsoleServesDedicatedCommandSurface(t *testing.T) {
 		!strings.Contains(script.Body.String(), "advanceReplay") ||
 		!strings.Contains(script.Body.String(), "toggleReplayPlayback") ||
 		!strings.Contains(script.Body.String(), "renderReplayTriggerEvaluations") ||
+		!strings.Contains(script.Body.String(), "loadSessions") ||
+		!strings.Contains(script.Body.String(), "renderSessionFlow") ||
 		!strings.Contains(script.Body.String(), "loadTriggers(),loadHealth(),loadMarket()") {
 		t.Fatalf("script status=%d body=%s",
 			script.Code, script.Body.String())
@@ -167,10 +171,15 @@ func TestAgentConsoleSnapshotShowsLiveDataWithoutClaimingExecution(t *testing.T)
 		robinhoodEnabled: true,
 	}
 	environment := s.agentConsoleEnvironment("")
-	if environment.Selected != "live" || environment.DataScope != "live" ||
+	if environment.Selected != "paper" || environment.DataScope != "paper" ||
 		!environment.LiveAvailable || !environment.PaperAvailable ||
 		environment.ExecutionEnabled {
 		t.Fatalf("environment=%+v", environment)
+	}
+	live := s.agentConsoleEnvironment("live")
+	if live.Selected != "live" || live.DataScope != "live" ||
+		!live.LiveAvailable || live.ExecutionEnabled {
+		t.Fatalf("live environment=%+v", live)
 	}
 	paper := s.agentConsoleEnvironment("paper")
 	if paper.Selected != "paper" || paper.DataScope != "paper" ||
@@ -491,6 +500,7 @@ func TestAgentConsoleMoodyBluesReplayUsesCortexBoundary(t *testing.T) {
 		cortexURL:       upstream.URL,
 		cortexTokenFile: tokenPath,
 		runtimeHTTP:     upstream.Client(),
+		store:           newMemoryStore(),
 	}
 	create := httptest.NewRecorder()
 	createRequest := httptest.NewRequest(
@@ -498,6 +508,7 @@ func TestAgentConsoleMoodyBluesReplayUsesCortexBoundary(t *testing.T) {
 		"/agent/console/data-streams/gexbot/replays",
 		strings.NewReader(`{
 		  "request_id":"console-replay-1",
+		  "environment":"paper",
 		  "symbol":"spx",
 		  "category":"gex_full",
 		  "start_available_at":"2026-07-23T13:00:00Z",
@@ -510,6 +521,26 @@ func TestAgentConsoleMoodyBluesReplayUsesCortexBoundary(t *testing.T) {
 	if create.Code != http.StatusOK ||
 		!strings.Contains(create.Body.String(), `"generation":1`) {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	foreignStep := httptest.NewRecorder()
+	foreignRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/agent/console/data-streams/gexbot/replays/11111111-1111-4111-8111-111111111111/next",
+		strings.NewReader(`{"generation":1}`),
+	)
+	foreignRequest.SetPathValue(
+		"id", "11111111-1111-4111-8111-111111111111",
+	)
+	foreignRequest = foreignRequest.WithContext(context.WithValue(
+		foreignRequest.Context(), subjectContextKey{}, "another-user",
+	))
+	foreignRequest.Header.Set("Content-Type", "application/json")
+	s.postAgentConsoleReplayNext(foreignStep, foreignRequest)
+	if foreignStep.Code != http.StatusNotFound || requests != 1 {
+		t.Fatalf(
+			"foreign step status=%d body=%s requests=%d",
+			foreignStep.Code, foreignStep.Body.String(), requests,
+		)
 	}
 	step := httptest.NewRecorder()
 	stepRequest := httptest.NewRequest(
@@ -528,6 +559,43 @@ func TestAgentConsoleMoodyBluesReplayUsesCortexBoundary(t *testing.T) {
 		t.Fatalf(
 			"step status=%d body=%s requests=%d",
 			step.Code, step.Body.String(), requests,
+		)
+	}
+	sessions := httptest.NewRecorder()
+	s.getAgentConsoleSessions(
+		sessions,
+		httptest.NewRequest(
+			http.MethodGet, "/agent/console/sessions", nil,
+		),
+	)
+	if sessions.Code != http.StatusOK ||
+		!strings.Contains(
+			sessions.Body.String(),
+			`"replay_id":"11111111-1111-4111-8111-111111111111"`,
+		) ||
+		!strings.Contains(sessions.Body.String(), `"kind":"frame"`) {
+		t.Fatalf(
+			"sessions status=%d body=%s",
+			sessions.Code, sessions.Body.String(),
+		)
+	}
+	liveSessions := httptest.NewRecorder()
+	s.getAgentConsoleSessions(
+		liveSessions,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/agent/console/sessions?environment=live", nil,
+		),
+	)
+	if liveSessions.Code != http.StatusOK ||
+		!strings.Contains(liveSessions.Body.String(), `"items":[]`) ||
+		strings.Contains(
+			liveSessions.Body.String(),
+			`11111111-1111-4111-8111-111111111111`,
+		) {
+		t.Fatalf(
+			"live sessions status=%d body=%s",
+			liveSessions.Code, liveSessions.Body.String(),
 		)
 	}
 }
