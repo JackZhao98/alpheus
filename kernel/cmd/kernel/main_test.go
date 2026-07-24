@@ -107,6 +107,8 @@ type memoryStore struct {
 	robinhoodOAuthConsumed   map[string]bool
 	agentAutonomyMu          sync.Mutex
 	agentAutonomy            map[string]store.AgentAutonomyProfile
+	agentPaperOrderMu        sync.Mutex
+	agentPaperOrders         map[string]store.AgentPaperOrder
 }
 
 func (m *memoryStore) AgentPaperPortfolio(
@@ -127,6 +129,44 @@ func (m *memoryStore) ListAgentPaperOrders(
 	_ int,
 ) ([]store.AgentPaperOrder, error) {
 	return []store.AgentPaperOrder{}, nil
+}
+
+func (m *memoryStore) ExecuteAgentPaperOrder(
+	input store.AgentPaperOrderInput,
+) (store.AgentPaperOrderResult, error) {
+	m.agentPaperOrderMu.Lock()
+	defer m.agentPaperOrderMu.Unlock()
+	key := input.AccountID + "\x00" + input.IdempotencyKey
+	if existing, ok := m.agentPaperOrders[key]; ok {
+		if existing.RequestHash != input.RequestHash {
+			return store.AgentPaperOrderResult{},
+				store.ErrAgentPaperIdempotencyConflict
+		}
+		return store.AgentPaperOrderResult{
+			Order: existing, Replay: true,
+		}, nil
+	}
+	notional, err := units.MulQtyPrice(
+		input.Qty, input.FillPrice, input.Multiplier,
+		input.Side == "buy",
+	)
+	if err != nil {
+		return store.AgentPaperOrderResult{}, err
+	}
+	now := time.Now().UTC()
+	order := store.AgentPaperOrder{
+		OrderID: input.OrderID, AccountID: input.AccountID,
+		IdempotencyKey: input.IdempotencyKey,
+		RequestHash:    input.RequestHash, ActorKind: input.ActorKind,
+		ActorID: input.ActorID, Symbol: input.Symbol, Kind: input.Kind,
+		Side: input.Side, Multiplier: input.Multiplier, Qty: input.Qty,
+		FillPrice: input.FillPrice, Notional: notional,
+		QuoteBid: input.QuoteBid, QuoteAsk: input.QuoteAsk,
+		QuoteSource: input.QuoteSource, QuoteAsOf: input.QuoteAsOf,
+		State: "filled", Generation: 2, CreatedAt: now, FilledAt: now,
+	}
+	m.agentPaperOrders[key] = order
+	return store.AgentPaperOrderResult{Order: order}, nil
 }
 
 func (m *memoryStore) AgentAutonomyProfile(
@@ -215,9 +255,10 @@ func newMemoryStore() *memoryStore {
 				UpdatedBy: "system-bootstrap", CreatedAt: now, UpdatedAt: now,
 			},
 		},
-		eventPayloads: map[string][]any{},
-		dayOpenEquity: map[string]units.Micros{},
-		realizedPnL:   map[string]units.Micros{},
+		agentPaperOrders: map[string]store.AgentPaperOrder{},
+		eventPayloads:    map[string][]any{},
+		dayOpenEquity:    map[string]units.Micros{},
+		realizedPnL:      map[string]units.Micros{},
 		breakerStates: map[string]store.BreakerState{
 			"live": {Ledger: "live"}, "shadow": {Ledger: "shadow"},
 		},

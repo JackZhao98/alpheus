@@ -33,6 +33,7 @@ services:
       AGENT_WEB_AUTH_MODE: ${AGENT_WEB_AUTH_MODE:-local}
       CORTEX_URL: http://cortex-input:8400
       CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
+      CORTEX_PAPER_EFFECT_TOKEN_FILE: /run/secrets/cortex/paper-effect-token
       RESEARCH_URL: ${RESEARCH_URL:-http://research-gateway:8300}
       CONSOLE_ORIGIN: ${CONSOLE_ORIGIN:-http://localhost:8100}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
@@ -244,6 +245,7 @@ services:
       CORTEX_SUBJECT_PRINCIPAL_ID: ${CORTEX_SUBJECT_PRINCIPAL_ID:-owner-1}
       CORTEX_DATABASE_URL_FILE: /run/secrets/cortex/database-url
       CORTEX_INPUT_TOKEN_FILE: /run/secrets/cortex/input-token
+      CORTEX_PAPER_EFFECT_TOKEN_FILE: /run/secrets/cortex/paper-effect-token
       CORTEX_WORKER_CONTROL_TOKEN_FILE: /run/secrets/cortex/worker-control-token
       CORTEX_RESEARCH_TOKEN_FILE: /run/secrets/cortex/research-tool-token
       CORTEX_RESEARCH_URL: http://research-gateway:8300

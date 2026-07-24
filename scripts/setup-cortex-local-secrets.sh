@@ -14,6 +14,10 @@ if [ ! -s "$directory/input-token" ]; then
     umask 077
     openssl rand -hex 32 >"$directory/input-token"
 fi
+if [ ! -s "$directory/paper-effect-token" ]; then
+    umask 077
+    openssl rand -hex 32 >"$directory/paper-effect-token"
+fi
 if [ ! -s "$directory/activator-database-password" ]; then
     umask 077
     openssl rand -hex 32 >"$directory/activator-database-password"
@@ -34,6 +38,7 @@ printf 'postgresql://cortex-control-1:%s@db:5432/alpheus?sslmode=disable\n' "$pa
 printf 'postgresql://cortex-activator-1:%s@db:5432/alpheus?sslmode=disable\n' "$activator_password" >"$directory/activator-database-url"
 printf 'postgresql://research-gateway-1:%s@db:5432/alpheus?sslmode=disable\n' "$research_password" >"$directory/research-database-url"
 chmod 600 "$directory/database-password" "$directory/database-url" "$directory/input-token" \
+    "$directory/paper-effect-token" \
     "$directory/activator-database-password" "$directory/activator-database-url" \
     "$directory/research-database-password" "$directory/research-database-url" "$directory/research-tool-token"
 printf 'Cortex local secrets are ready in %s\n' "$directory"

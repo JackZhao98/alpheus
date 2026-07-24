@@ -62,6 +62,7 @@ type server struct {
 	runtimeHTTP                       *http.Client
 	cortexURL                         string
 	cortexTokenFile                   string
+	cortexPaperEffectTokenFile        string
 	researchURL                       string
 	researchHTTP                      *http.Client
 	gexHTTP                           *http.Client
@@ -91,6 +92,9 @@ type storeAPI interface {
 		store.AgentPaperAccount, []store.AgentPaperPosition, error,
 	)
 	ListAgentPaperOrders(string, int) ([]store.AgentPaperOrder, error)
+	ExecuteAgentPaperOrder(store.AgentPaperOrderInput) (
+		store.AgentPaperOrderResult, error,
+	)
 	AgentAutonomyProfile(string) (store.AgentAutonomyProfile, error)
 	SetAgentAutonomy(string, string, int64, string) (
 		store.AgentAutonomyProfile, error,
@@ -229,9 +233,12 @@ func main() {
 				config.Env("ROBINHOOD_EQUITY_AUTO_REPLAY", "false") == "true"),
 		cortexURL:       config.Env("CORTEX_URL", ""),
 		cortexTokenFile: config.Env("CORTEX_INPUT_TOKEN_FILE", ""),
-		researchURL:     config.Env("RESEARCH_URL", "http://research-gateway:8300"),
-		consoleOrigin:   consoleOrigin,
-		marketTZ:        marketTZ,
+		cortexPaperEffectTokenFile: config.Env(
+			"CORTEX_PAPER_EFFECT_TOKEN_FILE", "",
+		),
+		researchURL:   config.Env("RESEARCH_URL", "http://research-gateway:8300"),
+		consoleOrigin: consoleOrigin,
+		marketTZ:      marketTZ,
 	}
 	switch brokerName {
 	case "fake":

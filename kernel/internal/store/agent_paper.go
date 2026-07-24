@@ -65,27 +65,27 @@ type AgentPaperOrderInput struct {
 }
 
 type AgentPaperOrder struct {
-	OrderID        string
-	AccountID      string
-	IdempotencyKey string
-	RequestHash    [sha256.Size]byte
-	ActorKind      string
-	ActorID        string
-	Symbol         string
-	Kind           string
-	Side           string
-	Multiplier     int64
-	Qty            units.Qty
-	FillPrice      units.Micros
-	Notional       units.Micros
-	QuoteBid       units.Micros
-	QuoteAsk       units.Micros
-	QuoteSource    string
-	QuoteAsOf      time.Time
-	State          string
-	Generation     int64
-	CreatedAt      time.Time
-	FilledAt       time.Time
+	OrderID        string            `json:"order_id"`
+	AccountID      string            `json:"account_id"`
+	IdempotencyKey string            `json:"-"`
+	RequestHash    [sha256.Size]byte `json:"-"`
+	ActorKind      string            `json:"actor_kind"`
+	ActorID        string            `json:"actor_id"`
+	Symbol         string            `json:"symbol"`
+	Kind           string            `json:"kind"`
+	Side           string            `json:"side"`
+	Multiplier     int64             `json:"multiplier"`
+	Qty            units.Qty         `json:"qty"`
+	FillPrice      units.Micros      `json:"fill_price"`
+	Notional       units.Micros      `json:"notional"`
+	QuoteBid       units.Micros      `json:"quote_bid"`
+	QuoteAsk       units.Micros      `json:"quote_ask"`
+	QuoteSource    string            `json:"quote_source"`
+	QuoteAsOf      time.Time         `json:"quote_as_of"`
+	State          string            `json:"state"`
+	Generation     int64             `json:"generation"`
+	CreatedAt      time.Time         `json:"created_at"`
+	FilledAt       time.Time         `json:"filled_at"`
 }
 
 type AgentPaperOrderResult struct {
